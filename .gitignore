@@ -1,0 +1,15 @@
+# Bản build APK — đưa lên GitHub Releases thay vì commit
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# PlatformIO
+firmware/.pio/
+
+# Công cụ IDE
+.github/modernize/
+
+# Bản build Android
+app/android/build/

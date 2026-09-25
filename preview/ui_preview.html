@@ -1,0 +1,2072 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RC Controller Preview</title>
+<!-- Bản xem trước app Flutter (app/lib) — chạy thẳng trong trình duyệt, dữ liệu giả lập, không kết nối xe thật.
+     Logic được port từ: models/*, services/mix_engine.dart, layout/*, screens/*. Sửa app thì sửa cả file này. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --page: #0e0e0e; --page-text: #e6e6e6; --page-muted: #98989a; --page-line: #2a2a2a;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --page: #eef0ea; --page-text: #191919; --page-muted: #59595a; --page-line: #d6d6d6; }
+}
+:root[data-theme="light"] { --page: #eef0ea; --page-text: #191919; --page-muted: #59595a; --page-line: #d6d6d6; }
+:root[data-theme="dark"] { --page: #0e0e0e; --page-text: #e6e6e6; --page-muted: #98989a; --page-line: #2a2a2a; }
+
+/* Token app — lấy từ app/lib/theme/tokens.dart */
+.device[data-t="dark"] {
+  --bg:#191919; --surface:#262626; --surface2:#333333; --line:#333333;
+  --text:#ffffff; --textBody:#e6e6e6; --textMuted:#98989a; --disabled:#59595a;
+  --accent:#9EFF00; --accentFill:#9EFF00; --accentFillPressed:#B1FF33; --onAccentFill:#191919;
+  --accentContainer:rgba(158,255,0,.12); --onAccentContainer:#C5FF66;
+  --ok:#4CAF50; --warn:#FFC107; --bad:#F44336; --idle:#98989a;
+}
+.device[data-t="light"] {
+  --bg:#FDFFFA; --surface:#ffffff; --surface2:#F9FFF0; --line:#E6E6E6;
+  --text:#191919; --textBody:#4C4C4D; --textMuted:#59595A; --disabled:#98989A;
+  --accent:#3D6600; --accentFill:#9EFF00; --accentFillPressed:#B1FF33; --onAccentFill:#191919;
+  --accentContainer:#ECFFCC; --onAccentContainer:#191919;
+  --ok:#2E7D32; --warn:#B26A00; --bad:#C62828; --idle:#59595A;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--page); color: var(--page-text); font-family: Barlow, system-ui, sans-serif; overflow: hidden; }
+button { font-family: inherit; }
+
+/* ---------- Khung trang ---------- */
+.shell { display: flex; flex-direction: column; height: 100%; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--page-line); }
+.toolbar h1 { font-size: 16px; font-weight: 700; margin: 0 12px 0 0; }
+.toolbar .grp { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.toolbar .sep { width: 1px; height: 24px; background: var(--page-line); margin: 0 4px; }
+.tb { background: transparent; color: var(--page-text); border: 1px solid var(--page-line); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 500; cursor: pointer; }
+.tb.on { background: #9EFF00; color: #191919; border-color: #9EFF00; }
+.tb:hover:not(.on) { border-color: var(--page-muted); }
+.toolbar label { font-size: 13px; color: var(--page-muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.hint { font-size: 12px; color: var(--page-muted); margin-left: auto; }
+.stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+.frame { border-radius: 36px; padding: 10px; background: #050505; box-shadow: 0 0 0 1px #333, 0 20px 60px rgba(0,0,0,.45); transform-origin: center; }
+
+/* ---------- Thiết bị ---------- */
+.device { position: relative; overflow: hidden; border-radius: 28px; background: var(--bg); color: var(--text);
+  font-family: Barlow, system-ui, sans-serif; font-size: 15px; font-variant-numeric: tabular-nums; }
+.device.portrait { width: 390px; height: 800px; }
+.device.landscape { width: 820px; height: 380px; }
+.screen { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.device svg.ic { width: 24px; height: 24px; flex: none; }
+.device svg.ic.mini { width: 20px; height: 20px; }
+
+.appbar { height: 56px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 4px 0 8px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.appbar .title { font-size: 18px; font-weight: 600; flex: 1; padding-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iconbtn { width: 48px; height: 48px; border-radius: 999px; border: 0; background: transparent; color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.iconbtn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.iconbtn:disabled { color: var(--disabled); cursor: default; background: transparent; }
+.iconbtn.outlined { width: 40px; height: 40px; border: 1px solid var(--line); }
+.body { flex: 1; overflow-y: auto; padding: 16px; }
+.body::-webkit-scrollbar { width: 0; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 20px; border-radius: 999px;
+  font-size: 14px; font-weight: 500; cursor: pointer; border: 1px solid transparent; white-space: nowrap; }
+.btn.filled { background: var(--accentFill); color: var(--onAccentFill); }
+.btn.filled:hover { background: var(--accentFillPressed); }
+.btn.filled:disabled { background: var(--surface2); color: var(--disabled); cursor: default; }
+.btn.outlined { background: transparent; color: var(--text); border-color: var(--line); padding: 0 18px; }
+.btn.outlined:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.btn.outlined:disabled { color: var(--disabled); cursor: default; background: transparent; }
+.btn.text { background: transparent; color: var(--accent); padding: 0 12px; }
+.btn.text:hover { background: var(--accentContainer); }
+.btn.text:disabled { color: var(--disabled); cursor: default; background: transparent; }
+.btn.small { min-height: 36px; padding: 0 12px; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; margin: 4px 0; }
+.card.sel { border-color: var(--accent); }
+.caption { font-size: 12px; font-weight: 500; letter-spacing: .96px; color: var(--textMuted); }
+.muted { color: var(--textMuted); }
+.lbl { font-size: 14px; font-weight: 500; }
+.h-title { font-size: 18px; font-weight: 600; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid currentColor; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+.spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.fab { position: absolute; right: 16px; bottom: 16px; height: 56px; padding: 0 20px 0 16px; border-radius: 999px; border: 0; background: var(--accentFill); color: var(--onAccentFill);
+  display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+
+/* Ô nhập */
+.field { position: relative; margin-bottom: 4px; }
+.field input, .field select { width: 100%; height: 56px; padding: 22px 14px 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface2); color: var(--text);
+  font: 400 15px Barlow, system-ui, sans-serif; outline: none; }
+.field select { cursor: pointer; }
+.field input:focus, .field select:focus { border: 1.5px solid var(--accent); }
+.field label { position: absolute; left: 15px; top: 8px; font-size: 12px; color: var(--textMuted); pointer-events: none; }
+.field input:focus + label { color: var(--accent); }
+.field.err input { border-color: var(--bad); }
+.field .errtxt { color: var(--bad); font-size: 12px; font-weight: 500; padding: 4px 14px 0; }
+.field .count { text-align: right; font-size: 12px; color: var(--textMuted); padding: 4px 4px 0; }
+.field.dense input, .field.dense select { height: 48px; padding-top: 18px; }
+.field.dense label { top: 5px; }
+.tin { width: 100%; height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface2); color: var(--text); font: 400 15px Barlow, system-ui, sans-serif; outline: none; }
+.tin:focus { border: 1.5px solid var(--accent); }
+
+.seg { display: flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.seg button { flex: 1; height: 40px; border: 0; background: transparent; color: var(--text); font-size: 14px; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; padding: 0 4px; white-space: nowrap; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accentContainer); color: var(--onAccentContainer); }
+.seg.sm button { height: 34px; font-size: 13px; }
+
+.switch { width: 52px; height: 32px; border-radius: 999px; background: var(--surface2); border: 2px solid var(--line); position: relative; cursor: pointer; flex: none; }
+.switch::after { content: ""; position: absolute; left: 4px; top: 4px; width: 20px; height: 20px; border-radius: 50%; background: var(--textMuted); transition: .15s; }
+.switch.on { background: var(--accentFill); border-color: var(--accentFill); }
+.switch.on::after { left: 24px; width: 24px; height: 24px; top: 2px; background: var(--onAccentFill); }
+.switch.dis { opacity: .4; cursor: default; }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); font: 500 14px Barlow, system-ui, sans-serif; cursor: pointer; }
+.chip.on { background: var(--accentContainer); color: var(--onAccentContainer); border-color: transparent; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
+input[type=range] { width: 100%; accent-color: var(--accentFill); margin: 6px 0; cursor: pointer; }
+input[type=range]:disabled { cursor: default; opacity: .4; }
+
+.numfield { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.numfield .nl { flex: 1; }
+.numfield .nv { min-width: 96px; text-align: center; height: 44px; line-height: 44px; border-radius: 12px; background: var(--surface2); border: 1px solid var(--line); font-weight: 600; }
+.numfield.err .nv { border-color: var(--bad); color: var(--bad); }
+.numerr { color: var(--bad); font-size: 12px; font-weight: 500; margin-top: -2px; margin-bottom: 4px; }
+.divider { height: 1px; background: var(--line); margin: 12px 0; }
+.srow { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.srow .st { flex: 1; }
+.srow .st small { display: block; color: var(--textMuted); font-size: 13px; }
+
+.tabs { display: flex; gap: 4px; padding: 0 12px 8px; background: var(--surface); border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
+.tabs button { height: 40px; padding: 0 18px; border: 0; border-radius: 999px; background: transparent; color: var(--textMuted); font-size: 14px; font-weight: 500; cursor: pointer; }
+.tabs button.on { background: var(--accentFill); color: var(--onAccentFill); }
+.bottombar { flex: none; background: var(--surface); border-top: 1px solid var(--line); padding: 8px 12px 12px; }
+
+.radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--textMuted); flex: none; position: relative; }
+.radio.on { border-color: var(--accent); }
+.radio.on::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--accent); }
+
+/* Menu, hộp thoại, snackbar */
+.scrim { position: absolute; inset: 0; z-index: 40; }
+.scrim.dim { background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+.menu { position: absolute; background: var(--surface2); border-radius: 12px; padding: 6px 0; min-width: 200px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 41; }
+.menu .mi { display: flex; align-items: center; gap: 16px; padding: 10px 16px; cursor: pointer; color: var(--text); }
+.menu .mi:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.menu .mi.dis { color: var(--disabled); cursor: default; background: transparent; }
+.menu .mi .ic { color: var(--textMuted); }
+.menu .mi small { display: block; color: var(--textMuted); font-size: 13px; }
+.menu .mi.chk { color: var(--accent); }
+.dialog { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; width: min(340px, 86%); }
+.dialog h3 { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
+.dialog p { margin: 0 0 20px; color: var(--textBody); }
+.dialog .acts { display: flex; justify-content: flex-end; gap: 8px; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; padding: 8px 16px 16px; max-height: 80%; overflow-y: auto; z-index: 41; }
+.sheet .handle { width: 32px; height: 4px; border-radius: 2px; background: var(--textMuted); margin: 8px auto 16px; opacity: .5; }
+.sheet .row { display: flex; align-items: center; gap: 16px; padding: 12px 4px; cursor: pointer; border-radius: 12px; }
+.sheet .row:hover { background: var(--surface2); }
+.snack { position: absolute; left: 12px; right: 12px; bottom: 12px; background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; color: var(--text);
+  z-index: 60; transform: translateY(140%); transition: transform .2s; pointer-events: none; }
+.snack.show { transform: none; }
+.landscape .snack { left: 50%; right: auto; width: 420px; margin-left: -210px; }
+
+/* ---------- Màn Lái ---------- */
+.drive { padding: 4px 8px 8px; min-width: 0; }
+.trash { min-width: 0; overflow: hidden; }
+.trash span { overflow: hidden; text-overflow: ellipsis; }
+.drivebar { height: 48px; display: flex; align-items: center; gap: 4px; flex: none; }
+.alarm { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--bad); color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 18%, transparent); font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; max-width: 100%; }
+.canvas { position: relative; flex: 1; margin-top: 4px; touch-action: none; user-select: none; }
+.canvas.editing { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: calc(100% / 24) calc(100% / 12); outline: 1px dashed var(--line); border-radius: 4px; }
+.item { position: absolute; padding: 3px; }
+.item > .in { width: 100%; height: 100%; }
+.canvas.editing .item > .in { pointer-events: none; }
+.canvas.editing .item { cursor: grab; }
+.canvas.editing .item.sel > .in { outline: 2px solid var(--accent); border-radius: 16px; }
+.canvas.editing .item .rz { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; border-radius: 50%; background: var(--accentFill); border: 3px solid var(--bg); cursor: nwse-resize; display: none; }
+.canvas.editing .item.sel .rz { display: block; }
+#guides { position: absolute; inset: 0; pointer-events: none; }
+#guides .gl { position: absolute; background: var(--accent); opacity: .7; }
+.frameitem { height: 100%; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 8px; }
+.frameitem .hd { display: flex; align-items: center; gap: 4px; padding-bottom: 4px; }
+.frameitem .hd .caption { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; }
+.frameitem .hd .val { font-size: 12px; font-weight: 500; letter-spacing: .96px; color: var(--text); white-space: nowrap; }
+.frameitem .ct { flex: 1; position: relative; min-height: 0; }
+.axis { position: absolute; inset: 0; background: var(--surface2); cursor: pointer; touch-action: none; }
+.axis.pv { position: relative; height: 44px; margin-top: 4px; }
+.axis .cl { position: absolute; background: var(--line); }
+.axis .bar { position: absolute; background: color-mix(in srgb, var(--accentFill) 35%, transparent); border-radius: 999px; }
+.axis .th { position: absolute; border-radius: 50%; background: var(--accentFill); }
+.axis .th::after { content: ""; position: absolute; inset: 32%; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--onAccentFill) 25%, transparent); }
+.s2 { position: absolute; inset: 0; cursor: pointer; touch-action: none; }
+.s2 .b2 { position: absolute; border-radius: 50%; background: var(--surface2); }
+.s2 .h2, .s2 .v2 { position: absolute; background: var(--line); }
+.s2 .k2 { position: absolute; border-radius: 50%; background: var(--accentFill); }
+.knob { position: absolute; inset: 0; cursor: ns-resize; touch-action: none; }
+.sw3 { display: flex; height: 100%; max-height: 44px; background: var(--surface2); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+.sw3 button { flex: 1; border: 0; border-radius: 999px; background: transparent; color: var(--textMuted); font-size: 14px; cursor: pointer; }
+.sw3 button.on { background: var(--accentFill); color: var(--onAccentFill); }
+.chbtn { height: 100%; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; transition: background .09s; overflow: hidden; }
+.chbtn.on { background: var(--accentFill); border-color: var(--accentFill); color: var(--onAccentFill); }
+.chbtn .lbl { font-weight: 600; }
+.chbtn .caption { font-size: 11px; }
+.chbtn.on .caption { color: var(--onAccentFill); }
+.gauge { height: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 8px; }
+.gauge { overflow: hidden; white-space: nowrap; }
+.gauge .gh { display: flex; align-items: center; gap: 4px; color: var(--textMuted); }
+.gauge .gh svg { width: 14px; height: 14px; }
+.gauge .gv { font-size: 18px; font-weight: 700; }
+.gauge .gs { font-size: 11px; color: var(--textMuted); }
+.rowctl { display: flex; align-items: center; gap: 4px; height: 100%; }
+.rowctl .mid { flex: 1; text-align: center; min-width: 0; }
+.panel { width: 340px; flex: none; background: var(--surface); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+.panel .body { padding: 8px 16px 24px; }
+.trash.hot { border-color: var(--bad) !important; color: var(--bad) !important; }
+.trash.over { background: color-mix(in srgb, var(--bad) 25%, transparent); }
+
+/* Mix */
+.mixcard.dropto { box-shadow: 0 -3px 0 var(--accent); }
+.mixcols { display: flex; justify-content: center; gap: 32px; height: 140px; margin-top: 12px; }
+.mixcol { width: 96px; display: flex; flex-direction: column; align-items: center; }
+.mixcol .mv { font-size: 18px; font-weight: 700; }
+.mixcol .tube { flex: 1; width: 36px; margin: 4px 0; border-radius: 12px; background: var(--surface2); border: 1px solid var(--line); position: relative; overflow: hidden; }
+.mixcol .tube.act { border-color: var(--accent); }
+.mixcol .fillv { position: absolute; left: 4px; right: 4px; background: var(--accentFill); border-radius: 4px; }
+.mixcol .zero { position: absolute; left: 0; right: 0; height: 1px; top: 50%; background: var(--line); }
+.band { position: relative; height: 28px; margin: 0 24px; }
+.band .tr { position: absolute; left: 0; right: 0; top: 10px; bottom: 10px; border-radius: 999px; background: var(--surface2); }
+.band .zone { position: absolute; top: 6px; bottom: 6px; border-radius: 4px; background: color-mix(in srgb, var(--warn) 30%, transparent); }
+.band .cur { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); }
+.metrics { display: flex; justify-content: space-around; text-align: center; }
+.metrics .v { font-size: 18px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="toolbar">
+    <h1>RC Controller · xem trước</h1>
+    <div class="grp" id="nav"></div>
+    <div class="sep"></div>
+    <div class="grp">
+      <button class="tb" id="themeBtn"></button>
+      <label><input type="checkbox" id="simFail"> Giả lập failsafe</label>
+      <label><input type="checkbox" id="simLost"> Mất tín hiệu</label>
+      <label><input type="checkbox" id="simEmpty"> Garage trống</label>
+    </div>
+    <span class="hint">Màn Lái: W/S = ga · A/D = lái · kéo cần bằng chuột · núm xoay: kéo dọc, nháy đúp về 0</span>
+  </div>
+  <div class="stage" id="stage">
+    <div class="frame" id="frame"><div class="device portrait" id="device" data-t="dark"><div class="screen" id="screen"></div><div class="snack" id="snack"></div></div></div>
+  </div>
+</div>
+
+<script>
+// ============================================================================
+//  Icon — Heroicons v2 outline + 4 icon tự vẽ (assets/icons)
+// ============================================================================
+const P = {
+  back: 'M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18',
+  plus: 'M12 4.5v15m7.5-7.5h-15',
+  minus: 'M5 12h14',
+  connect: 'M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244',
+  disconnect: 'M13.181 8.68a4.503 4.503 0 0 1 1.903 6.405m-9.768-2.782L3.56 14.06a4.5 4.5 0 0 0 6.364 6.365l3.129-3.129m5.614-5.615 1.757-1.757a4.5 4.5 0 0 0-6.364-6.365l-4.5 4.5c-.258.26-.479.541-.661.84m1.903 6.405a4.495 4.495 0 0 1-1.242-.88 4.483 4.483 0 0 1-1.062-1.683m6.587 2.345 5.907 5.907m-5.907-5.907L8.898 8.898M2.991 2.99 8.898 8.9',
+  wifi: 'M8.288 15.038a5.25 5.25 0 0 1 7.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 0 1 1.06 0Z',
+  config: 'M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75',
+  settings: 'M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
+  signal: 'M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z',
+  signalOff: 'm3 3 8.735 8.735m0 0a.374.374 0 1 1 .53.53m-.53-.53.53.53m0 0L21 21M14.652 9.348a3.75 3.75 0 0 1 0 5.304m2.121-7.425a6.75 6.75 0 0 1 0 9.546m2.121-11.667c3.808 3.807 3.808 9.98 0 13.788m-9.546-4.242a3.733 3.733 0 0 1-1.06-2.122m-1.061 4.243a6.75 6.75 0 0 1-1.625-6.929m-.496 9.05c-3.068-3.067-3.664-7.67-1.79-11.334M12 12h.008v.008H12V12Z',
+  more: 'M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z',
+  themeDark: 'M21.752 15.002A9.72 9.72 0 0 1 18 15.750c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z',
+  themeLight: 'M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z',
+  themeSystem: 'M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25',
+  warning: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z',
+  current: 'm3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z',
+  batteryHalf: 'M21 10.5h.375c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125H21M4.5 10.5H12V15H4.5v-4.5ZM3.750 18h15A2.25 2.25 0 0 0 21 15.75v-6a2.25 2.25 0 0 0-2.25-2.25h-15A2.25 2.25 0 0 0 1.5 9.75v6A2.25 2.25 0 0 0 3.75 18Z',
+  batteryEmpty: 'M21 10.5h.375c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125H21M3.75 18h15A2.25 2.25 0 0 0 21 15.75v-6a2.25 2.25 0 0 0-2.25-2.25h-15A2.25 2.25 0 0 0 1.5 9.75v6A2.25 2.25 0 0 0 3.75 18Z',
+  syncFailsafe: 'M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5',
+  save: 'M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5',
+  apply: 'M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z',
+  reset: 'M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3',
+  undo: 'M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3',
+  redo: 'm15 15 6-6m0 0-6-6m6 6H9a6 6 0 0 0 0 12h3',
+  close: 'M6 18 18 6M6 6l12 12',
+  delete: 'm14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0',
+  edit: 'm16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10',
+  locked: 'M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z',
+  unlocked: 'M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z',
+  light: 'M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.517 0c.85.493 1.509 1.333 1.509 2.316V18',
+  horn: 'M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 1 1 0-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.26.117-1.527-.461a20.845 20.845 0 0 1-1.44-4.282m3.102.069a18.03 18.03 0 0 1-.59-4.59c0-1.586.205-3.124.59-4.59m0 9.18a23.848 23.848 0 0 1 8.835 2.535M10.34 6.66a23.847 23.847 0 0 0 8.835-2.535m0 0A23.74 23.74 0 0 0 18.795 3m.38 1.125a23.91 23.91 0 0 1 1.014 5.395m-1.014 8.855c-.118.38-.245.754-.38 1.125m.38-1.125a23.91 23.91 0 0 0 1.014-5.395m0-3.46c.495.413.811 1.035.811 1.73 0 .695-.316 1.317-.811 1.73m0-3.46a24.347 24.347 0 0 1 0 3.46',
+  mix: 'M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5',
+  drag: 'M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5',
+  duplicate: 'M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75',
+  exportFile: 'M9 8.25H7.5a2.25 2.25 0 0 0-2.25 2.25v9a2.25 2.25 0 0 0 2.25 2.25h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25H15m0-3-3-3m0 0-3 3m3-3V15',
+  addControl: 'M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 10.5 18v-2.25a2.25 2.25 0 0 0-2.25-2.25H6a2.25 2.25 0 0 0-2.25 2.25V18A2.25 2.25 0 0 0 6 20.25Zm9.75-9.75H18a2.25 2.25 0 0 0 2.25-2.25V6A2.25 2.25 0 0 0 18 3.75h-2.25A2.25 2.25 0 0 0 13.5 6v2.25a2.25 2.25 0 0 0 2.25 2.25Z',
+  scan: 'm21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z',
+  success: 'M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  fire: 'M15.362 5.214A8.252 8.252 0 0 1 12 21 8.25 8.25 0 0 1 6.038 7.047 8.287 8.287 0 0 0 9 9.601a8.983 8.983 0 0 1 3.361-6.867 8.21 8.21 0 0 0 3 2.48ZM12 18a3.75 3.75 0 0 0 .495-7.468 5.99 5.99 0 0 0-1.925 3.547 5.975 5.975 0 0 1-2.133-1.001A3.75 3.75 0 0 0 12 18Z',
+  star: 'M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z',
+  flag: 'M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5',
+  bellAlert: 'M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0M3.124 7.5A8.969 8.969 0 0 1 5.292 3m13.416 0a8.969 8.969 0 0 1 2.168 4.5',
+  arrowPath: 'M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99',
+  home: 'm2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25',
+  truck: 'M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12',
+  // Icon tự vẽ (app/assets/icons)
+  bluetooth: 'M7 7.5 17 16.5 12 21V3l5 4.5-10 9',
+  car: 'M3.75 14.25V12l1.8-4.5A1.5 1.5 0 0 1 6.94 6.5h10.12a1.5 1.5 0 0 1 1.39.94L20.25 12v2.25a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5ZM3.75 12h16.5M6 15.75v1.5a.75.75 0 0 0 .75.75h1.5a.75.75 0 0 0 .75-.75v-1.5m6 0v1.5a.75.75 0 0 0 .75.75h1.5a.75.75 0 0 0 .75-.75v-1.5M7.5 13.5h.01M16.5 13.5h.01',
+  speedometer: 'M3.75 16.5a8.25 8.25 0 1 1 16.5 0M12 16.5l3.75-4.5M12 16.5h.01M6 16.5h1.5M16.5 16.5H18M12 8.25v1.5M7.05 10.8l1.06 1.06',
+  steering: 'M20.25 12a8.25 8.25 0 1 1-16.5 0 8.25 8.25 0 0 1 16.5 0ZM14.25 12a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0ZM3.9 10.5l5.85 1.5M20.1 10.5l-5.85 1.5M12 14.25v6',
+};
+const ic = (name, opts = {}) => {
+  const st = [opts.size ? `width:${opts.size}px;height:${opts.size}px` : '', opts.color ? `color:${opts.color}` : ''].filter(Boolean).join(';');
+  return `<svg class="ic${opts.mini ? ' mini' : ''}"${st ? ` style="${st}"` : ''} viewBox="0 0 24 24" fill="${opts.solid ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${P[name]}"/></svg>`;
+};
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const spinner = '<span class="spinner"></span>';
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const clone = (o) => JSON.parse(JSON.stringify(o));
+let uid = 1;
+const newId = (p = 'i') => `${p}${uid++}`;
+const CHS = Array.from({ length: 10 }, (_, i) => i + 1);
+
+// ============================================================================
+//  Kênh (models/channel_config.dart)
+// ============================================================================
+// Kênh không quyết định loại phần tử trên màn Lái: phần tử được thêm và cấu hình riêng trong bố cục, rồi gán kênh vào (B2, H3).
+const isSwitchLike = (k) => k === 'button' || k === 'toggle' || k === 'switch3';
+
+function mkCh(index, name, enabled, o = {}) {
+  return { index, name, enabled, min: 1000, center: 1500, max: 2000, trim: 0, offset: 0, reverse: false, failsafe: 1500, offPct: -100, ...o };
+}
+/** CH1 = Lái, CH2 = Ga (bố cục mẫu gán vào cần ngang / cần dọc), CH3–CH10 tắt */
+function chDefaults(i) {
+  if (i === 1) return mkCh(1, 'Lái', true, { min: 1100, max: 1900 });
+  if (i === 2) return mkCh(2, 'Ga', true);
+  return mkCh(i, `Kênh ${i}`, false);
+}
+const defaultChannels = () => CHS.map(chDefaults);
+const chLabel = (c) => `CH${c.index}`;
+const effCenter = (c) => clamp(c.center + c.trim + c.offset, c.min, c.max);
+function pctToUs(c, pct) {
+  const p = clamp(pct, -100, 100);
+  return Math.round(p >= 0 ? c.center + p / 100 * (c.max - c.center) : c.center + p / 100 * (c.center - c.min));
+}
+/** ChannelConfig.validate (E7) */
+function chErrors(c) {
+  const e = {};
+  if (!c.name.trim()) e.name = 'Tên kênh không được trống';
+  if (c.min < 500) e.min = 'Min tối thiểu 500 µs';
+  if (c.max > 2500) e.max = 'Max tối đa 2500 µs';
+  if (c.min >= c.center) e.center = 'Cần Min < Center';
+  if (c.center >= c.max) e.center = 'Cần Center < Max';
+  if (c.failsafe < c.min || c.failsafe > c.max) e.failsafe = 'Failsafe phải nằm trong [Min, Max]';
+  if (Math.abs(c.trim) > 200) e.trim = 'Trim trong khoảng ±200 µs';
+  if (Math.abs(c.offset) > 300) e.offset = 'Offset trong khoảng ±300 µs';
+  if (c.offPct < -100 || c.offPct > 100) e.off = 'Giá trị tắt trong khoảng −100…+100%';
+  return e;
+}
+const chName = (channels, n) => { const c = channels[n - 1]; return c.name === `Kênh ${n}` ? `CH${n}` : `CH${n} · ${c.name}`; };
+
+// ============================================================================
+//  Mix (models/mix_rule.dart, services/mix_engine.dart)
+// ============================================================================
+const MIX_TYPE = { threshold: 'Ngưỡng', linear: 'Tỉ lệ', curve: 'Đường cong', select: 'Chuyển kênh' };
+const MIX_MODE = { override: 'Thay thế', add: 'Cộng dồn', max: 'Lấy lớn hơn' };
+const MAX_MIX = 20; // chạy đồng thời tối thiểu 10 luật, giới hạn 20 (G1)
+const CURVE_XS = [-100, -50, 0, 50, 100];
+const newMix = (o = {}) => ({ id: newId('m'), enabled: true, type: 'threshold', src: 1, dst: 3, gate: null, mode: 'override',
+  onAt: 80, offBelow: 70, onVal: 100, offVal: 0, gain: 100, offset: 0, curve: [-100, -50, 0, 50, 100],
+  sel: 3, dstOn: 1, dstOff: 4, neutral: true, dz: 5, ...o });
+const mixEdges = (r) => r.type === 'select' ? [[r.src, r.dstOn], [r.src, r.dstOff]] : [[r.src, r.dst]];
+
+function describeMix(r, channels) {
+  const ch = (n) => { const c = channels[n - 1]; return !c || c.name === `Kênh ${n}` ? `CH${n}` : `CH${n} (${c.name})`; };
+  const pct = (v) => `${Math.round(v)}%`;
+  const gate = r.gate != null && r.type !== 'select' ? ` · khi ${ch(r.gate)} bật` : '';
+  switch (r.type) {
+    case 'threshold': return `${ch(r.src)} ≥ ${pct(r.onAt)} → ${ch(r.dst)} = ${pct(r.onVal)} · < ${pct(r.offBelow)} → ${pct(r.offVal)}${gate}`;
+    case 'linear': return `${ch(r.dst)} = ${ch(r.src)} × ${pct(r.gain)}${r.offset >= 0 ? ' + ' : ' − '}${pct(Math.abs(r.offset))}${gate}`;
+    case 'curve': return `${ch(r.dst)} = đường cong(${ch(r.src)})${gate}`;
+    default: return `${ch(r.sel)} bật → ${ch(r.src)} vào ${ch(r.dstOn)} · tắt → vào ${ch(r.dstOff)}${r.neutral ? ' (khoá an toàn)' : ''}`;
+  }
+}
+function mixValidate(r) {
+  const okCh = (c) => c >= 1 && c <= 10;
+  if (r.type === 'select') {
+    const chs = [r.src, r.sel, r.dstOn, r.dstOff];
+    if (!chs.every(okCh)) return 'Kênh phải trong khoảng CH1–CH10';
+    if (new Set(chs).size !== 4) return 'Nguồn, nút chọn và hai kênh đích phải khác nhau';
+    if (r.dz < 0 || r.dz > 50) return 'Vùng chết trong khoảng 0–50%';
+    return null;
+  }
+  if (!okCh(r.src) || !okCh(r.dst)) return 'Kênh phải trong khoảng CH1–CH10';
+  if (r.src === r.dst) return 'Kênh nguồn và kênh đích phải khác nhau';
+  if (r.gate != null && (!okCh(r.gate) || r.gate === r.dst)) return 'Kênh điều kiện không hợp lệ';
+  const inRange = (v) => v >= -100 && v <= 100;
+  if (r.type === 'threshold') {
+    if (![r.onAt, r.offBelow, r.onVal, r.offVal].every(inRange)) return 'Giá trị phải trong khoảng −100…+100%';
+    if (r.offBelow > r.onAt) return 'Ngưỡng tắt phải ≤ ngưỡng bật';
+  } else if (r.type === 'linear') {
+    if (r.gain < -200 || r.gain > 200) return 'Hệ số trong khoảng −200…+200%';
+    if (!inRange(r.offset)) return 'Độ lệch trong khoảng −100…+100%';
+  } else if (r.type === 'curve') {
+    if (r.curve.length !== 5 || !r.curve.every(inRange)) return 'Đường cong cần 5 điểm trong −100…+100%';
+  }
+  return null;
+}
+function findCycle(rules) {
+  const adj = {};
+  for (const r of rules) for (const [a, b] of mixEdges(r)) (adj[a] ||= new Set()).add(b);
+  const state = {}, stack = [];
+  const dfs = (u) => {
+    state[u] = 1; stack.push(u);
+    for (const v of adj[u] || []) {
+      if (state[v] === 1) return [...stack.slice(stack.indexOf(v)), v];
+      if (!state[v]) { const c = dfs(v); if (c) return c; }
+    }
+    stack.pop(); state[u] = 2;
+    return null;
+  };
+  for (const u of Object.keys(adj).map(Number).sort((a, b) => a - b)) if (!state[u]) { const c = dfs(u); if (c) return c; }
+  return null;
+}
+function mixValidateAll(rules) {
+  if (rules.length > MAX_MIX) return `Tối đa ${MAX_MIX} luật mix`;
+  for (let i = 0; i < rules.length; i++) { const e = mixValidate(rules[i]); if (e) return `Luật ${i + 1}: ${e}`; }
+  const cyc = findCycle(rules.filter((r) => r.enabled));
+  return cyc ? `Mix bị vòng lặp: ${cyc.map((c) => 'CH' + c).join(' → ')}` : null;
+}
+class MixEngine {
+  constructor(rules) { this.rules = rules; this.reset(); }
+  reset() { this.th = {}; this.so = {}; this.sp = {}; }
+  isOn(id) { return this.th[id] || false; }
+  selectState(id) {
+    const r = this.rules.find((x) => x.id === id), on = this.so[id];
+    if (!r || on === undefined) return null;
+    return { active: on ? r.dstOn : r.dstOff, pending: this.sp[id] || false };
+  }
+  static curve(pts, x) {
+    const v = clamp(x, -100, 100);
+    for (let i = 0; i < 4; i++) if (v <= CURVE_XS[i + 1]) { const t = (v - CURVE_XS[i]) / (CURVE_XS[i + 1] - CURVE_XS[i]); return pts[i] + (pts[i + 1] - pts[i]) * t; }
+    return pts[4];
+  }
+  run(input) {
+    const out = [...input];
+    const get = (ch) => out[ch - 1];
+    const put = (ch, v, m) => { const cur = out[ch - 1]; out[ch - 1] = clamp(m === 'override' ? v : m === 'add' ? cur + v : Math.max(cur, v), -100, 100); };
+    for (const r of this.rules) {
+      if (!r.enabled) continue;
+      if (r.type !== 'select' && r.gate != null && get(r.gate) <= 0) { this.th[r.id] = false; continue; }
+      const s = get(r.src);
+      if (r.type === 'threshold') {
+        let on = this.th[r.id] || false;
+        if (s >= r.onAt) on = true; else if (s < r.offBelow) on = false;
+        this.th[r.id] = on;
+        put(r.dst, on ? r.onVal : r.offVal, r.mode);
+      } else if (r.type === 'linear') put(r.dst, clamp(s * r.gain / 100 + r.offset, -100, 100), r.mode);
+      else if (r.type === 'curve') put(r.dst, MixEngine.curve(r.curve, s), r.mode);
+      else {
+        const want = get(r.sel) > 0;
+        let on = this.so[r.id] ?? want;
+        if (want !== on && (!r.neutral || Math.abs(s) <= r.dz)) on = want;
+        this.so[r.id] = on; this.sp[r.id] = want !== on;
+        put(on ? r.dstOn : r.dstOff, s, r.mode);
+        out[(on ? r.dstOff : r.dstOn) - 1] = 0;
+      }
+    }
+    return out;
+  }
+}
+
+// ============================================================================
+//  Bố cục màn Lái (models/control_layout.dart, layout/*)
+// ============================================================================
+const KIND = { stickH: 'Cần gạt ngang', stickV: 'Cần gạt dọc', stick2D: 'Cần 2 trục', button: 'Nút nhấn giữ', toggle: 'Nút bật/tắt', switch3: 'Công tắc 3 nấc', knob: 'Núm xoay', gauge: 'Ô đồng hồ', gearBox: 'Hộp số', trim: 'Trim lái', statusBadge: 'Trạng thái' };
+const isControl = (k) => ['stickH', 'stickV', 'stick2D', 'button', 'toggle', 'switch3', 'knob'].includes(k);
+const isStickK = (k) => k === 'stickH' || k === 'stickV' || k === 'stick2D';
+const GAUGES = { battery: 'Pin', current: 'Dòng', speed: 'Tốc độ', ping: 'Ping', rssi: 'RSSI' };
+const LIMITS = { stickH: [6, 2, 24, 4], stickV: [2, 6, 4, 12], stick2D: [5, 5, 12, 12], button: [2, 2, 6, 4], toggle: [2, 2, 6, 4], switch3: [3, 2, 8, 4], knob: [3, 3, 6, 6], gauge: [3, 2, 8, 4], statusBadge: [3, 2, 8, 4], gearBox: [4, 2, 12, 4], trim: [4, 2, 12, 4] };
+const DEF_SIZE = { stickH: [8, 3], stickV: [3, 8], stick2D: [6, 6], button: [3, 2], toggle: [3, 2], switch3: [4, 2], knob: [3, 3], gauge: [4, 2], statusBadge: [4, 2], gearBox: [6, 2], trim: [6, 2] };
+const KNOB = { small: ['Nhỏ', 0.28], medium: ['Vừa', 0.38], large: ['Lớn', 0.5] };
+const VALUE_DISPLAY = { pct: '%', us: 'µs', hidden: 'Ẩn' };
+const RET_MODE = { spring: 'Tự về', hold: 'Giữ vị trí', halfSpring: 'Về một nửa' };
+const RET_CURVE = { linear: 'Tuyến tính', easeOut: 'Chậm dần cuối' };
+/** AppIcons.pickable: khoá lưu trong hồ sơ → tên icon trong P */
+const PICK_ICONS = { 'light-bulb': 'light', megaphone: 'horn', bolt: 'current', fire: 'fire', star: 'star', flag: 'flag', 'bell-alert': 'bellAlert', play: 'apply', 'arrow-path': 'arrowPath', home: 'home', truck: 'truck' };
+const COLS = 24, ROWS = 12;
+
+const newRet = (o = {}) => ({ mode: 'spring', target: 0, delay: 0, duration: 0, curve: 'linear', posOnly: false, negOnly: false, remember: false, ...o });
+const RET_PRESETS = [['Về 0% ngay', {}], ['Về 0% êm', { duration: 300, curve: 'easeOut' }], ['Giữ vị trí', { mode: 'hold' }]];
+const returnsFrom = (c, v) => c.mode === 'spring' ? true : c.mode === 'hold' ? false : c.posOnly ? v > 0 : c.negOnly ? v < 0 : true;
+const retRisky = (c) => c.mode === 'hold' || c.duration > 500;
+function retError(c) {
+  if (c.target < -100 || c.target > 100) return 'Vị trí về phải trong −100…+100%';
+  if (c.posOnly && c.negOnly) return 'Không thể bật cả "chỉ nửa dương" và "chỉ nửa âm"';
+  if (c.delay < 0 || c.delay > 1000) return 'Trễ trước khi về trong 0–1000 ms';
+  if (c.duration < 0 || c.duration > 2000) return 'Thời gian về trong 0–2000 ms';
+  return null;
+}
+/** layout/return_motion.dart */
+const RM = {
+  valueAt(c, from, ms) {
+    if (!returnsFrom(c, from) || ms < c.delay) return from;
+    const tg = clamp(c.target, -100, 100);
+    if (c.duration <= 0) return tg;
+    const t = clamp((ms - c.delay) / c.duration, 0, 1);
+    const k = c.curve === 'easeOut' ? 1 - (1 - t) * (1 - t) : t;
+    return from + (tg - from) * k;
+  },
+  total: (c) => c.delay + c.duration,
+  initial: (c, saved) => c.mode === 'hold' && c.remember && saved != null ? saved : c.target,
+  onExit: (c, isThrottle) => isThrottle && c.mode === 'hold' ? 0 : c.target,
+  /** Vị trí nghỉ của kênh trên bố cục: cần gạt → onExit của trục gán kênh, phần tử khác → 0 (H5) */
+  restPct(l, ch, isThrottle) {
+    const it = l.items.find((i) => i.channel === ch || i.channelY === ch);
+    if (!it || !isStickK(it.kind)) return 0;
+    return RM.onExit((it.kind === 'stick2D' && it.channelY === ch ? it.retY : it.ret) || newRet(), isThrottle);
+  },
+  dz(v, d) { if (d <= 0) return v; const a = Math.abs(v); if (a < d) return 0; return Math.sign(v) * (a - d) / (100 - d) * 100; },
+};
+
+const newStyle = () => ({ label: null, showLabel: true, icon: null, valueDisplay: 'pct', knobSize: 'medium', deadzone: 0, haptic: true, opacity: 100 });
+function mkItem(kind, x, y, w, h, o = {}) {
+  return { id: newId(), kind, channel: null, channelY: null, gauge: null, x, y, w, h, style: newStyle(),
+    ret: isStickK(kind) ? newRet() : null, retY: kind === 'stick2D' ? newRet() : null, saved: null, savedY: null, ...o };
+}
+const itemChs = (it) => [it.channel, it.channelY].filter((c) => c != null);
+const itemFor = (l, ch) => l.items.find((i) => itemChs(i).includes(ch));
+const touchable = (it) => isControl(it.kind) || it.kind === 'gearBox' || it.kind === 'trim';
+/** SizeLimits.forCell: vùng chạm tối thiểu 48 dp */
+function limitsFor(kind, cw, chh, touch) {
+  const [a, b, c, d] = LIMITS[kind];
+  if (!touch || cw <= 0 || chh <= 0) return [a, b, c, d];
+  const mw = Math.max(a, Math.ceil(48 / cw)), mh = Math.max(b, Math.ceil(48 / chh));
+  return [mw, mh, Math.max(c, mw), Math.max(d, mh)];
+}
+function overlaps(a, b) { return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
+function fits(layout, r, ignoreId) {
+  if (r.x < 0 || r.y < 0 || r.x + r.w > COLS || r.y + r.h > ROWS) return false;
+  return !layout.items.some((i) => i.id !== ignoreId && overlaps(i, r));
+}
+function findFree(layout, w, h) {
+  for (let y = 0; y + h <= ROWS; y++) for (let x = 0; x + w <= COLS; x++) if (fits(layout, { x, y, w, h })) return { x, y, w, h };
+  return null;
+}
+function place(layout, kind, extra = {}) {
+  const [w, h] = DEF_SIZE[kind];
+  const spot = findFree(layout, w, h) || findFree(layout, LIMITS[kind][0], LIMITS[kind][1]);
+  if (!spot) return null;
+  const it = mkItem(kind, spot.x, spot.y, spot.w, spot.h, extra);
+  layout.items.push(it);
+  return it;
+}
+/** LayoutTemplates.addControl — thêm phần tử vào chỗ trống, gán sẵn kênh nếu có (kênh ở phần tử khác thì chuyển sang, H7) */
+function addControl(layout, kind, ch = null) {
+  const it = place(layout, kind);
+  if (it && ch != null) assignChannel(layout, it, ch);
+  return it;
+}
+/** "Mặc định": ga dọc trái, lái ngang phải, đồng hồ ở giữa; phần tử khác người dùng tự thêm rồi gán kênh */
+function standardLayout() {
+  const it = (kind, x, y, w, h, extra = {}) => mkItem(kind, x, y, w, h, extra);
+  return { id: newId('lay'), name: 'Mặc định', locked: true, items: [
+    it('statusBadge', 5, 0, 6, 2),
+    it('gauge', 5, 2, 4, 2, { gauge: 'battery' }), it('gauge', 9, 2, 4, 2, { gauge: 'current' }),
+    it('gauge', 5, 4, 4, 2, { gauge: 'speed' }), it('gauge', 9, 4, 4, 2, { gauge: 'ping' }),
+    it('gearBox', 5, 9, 8, 3), it('trim', 14, 6, 10, 2),
+    it('stickV', 0, 1, 4, 11, { channel: 2 }), it('stickH', 14, 9, 10, 3, { channel: 1 }),
+  ] };
+}
+/** ControlLayout.assignChannel — mỗi kênh chỉ có một phần tử trên bố cục (H7); ch = null để bỏ gán. Trả về phần tử bị gỡ kênh. */
+function assignChannel(l, item, ch, y = false) {
+  let moved = null;
+  if (ch != null) {
+    for (const o of l.items) {
+      if (o.channel === ch && !(o.id === item.id && !y)) { o.channel = null; moved = o; }
+      if (o.channelY === ch && !(o.id === item.id && y)) { o.channelY = null; moved = o; }
+    }
+  }
+  if (y) item.channelY = ch; else item.channel = ch;
+  return moved;
+}
+function unassignChannel(l, ch) {
+  for (const o of l.items) { if (o.channel === ch) o.channel = null; if (o.channelY === ch) o.channelY = null; }
+}
+/** CarProfile.syncLayouts: kênh đang tắt được gỡ khỏi mọi phần tử; phần tử vẫn ở trên màn, hiện "Chưa gán kênh" */
+function syncLayout(p) {
+  for (const c of p.channels) if (!c.enabled) unassignChannel(p.layout, c.index);
+}
+/** Tên một "chỗ gán kênh" của phần tử (cần 2 trục có hai chỗ X/Y) */
+function itemTitle(it) {
+  const l = it.style.label;
+  return l && l.trim() ? `${KIND[it.kind]} "${l}"` : KIND[it.kind];
+}
+const slotName = (it, y = false) => it.kind === 'stick2D' ? `${itemTitle(it)} · trục ${y ? 'Y' : 'X'}` : itemTitle(it);
+/** LayoutGrid.validate (H5 + H7) */
+function layoutValidate(l) {
+  const seen = new Set();
+  for (const i of l.items) {
+    if (i.x < 0 || i.y < 0 || i.x + i.w > COLS || i.y + i.h > ROWS) return `${KIND[i.kind]} nằm ngoài lưới`;
+    const [a, b, c, d] = LIMITS[i.kind];
+    if (i.w < a || i.h < b || i.w > c || i.h > d) return `${KIND[i.kind]} có kích thước ngoài giới hạn`;
+    if (l.items.some((o) => o.id !== i.id && overlaps(o, i))) return 'Có phần tử chồng lên nhau';
+    for (const ch of itemChs(i)) { if (seen.has(ch)) return `CH${ch} có nhiều hơn một phần tử trên màn`; seen.add(ch); }
+    const err = (i.ret && retError(i.ret)) || (i.retY && retError(i.retY));
+    if (err) return err;
+  }
+  if (!seen.has(2)) return 'Bố cục phải có phần tử điều khiển kênh Ga (CH2)';
+  if (!seen.has(1)) return 'Bố cục phải có phần tử điều khiển kênh Lái (CH1)';
+  return null;
+}
+/** Đường gióng: cạnh trùng cạnh phần tử khác */
+function guides(l, id, r) {
+  const xs = new Set(), ys = new Set();
+  for (const o of l.items) {
+    if (o.id === id) continue;
+    for (const a of [r.x, r.x + r.w]) if (a === o.x || a === o.x + o.w) xs.add(a);
+    for (const a of [r.y, r.y + r.h]) if (a === o.y || a === o.y + o.h) ys.add(a);
+  }
+  return { xs, ys };
+}
+
+// ============================================================================
+//  Hồ sơ xe (models/car_profile.dart)
+// ============================================================================
+const isIpv4 = (s) => {
+  const parts = String(s).trim().split('.');
+  return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && !(p.length > 1 && p.startsWith('0')) && +p <= 255);
+};
+const isMac = (s) => /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(s);
+function nameError(name, others) {
+  const n = name.trim();
+  if (!n || n.length > 32) return 'Tên xe dài 1–32 ký tự';
+  if (others.some((o) => o.trim().toLowerCase() === n.toLowerCase())) return 'Đã có xe khác tên này';
+  return null;
+}
+function validateGeneral(p, others = []) {
+  const e = {};
+  const ne = nameError(p.name, others);
+  if (ne) e.name = ne;
+  if (p.conn === 'wifi') {
+    if (!isIpv4(p.wifi.ip)) e.ip = 'Địa chỉ IPv4 không hợp lệ';
+    if (!(p.wifi.port >= 1 && p.wifi.port <= 65535)) e.port = 'Port trong khoảng 1–65535';
+  } else {
+    const b = p.ble;
+    if (!b.mac.trim() && !b.deviceName.trim()) e.ble = 'Cần chọn xe hoặc nhập MAC/tên';
+    else if (b.mac.trim() && !isMac(b.mac.trim())) e.ble = 'MAC dạng AA:BB:CC:DD:EE:FF';
+  }
+  if (p.failsafeMs < 100 || p.failsafeMs > 3000) e.failsafeTimeout = 'Thời gian failsafe trong khoảng 100–3000 ms';
+  if (p.gears.count < 1 || p.gears.count > 5) e.gearCount = 'Số lượng số 1–5';
+  for (let i = 0; i < p.gears.count; i++) { const g = p.gears.max[i]; if (g < 1 || g > 100) e['gear' + i] = `Ga tối đa số ${i + 1} phải 1–100%`; }
+  return e;
+}
+/** CarProfile.missingMainControl (H5) */
+function missingMainControl(p) {
+  const l = p.layout;
+  if (!itemFor(l, 2)) return `Bố cục "${l.name}" chưa có phần tử cho kênh Ga (CH2)`;
+  if (!itemFor(l, 1)) return `Bố cục "${l.name}" chưa có phần tử cho kênh Lái (CH1)`;
+  return null;
+}
+function validateAll(p, others = []) {
+  const errs = Object.values(validateGeneral(p, others));
+  for (const c of p.channels) { const e = Object.values(chErrors(c)); if (e.length) errs.push(`${chLabel(c)}: ${e[0]}`); }
+  const miss = missingMainControl(p);
+  if (miss) errs.push(miss);
+  const mixErr = mixValidateAll(p.mixes);
+  if (mixErr) errs.push(mixErr);
+  return errs;
+}
+const defaultGears = () => ({ count: 3, max: [30, 60, 100, 100, 100] });
+function makeProfile(name, conn, tpl, o = {}) {
+  const channels = defaultChannels(), layout = standardLayout();
+  if (tpl === 'lightsHorn') {
+    Object.assign(channels[2], { name: 'Đèn', enabled: true, failsafe: 1000 });
+    Object.assign(channels[3], { name: 'Còi', enabled: true, failsafe: 1000 });
+    addControl(layout, 'toggle', 3);
+    addControl(layout, 'button', 4);
+  }
+  return {
+    id: newId('p'), name, conn, wifi: { ip: o.ip ?? '192.168.4.1', port: o.port ?? 4210, ssid: o.ssid ?? '' },
+    ble: { mac: o.mac ?? '', deviceName: o.devName ?? '' }, channels, mixes: [], gears: defaultGears(), failsafeMs: 400,
+    lastConnectedAt: o.last ?? null, layout,
+  };
+}
+const TEMPLATES = [
+  ['basic', 'Xe cơ bản 2 kênh', 'Lái (CH1) và Ga (CH2)'],
+  ['lightsHorn', 'Xe có đèn/còi', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)'],
+  ['copy', 'Sao chép từ xe khác', 'Lấy kênh, mix, hộp số và bố cục của một xe có sẵn'],
+];
+const connLabel = (p) => p.conn === 'wifi' ? `${p.wifi.ip}:${p.wifi.port}` : (p.ble.deviceName || p.ble.mac || '?');
+const namesExcept = (id) => S.profiles.filter((p) => p.id !== id).map((p) => p.name);
+function uniqueName(base) {
+  const names = new Set(S.profiles.map((p) => p.name.toLowerCase()));
+  let n = base.slice(0, 32), i = 2;
+  while (names.has(n.toLowerCase())) { const suf = ` ${i++}`; n = base.slice(0, 32 - suf.length) + suf; }
+  return n;
+}
+/** Cấu hình firmware v1 (chỉ CH1/CH2 + hộp số + failsafe) — mô phỏng phần đang lưu trên xe */
+const SERVO_KEYS = ['min', 'center', 'max', 'trim', 'offset', 'reverse', 'failsafe'];
+const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
+const carConfigOf = (p) => clone({ steer: pick(p.channels[0], SERVO_KEYS), thr: pick(p.channels[1], SERVO_KEYS), failsafeMs: p.failsafeMs, gears: p.gears });
+/** CarController.syncProfile: app là nguồn đúng (0.5) — ghi cấu hình hồ sơ xuống xe nếu khác cấu hình xe đang có.
+ *  Firmware v1 phải nhận cả CH1/CH2; Sprint 4 chỉ còn FS_WRITE. Trả về true nếu đã ghi. */
+function syncProfile(p, force = false) {
+  const want = carConfigOf(p);
+  if (!force && JSON.stringify(S.carCfg[p.id]) === JSON.stringify(want)) return false;
+  S.carCfg[p.id] = want;
+  return true;
+}
+
+// ============================================================================
+//  Trạng thái giả lập
+// ============================================================================
+const S = {
+  theme: 'dark', screen: 'garage', history: [], profiles: [],
+  connectedId: null, link: 'disconnected', connectingId: null, ping: {}, pinging: {}, carCfg: {},
+  wizard: null, settings: null, chEdit: null, mixEdit: null, ctl: null,
+  values: new Array(10).fill(0), sw: {}, gear: 1, tel: null, overlay: null,
+};
+{
+  const p1 = makeProfile('Xe tải đỏ', 'wifi', 'lightsHorn', { last: new Date(2026, 8, 22, 18, 40).getTime() });
+  p1.mixes = [newMix({ src: 1, dst: 3 })];
+  const p2 = makeProfile('Buggy xanh', 'ble', 'basic', { mac: '24:6F:28:AA:10:3C', devName: 'RC-CAR-BLE' });
+  S.profiles.push(p1, p2);
+}
+const DEMO_BLE = '24:6F:28:AA:10:3C';
+const prof = (id) => S.profiles.find((p) => p.id === id);
+const isConnected = (p) => !!p && S.connectedId === p.id && (S.link === 'connected' || S.link === 'lost');
+
+// ============================================================================
+//  Tiện ích giao diện: registry sự kiện, snackbar, menu, hộp thoại
+// ============================================================================
+let snackTimer;
+function snack(m) {
+  const el = document.getElementById('snack');
+  el.textContent = m; el.classList.add('show');
+  clearTimeout(snackTimer); snackTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+const actions = {}, INP = {}, RG = {};
+let actSeq = 0;
+/** Đăng ký hàm cho click (data-act), trả về khoá */
+function A(fn) { const k = 'a' + (actSeq++); actions[k] = fn; return k; }
+/** Đăng ký hàm cho ô nhập / select */
+function I(fn) { const k = 'n' + (actSeq++); INP[k] = fn; return k; }
+/** Đăng ký thanh trượt: {start, set, label, after} */
+function R(o) { const k = 'r' + (actSeq++); RG[k] = o; return k; }
+
+function openMenu(ev, items) {
+  const dev = document.getElementById('device');
+  const d = dev.getBoundingClientRect(), r = ev.currentTarget.getBoundingClientRect();
+  const scale = d.width / dev.offsetWidth;
+  S.overlay = { type: 'menu', items, right: (d.right - r.right) / scale + 4, top: (r.top - d.top) / scale + 4 };
+  render();
+}
+function confirmDlg(title, body, ok, onOk, cancel = 'Huỷ') { S.overlay = { type: 'dialog', title, body, ok, cancel, onOk }; }
+function closeOverlay() { S.overlay = null; }
+
+function renderOverlay() {
+  const o = S.overlay;
+  if (!o) return '';
+  if (o.type === 'menu') {
+    return `<div class="scrim" data-act="${A(closeOverlay)}"></div><div class="menu" style="right:${o.right}px;top:${o.top}px">${o.items.map((it) => `
+      <div class="mi${it.disabled ? ' dis' : ''}${it.checked ? ' chk' : ''}" data-act="${A(() => { if (it.disabled) return; S.overlay = null; it.run(); })}">
+        ${ic(it.icon)}<div>${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</div></div>`).join('')}</div>`;
+  }
+  if (o.type === 'dialog') {
+    return `<div class="scrim dim"><div class="dialog"><h3>${esc(o.title)}</h3><p>${esc(o.body)}</p>
+      <div class="acts"><button class="btn text" data-act="${A(closeOverlay)}">${esc(o.cancel)}</button>
+      <button class="btn filled" data-act="${A(() => { S.overlay = null; o.onOk(); })}">${esc(o.ok)}</button></div></div></div>`;
+  }
+  if (o.type === 'rename') {
+    const err = nameError(o.value, namesExcept(o.pid));
+    return `<div class="scrim dim"><div class="dialog"><h3>Đổi tên xe</h3>
+      <div class="field${err ? ' err' : ''}" style="margin-bottom:16px"><input data-in="${I((v) => { o.value = v; })}" data-fid="rename" maxlength="32" value="${esc(o.value)}"><label>Tên xe</label>
+      ${err ? `<div class="errtxt">${esc(err)}</div>` : ''}<div class="count">${o.value.length}/32</div></div>
+      <div class="acts"><button class="btn text" data-act="${A(closeOverlay)}">Huỷ</button>
+      <button class="btn filled" ${err ? 'disabled' : ''} data-act="${A(() => { prof(o.pid).name = o.value.trim(); S.overlay = null; })}">Lưu</button></div></div></div>`;
+  }
+  if (o.type === 'sheet') {
+    return `<div class="scrim dim" style="align-items:flex-end" data-act="${A(closeOverlay)}"></div><div class="sheet">${o.html()}</div>`;
+  }
+  return '';
+}
+
+// ---------- Thành phần dùng lại ----------
+const pill = (c, l) => `<span class="pill" style="color:${c};background:color-mix(in srgb, ${c} 14%, transparent)"><span class="dot"></span>${esc(l)}</span>`;
+function statusPill(state) {
+  const [c, l] = { connected: ['var(--ok)', 'Đã kết nối'], connecting: ['var(--warn)', 'Đang kết nối…'], lost: ['var(--bad)', 'Mất tín hiệu'], disconnected: ['var(--idle)', 'Chưa kết nối'] }[state];
+  return pill(c, l);
+}
+const hint = (s) => `<div class="muted" style="font-size:13px;font-weight:500;margin-bottom:12px;white-space:pre-line">${esc(s)}</div>`;
+/** Ô nhập có nhãn nổi; `on(v)` được gọi mỗi lần gõ */
+function field(label, value, o = {}) {
+  const { fid, err, max, hint: ph, on, type } = o;
+  return `<div class="field${err ? ' err' : ''}"><input data-in="${I(on)}" data-fid="${fid}" value="${esc(value)}" ${max ? `maxlength="${max}"` : ''} ${type ? `inputmode="${type}"` : ''} placeholder="${esc(ph || ' ')}"><label>${esc(label)}</label>
+    ${err ? `<div class="errtxt">${esc(err)}</div>` : ''}${max ? `<div class="count">${String(value).length}/${max}</div>` : ''}</div>`;
+}
+function selectField(label, value, options, on, dense) {
+  const has = options.some(([v]) => v === value);
+  return `<div class="field${dense ? ' dense' : ''}"><select data-sel="${I(on)}">${has ? '' : '<option value="" selected disabled>— Chọn —</option>'}${options.map(([v, l]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select><label>${esc(label)}</label></div>`;
+}
+/** NumberField: −/+ theo bước, giữ lâu đổi gấp 10 lần */
+function numField(label, value, o, set) {
+  const { min, max, step = 1, unit = '', err } = o;
+  const put = (v) => set(clamp(v, min, max));
+  return `<div class="numfield${err ? ' err' : ''}"><div class="nl">${esc(label)}</div>
+    <button class="iconbtn outlined" ${value <= min ? 'disabled' : ''} data-act="${A(() => put(value - step))}" data-lp="${A(() => put(value - step * 10))}">${ic('minus', { mini: true })}</button>
+    <div class="nv">${value}${unit}</div>
+    <button class="iconbtn outlined" ${value >= max ? 'disabled' : ''} data-act="${A(() => put(value + step))}" data-lp="${A(() => put(value + step * 10))}">${ic('plus', { mini: true })}</button></div>
+    ${err ? `<div class="numerr">${esc(err)}</div>` : ''}`;
+}
+function switchRow(label, on, fn, o = {}) {
+  return `<div class="srow"><div class="st"${o.disabled ? ' style="color:var(--disabled)"' : ''}>${esc(label)}${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</div>
+    <div class="switch${on ? ' on' : ''}${o.disabled ? ' dis' : ''}" ${o.disabled ? '' : `data-act="${A(fn)}"`} data-stop="1"></div></div>`;
+}
+const segs = (opts, val, fn, cls = '') => `<div class="seg ${cls}">${opts.map(([k, l]) => `<button class="${val === k ? 'on' : ''}" data-act="${A(() => fn(k))}">${l}</button>`).join('')}</div>`;
+const chip = (label, on, fn) => `<button class="chip${on ? ' on' : ''}" data-act="${A(fn)}">${label}</button>`;
+/** Thanh trượt: `label(v)` hiển thị phía trên, cập nhật khi kéo mà không vẽ lại cả màn */
+function slider({ min, max, step = 1, value, label, start, set, after, disabled, capLabel }) {
+  const k = R({ start, set, label, after });
+  const lab = label ? `<div data-rgl="${k}" class="${capLabel ? 'caption' : 'lbl'}" style="margin-top:${capLabel ? 16 : 8}px">${esc(label(value))}</div>` : '';
+  return `${lab}<input type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-rg="${k}" ${disabled ? 'disabled' : ''}>`;
+}
+function connSeg(val, onPick) {
+  return `<div class="seg"><button class="${val === 'wifi' ? 'on' : ''}" data-act="${A(() => onPick('wifi'))}">${ic('wifi', { mini: true })}WiFi</button>
+    <button class="${val === 'ble' ? 'on' : ''}" data-act="${A(() => onPick('ble'))}">${ic('bluetooth', { mini: true })}Bluetooth</button></div>`;
+}
+
+// ============================================================================
+//  Màn "Xe của tôi" (garage_screen.dart)
+// ============================================================================
+function lastConnected(p) {
+  if (!p.lastConnectedAt) return 'Chưa kết nối lần nào';
+  const d = new Date(p.lastConnectedAt), two = (n) => String(n).padStart(2, '0');
+  return `Kết nối lần cuối ${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+/** QuickPing giả lập: WiFi trả lời nếu 192.168.4.1:4210, BLE trả lời nếu đúng MAC xe mẫu */
+function quickPing(conn, ip, port, mac, done) {
+  setTimeout(() => {
+    if (conn === 'ble' && !mac) return done({ ok: false, label: '✗ Chưa có MAC' });
+    if (conn === 'wifi' && !isIpv4(ip)) return done({ ok: false, label: '✗ IP không hợp lệ' });
+    const ok = conn === 'wifi' ? ip === '192.168.4.1' && +port === 4210 : mac.toUpperCase() === DEMO_BLE;
+    done(ok ? { ok, label: `✓ ${8 + Math.round(Math.random() * 12)} ms` } : { ok, label: '✗ Không phản hồi' });
+  }, 800);
+}
+function connect(p) {
+  if (p.conn === 'ble' && !p.ble.mac) { snack('Hồ sơ chưa có MAC. Bấm Sửa để chọn xe BLE.'); return; }
+  if (S.connectedId) disconnect();
+  S.connectingId = p.id; S.connectedId = p.id; S.link = 'connecting';
+  setTimeout(() => {
+    S.connectingId = null;
+    const ok = p.conn === 'wifi' ? p.wifi.ip === '192.168.4.1' && p.wifi.port === 4210 : p.ble.mac.toUpperCase() === DEMO_BLE;
+    if (!ok) { S.connectedId = null; S.link = 'disconnected'; render(); snack('Kết nối thất bại: xe không trả lời cấu hình'); return; }
+    S.link = document.getElementById('simLost').checked ? 'lost' : 'connected';
+    S.gear = 1; S.values.fill(0);
+    p.lastConnectedAt = Date.now();
+    syncProfile(p); // Không có bước "đọc từ xe": hồ sơ trong app luôn được đưa xuống xe (E6)
+    openControl(p.id);
+  }, 900);
+}
+function disconnect() { S.connectedId = null; S.link = 'disconnected'; S.tel = null; S.values[0] = S.values[1] = 0; }
+function testPing(p) {
+  S.pinging[p.id] = true; delete S.ping[p.id];
+  quickPing(p.conn, p.wifi.ip, p.wifi.port, p.ble.mac, (r) => { delete S.pinging[p.id]; S.ping[p.id] = r; render(); });
+}
+function exportProfile(p) {
+  const safe = p.name.replace(/[^\p{L}\p{N}_-]+/gu, '_');
+  const url = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = `${safe}.json`; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  snack(`Đã xuất: exports/${safe}.json`);
+}
+function garageMenu(ev, p) {
+  openMenu(ev, [
+    { icon: 'edit', label: 'Đổi tên', run: () => { S.overlay = { type: 'rename', pid: p.id, value: p.name }; } },
+    { icon: 'duplicate', label: 'Nhân bản', run: () => {
+      const d = clone(p); d.id = newId('p'); d.name = uniqueName(`${p.name} (bản sao)`); d.lastConnectedAt = null;
+      S.profiles.push(d); snack(`Đã tạo "${d.name}"`);
+    } },
+    { icon: 'exportFile', label: 'Xuất', run: () => exportProfile(p) },
+    { icon: 'delete', label: 'Xoá', run: () => confirmDlg('Xoá hồ sơ xe?', `"${p.name}" cùng cấu hình và bố cục sẽ bị xoá khỏi máy. Cấu hình đã lưu trên xe không đổi.`, 'Xoá', () => {
+      if (S.connectedId === p.id) disconnect();
+      S.profiles = S.profiles.filter((x) => x !== p);
+    }) },
+  ]);
+}
+function themeMenu(ev) {
+  openMenu(ev, [
+    { icon: 'themeDark', label: 'Tối', checked: S.theme === 'dark', run: () => { S.theme = 'dark'; } },
+    { icon: 'themeLight', label: 'Sáng', checked: S.theme === 'light', run: () => { S.theme = 'light'; } },
+    { icon: 'themeSystem', label: 'Theo hệ thống', checked: S.theme === 'system', run: () => { S.theme = 'system'; } },
+  ]);
+}
+function renderGarage() {
+  const list = document.getElementById('simEmpty').checked ? [] : S.profiles;
+  const themeIcon = { light: 'themeLight', dark: 'themeDark', system: 'themeSystem' }[S.theme];
+  let body;
+  if (!list.length) {
+    body = `<div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;text-align:center"><div>
+      ${ic('car', { size: 64, color: 'var(--textMuted)' })}
+      <div style="font-size:24px;font-weight:700;margin-top:16px">Chưa có xe nào</div>
+      <div style="color:var(--textBody);margin-top:8px">Tạo hồ sơ xe để lưu kết nối và cấu hình. Không cần bật xe khi tạo.</div>
+      <button class="btn filled" style="margin-top:24px" data-act="${A(openWizard)}">${ic('plus', { mini: true })}Tạo xe mới</button></div></div>`;
+  } else {
+    body = `<div class="body" data-scroll="garage" style="padding-bottom:96px">${list.map(garageCard).join('')}</div>
+      <button class="fab" data-act="${A(openWizard)}">${ic('plus')}Tạo xe mới</button>`;
+  }
+  return `<div class="appbar"><div class="title">Xe của tôi</div>
+    <button class="iconbtn" title="Giao diện" data-menu="${A(themeMenu)}">${ic(themeIcon)}</button></div>${body}`;
+}
+function garageCard(p) {
+  const connected = isConnected(p), connecting = S.connectingId === p.id, busy = S.link === 'connecting';
+  const ping = S.ping[p.id], pinging = S.pinging[p.id];
+  return `<div class="card${connected ? ' sel' : ''}" style="padding:12px 4px 12px 16px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:${connected ? 'var(--accentContainer)' : 'var(--surface2)'};color:${connected ? 'var(--onAccentContainer)' : 'var(--textMuted)'}">${ic('car')}</div>
+      <div style="flex:1;min-width:0">
+        <div class="h-title">${esc(p.name)}</div>
+        <div style="display:flex;align-items:center;gap:4px;color:var(--textMuted);font-size:13px;font-weight:500;margin-top:2px">${ic(p.conn === 'wifi' ? 'wifi' : 'bluetooth', { size: 16 })}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(connLabel(p))}</span></div>
+        <div style="color:var(--textMuted);font-size:12px;font-weight:500">${lastConnected(p)}</div>
+      </div>
+      <button class="iconbtn" style="color:var(--textMuted)" data-menu="${A((e) => garageMenu(e, p))}">${ic('more')}</button>
+    </div>
+    ${connected || ping ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${connected ? statusPill(S.link) : ''}${ping ? pill(ping.ok ? 'var(--ok)' : 'var(--bad)', ping.label) : ''}</div>` : ''}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+      ${connected
+        ? `<button class="btn filled" data-act="${A(() => openControl(p.id))}">${ic('steering', { mini: true })}Lái</button>
+           <button class="btn outlined" data-act="${A(disconnect)}">${ic('disconnect', { mini: true })}Ngắt</button>`
+        : `<button class="btn filled" ${busy ? 'disabled' : ''} data-act="${A(() => connect(p))}">${connecting ? spinner : ic('connect', { mini: true })}${connecting ? 'Đang kết nối' : 'Kết nối'}</button>`}
+      <button class="btn outlined" data-act="${A(() => openSettings(p.id))}">${ic('config', { mini: true })}Sửa</button>
+      <button class="btn outlined" ${pinging ? 'disabled' : ''} data-act="${A(() => testPing(p))}">${pinging ? spinner : ic('signal', { mini: true })}Kiểm tra</button>
+    </div></div>`;
+}
+
+// ============================================================================
+//  Tạo xe mới — 3 bước (profile_wizard_screen.dart)
+// ============================================================================
+function openWizard() {
+  S.wizard = { step: 0, p: { name: uniqueName('Xe mới'), conn: 'wifi', wifi: { ip: '192.168.4.1', port: 4210, ssid: '' }, ble: { mac: '', deviceName: '' }, failsafeMs: 400, gears: defaultGears() },
+    portTxt: '4210', tpl: 'basic', copyFrom: null, scanning: false, results: [], ping: null, pinging: false };
+  go('wizard');
+}
+function renderWizard() {
+  const w = S.wizard, p = w.p, e = validateGeneral(p, S.profiles.map((x) => x.name));
+  const valid = w.step === 0 ? !e.name : w.step === 1 ? (p.conn === 'wifi' ? !e.ip && !e.port : !e.ble) : w.tpl !== 'copy' || !!w.copyFrom;
+  const titles = ['Tên và kiểu kết nối', 'Thông tin kết nối', 'Mẫu khởi đầu'];
+  const resetPing = () => { w.ping = null; };
+  let content = '';
+  if (w.step === 0) {
+    content = field('Tên xe', p.name, { fid: 'wname', max: 32, hint: 'Xe tải đỏ', err: e.name, on: (v) => { p.name = v; } }) + '<div style="height:12px"></div>' +
+      connSeg(p.conn, (v) => { p.conn = v; w.ping = null; });
+  } else if (w.step === 1) {
+    if (p.conn === 'wifi') {
+      content = `<div class="lbl muted" style="margin-bottom:12px">Kết nối điện thoại vào WiFi của xe (mặc định "RC-CAR", mật khẩu 12345678).</div>
+        ${field('Địa chỉ IP', p.wifi.ip, { fid: 'wip', err: e.ip, type: 'decimal', on: (v) => { p.wifi.ip = v.trim(); resetPing(); } })}<div style="height:12px"></div>
+        ${field('Port UDP', w.portTxt, { fid: 'wport', err: e.port, type: 'numeric', on: (v) => { w.portTxt = v; p.wifi.port = /^\d+$/.test(v.trim()) ? +v.trim() : 0; resetPing(); } })}<div style="height:12px"></div>
+        ${field('SSID (tuỳ chọn)', p.wifi.ssid, { fid: 'wssid', on: (v) => { p.wifi.ssid = v.trim(); } })}`;
+    } else {
+      const scan = () => {
+        w.scanning = true; w.results = [];
+        setTimeout(() => { w.scanning = false; w.results = [{ name: 'RC-CAR-BLE', mac: DEMO_BLE, rssi: -58 }, { name: 'Không tên', mac: '7C:9E:BD:01:22:F4', rssi: -81 }]; render(); }, 1200);
+      };
+      content = `<div style="display:flex;align-items:center"><div class="h-title" style="flex:1">Xe tìm thấy</div>
+        <button class="btn outlined" ${w.scanning ? 'disabled' : ''} data-act="${A(scan)}">${w.scanning ? spinner : ic('scan', { mini: true })}${w.scanning ? 'Đang quét' : 'Quét'}</button></div>
+        <div style="height:8px"></div>
+        ${w.results.length ? w.results.map((r) => { const sel = p.ble.mac.toUpperCase() === r.mac; return `<div class="card${sel ? ' sel' : ''}" style="display:flex;align-items:center;gap:16px;padding:12px 16px;cursor:pointer" data-act="${A(() => { p.ble.mac = r.mac; p.ble.deviceName = r.name; w.ping = null; })}">
+          ${ic('car', { color: sel ? 'var(--accent)' : 'var(--textMuted)' })}<div style="flex:1"><div>${esc(r.name)}</div><div class="muted" style="font-size:13px">${r.mac}   ${r.rssi} dBm</div></div>${sel ? ic('success', { solid: true, color: 'var(--accent)' }) : ''}</div>`; }).join('')
+          : `<div class="lbl muted" style="text-align:center;padding:16px 0">Chưa thấy xe nào. Bật nguồn xe rồi bấm Quét, hoặc nhập tay bên dưới.</div>`}
+        <div style="height:12px"></div>
+        ${field('MAC', p.ble.mac, { fid: 'wmac', hint: 'AA:BB:CC:DD:EE:FF', err: e.ble, on: (v) => { p.ble.mac = v.trim().toUpperCase(); resetPing(); } })}<div style="height:12px"></div>
+        ${field('Tên thiết bị BLE', p.ble.deviceName, { fid: 'wdev', on: (v) => { p.ble.deviceName = v.trim(); } })}`;
+    }
+    const test = () => { w.pinging = true; w.ping = null; quickPing(p.conn, p.wifi.ip, p.wifi.port, p.ble.mac, (r) => { w.pinging = false; w.ping = r; render(); }); };
+    content += `<div style="display:flex;align-items:center;gap:12px;margin-top:16px">
+      <button class="btn outlined" ${w.pinging || !valid ? 'disabled' : ''} data-act="${A(test)}">${w.pinging ? spinner : ic('signal', { mini: true })}Kiểm tra</button>
+      ${w.ping ? pill(w.ping.ok ? 'var(--ok)' : 'var(--bad)', w.ping.label) : ''}</div>
+      ${w.ping && !w.ping.ok ? '<div class="lbl muted" style="margin-top:8px">Vẫn lưu được hồ sơ khi xe đang tắt.</div>' : ''}`;
+  } else {
+    content = TEMPLATES.map(([k, label, desc]) => {
+      const dis = k === 'copy' && !S.profiles.length;
+      return `<div class="card${w.tpl === k ? ' sel' : ''}" style="display:flex;gap:16px;align-items:center;padding:14px 16px;cursor:${dis ? 'default' : 'pointer'};opacity:${dis ? .5 : 1}" data-act="${A(() => { if (!dis) w.tpl = k; })}">
+        <span class="radio${w.tpl === k ? ' on' : ''}"></span><div><div>${label}</div><div class="muted" style="font-size:13px;font-weight:500">${dis ? 'Chưa có xe nào để sao chép' : desc}</div></div></div>`;
+    }).join('');
+    if (w.tpl === 'copy' && S.profiles.length) content += '<div style="height:12px"></div>' + selectField('Sao chép từ xe', w.copyFrom, S.profiles.map((x) => [x.id, x.name]), (v) => { w.copyFrom = v; });
+  }
+  const next = () => { if (w.step < 2) w.step++; else finishWizard(); };
+  return `<div class="appbar"><button class="iconbtn" data-act="${A(back)}">${ic('back')}</button><div class="title">Tạo xe mới</div></div>
+    <div style="display:flex;gap:8px;padding:16px 16px 0">${[0, 1, 2].map((i) => `<div style="flex:1;height:4px;border-radius:999px;background:${i <= w.step ? 'var(--accentFill)' : 'var(--surface2)'}"></div>`).join('')}</div>
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 16px 0"><span class="caption" style="color:var(--accent)">BƯỚC ${w.step + 1}/3</span><span class="h-title">${titles[w.step]}</span></div>
+    <div class="body" data-scroll="wiz${w.step}">${content}</div>
+    <div class="bottombar" style="display:flex;padding:12px">
+      ${w.step > 0 ? `<button class="btn outlined" data-act="${A(() => { w.step--; })}">${ic('back', { mini: true })}Quay lại</button>` : ''}
+      <div style="flex:1"></div>
+      <button class="btn filled" ${valid ? '' : 'disabled'} data-act="${A(next)}">${w.step < 2 ? 'Tiếp' : 'Tạo xe'}</button></div>`;
+}
+function finishWizard() {
+  const w = S.wizard, q = w.p;
+  const create = () => {
+    const p = makeProfile(q.name.trim(), q.conn, w.tpl === 'copy' ? 'basic' : w.tpl,
+      { ip: q.wifi.ip, port: q.wifi.port, ssid: q.wifi.ssid, mac: q.ble.mac, devName: q.ble.deviceName });
+    if (w.tpl === 'copy') {
+      const s = clone(prof(w.copyFrom));
+      Object.assign(p, { channels: s.channels, mixes: s.mixes, gears: s.gears, failsafeMs: s.failsafeMs, layout: s.layout });
+    }
+    S.profiles.push(p);
+    S.history = []; S.screen = 'garage';
+  };
+  if (!w.ping?.ok) {
+    confirmDlg('Chưa kiểm tra được kết nối', w.ping
+      ? `Xe không phản hồi (${w.ping.label.replace('✗ ', '')}). Xe có thể đang tắt — vẫn lưu hồ sơ được.`
+      : 'Bạn chưa bấm Kiểm tra. Xe có thể đang tắt — vẫn lưu hồ sơ được và kết nối sau.', 'Vẫn lưu', create, 'Quay lại');
+  } else create();
+}
+
+// ============================================================================
+//  Cấu hình — 5 tab (settings_screen.dart)
+// ============================================================================
+const draftJson = (d) => JSON.stringify(d);
+function openSettings(pid, tab = 0) {
+  const d = clone(prof(pid));
+  S.settings = { pid, tab, draft: d, saved: draftJson(d), portTxt: String(d.wifi.port) };
+  go('settings');
+}
+const settingsDirty = () => draftJson(S.settings.draft) !== S.settings.saved;
+function settingsBack() {
+  if (settingsDirty()) confirmDlg('Bỏ thay đổi?', 'Các thay đổi chưa lưu sẽ bị mất.', 'Bỏ', back);
+  else back();
+}
+function servoTab(c, text) {
+  const e = chErrors(c);
+  return hint(text) +
+    numField('Min', c.min, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.min }, (v) => { c.min = v; }) +
+    numField('Center', c.center, { min: 500, max: 2500, step: 5, unit: ' µs', err: e.center }, (v) => { c.center = v; }) +
+    numField('Max', c.max, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.max }, (v) => { c.max = v; }) + '<div class="divider"></div>' +
+    numField('Trim', c.trim, { min: -200, max: 200, unit: ' µs', err: e.trim }, (v) => { c.trim = v; }) +
+    numField('Offset', c.offset, { min: -300, max: 300, unit: ' µs', err: e.offset }, (v) => { c.offset = v; }) +
+    switchRow('Đảo chiều (Reverse)', c.reverse, () => { c.reverse = !c.reverse; }) + '<div class="divider"></div>' +
+    numField('Failsafe', c.failsafe, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.failsafe }, (v) => { c.failsafe = v; }) +
+    '<div style="height:12px"></div>' + hint(`Tâm thực tế = Center + Trim + Offset = ${effCenter(c)} µs\nGiữ lâu nút −/+ để đổi nhanh gấp 10 lần.`);
+}
+function toggleChannel(d, c) {
+  const on = !c.enabled;
+  if (!on && c.index <= 2) { snack('Kênh Ga/Lái luôn bật'); return; }
+  c.enabled = on;
+  syncLayout(d);
+  if (on && !itemFor(d.layout, c.index)) snack(`${chLabel(c)} chưa gán vào phần tử nào. Bấm vào kênh để chọn cần gạt / nút điều khiển.`);
+}
+/** Phần tử đang giữ kênh (tên chỗ gán) hoặc null */
+function controlLabel(d, ch) {
+  const it = itemFor(d.layout, ch);
+  return it ? slotName(it, it.channelY === ch) : null;
+}
+function channelsTab(d) {
+  return hint('Tối đa 10 kênh. Bấm vào kênh để chỉnh chi tiết và gán vào một phần tử trên màn Lái (cần gạt, nút, công tắc, núm). Phần tử được thêm và cấu hình riêng ở Sửa bố cục. Lưu ý: firmware xe hiện tại mới nhận CH1 (Lái) và CH2 (Ga); 10 kênh cần firmware giao thức v2.') +
+    d.channels.map((c) => `<div class="card" style="display:flex;align-items:center;gap:12px;padding:8px 12px;cursor:pointer" data-act="${A(() => openChannel(c.index))}">
+      <div style="width:48px;text-align:center;padding:4px 0;border-radius:999px;font-size:14px;font-weight:700;background:${c.enabled ? 'var(--accentContainer)' : 'var(--surface2)'};color:${c.enabled ? 'var(--onAccentContainer)' : 'var(--textMuted)'}">${chLabel(c)}</div>
+      <div style="flex:1;min-width:0"><div style="font-size:16px;font-weight:600;color:${c.enabled ? 'var(--text)' : 'var(--disabled)'}">${esc(c.name)}</div>
+      <div style="font-size:13px;font-weight:500;color:${c.enabled ? 'var(--textMuted)' : 'var(--disabled)'}">${esc(controlLabel(d, c.index) ?? 'Chưa gán')} · ${c.min}/${c.center}/${c.max} µs${c.reverse ? ' · đảo' : ''}</div></div>
+      <div class="switch${c.enabled ? ' on' : ''}" data-act="${A(() => toggleChannel(d, c))}" data-stop="1"></div></div>`).join('');
+}
+function mixTab(d) {
+  let h = d.mixes.length ? d.mixes.map((m, i) => `<div class="card mixcard" data-mi="${i}" style="display:flex;align-items:center;padding:8px 4px;cursor:pointer" data-act="${A(() => openMix(i))}">
+      <div data-reorder="${i}" data-stop="1" style="padding:8px;color:var(--textMuted);cursor:grab;touch-action:none">${ic('drag')}</div>
+      <div style="flex:1;min-width:0"><div class="caption" style="color:${m.enabled ? 'var(--accent)' : 'var(--disabled)'}">${i + 1}. ${MIX_TYPE[m.type].toUpperCase()} · ${MIX_MODE[m.mode].toLowerCase()}</div>
+      <div style="color:${m.enabled ? 'var(--text)' : 'var(--disabled)'};margin-top:2px">${esc(describeMix(m, d.channels))}</div></div>
+      <div class="switch${m.enabled ? ' on' : ''}" data-stop="1" data-act="${A(() => { m.enabled = !m.enabled; })}"></div>
+      <button class="iconbtn" data-stop="1" style="color:var(--textMuted)" data-act="${A(() => confirmDlg('Xoá luật mix?', describeMix(m, d.channels), 'Xoá', () => { d.mixes.splice(i, 1); }))}">${ic('delete')}</button></div>`).join('')
+    : `<div style="text-align:center;padding:48px 24px">${ic('mix', { size: 40, color: 'var(--textMuted)' })}<div class="h-title" style="margin-top:12px">Chưa có luật mix</div>
+      <div class="lbl muted" style="margin-top:4px">Ví dụ: CH1 ≥ 80% thì CH3 = 100%, CH1 &lt; 70% thì CH3 = 0%.</div></div>`;
+  h += `<div style="display:flex;align-items:center;gap:8px;margin-top:12px"><div class="muted" style="flex:1;font-size:12px;font-weight:500">${d.mixes.length}/${MAX_MIX} luật · ${d.mixes.filter((m) => m.enabled).length} đang bật · chạy từ trên xuống</div>
+    <button class="btn filled" ${d.mixes.length >= MAX_MIX ? 'disabled' : ''} data-act="${A(() => openMix(null))}">${ic('plus', { mini: true })}Thêm luật</button></div>`;
+  return h;
+}
+function generalTab(d) {
+  const st = S.settings, g = validateGeneral(d, namesExcept(d.id));
+  return field('Tên xe', d.name, { fid: 'sname', max: 32, err: g.name, on: (v) => { d.name = v; } }) + '<div style="height:8px"></div>' +
+    connSeg(d.conn, (v) => { d.conn = v; }) + '<div style="height:12px"></div>' +
+    (d.conn === 'wifi'
+      ? field('Địa chỉ IP', d.wifi.ip, { fid: 'sip', err: g.ip, type: 'decimal', on: (v) => { d.wifi.ip = v.trim(); } }) + '<div style="height:12px"></div>' +
+        field('Port UDP', st.portTxt, { fid: 'sport', err: g.port, type: 'numeric', on: (v) => { st.portTxt = v; d.wifi.port = /^\d+$/.test(v.trim()) ? +v.trim() : 0; } }) + '<div style="height:12px"></div>' +
+        field('SSID (tuỳ chọn)', d.wifi.ssid, { fid: 'sssid', on: (v) => { d.wifi.ssid = v.trim(); } })
+      : field('MAC', d.ble.mac, { fid: 'smac', hint: 'AA:BB:CC:DD:EE:FF', err: g.ble, on: (v) => { d.ble.mac = v.trim().toUpperCase(); } }) + '<div style="height:12px"></div>' +
+        field('Tên thiết bị BLE', d.ble.deviceName, { fid: 'sdev', on: (v) => { d.ble.deviceName = v.trim(); } })) +
+    '<div class="divider" style="margin:16px 0"></div>' +
+    numField('Thời gian chờ failsafe', d.failsafeMs, { min: 100, max: 3000, step: 50, unit: ' ms', err: g.failsafeTimeout }, (v) => { d.failsafeMs = v; }) +
+    hint('Xe chuyển sang failsafe nếu không nhận lệnh trong khoảng thời gian này.') +
+    '<div class="divider" style="margin:16px 0"></div>' +
+    numField('Số lượng số', d.gears.count, { min: 1, max: 5, err: g.gearCount }, (v) => { d.gears.count = v; }) +
+    Array.from({ length: d.gears.count }, (_, i) => numField(`Ga tối đa số ${i + 1}`, d.gears.max[i], { min: 1, max: 100, step: 5, unit: '%', err: g['gear' + i] }, (v) => { d.gears.max[i] = v; })).join('');
+}
+function renderSettings() {
+  const st = S.settings, d = st.draft, p = prof(st.pid);
+  const connected = isConnected(p);
+  const errors = validateAll(d, namesExcept(d.id));
+  const valid = !errors.length;
+  const tabs = ['Ga', 'Lái', 'Kênh', 'Mix', 'Chung'];
+  const content = st.tab === 0
+    ? servoTab(d.channels[1], 'Center là điểm trung tính của ESC (xe đứng yên). Failsafe thường đặt bằng Center, hoặc thấp hơn một chút nếu muốn xe phanh khi mất sóng. Hộp số áp lên kênh này.')
+    : st.tab === 1 ? servoTab(d.channels[0], 'Offset bù độ lệch cơ khí khi lắp servo (chỉnh một lần). Trim tinh chỉnh để xe chạy thẳng. Min/Max giới hạn góc lái để servo không bị kẹt.')
+    : st.tab === 2 ? channelsTab(d) : st.tab === 3 ? mixTab(d) : generalTab(d);
+  const save = () => {
+    const idx = S.profiles.findIndex((x) => x.id === st.pid);
+    S.profiles[idx] = clone(d);
+    st.saved = draftJson(d);
+    if (S.gear > d.gears.count) S.gear = d.gears.count;
+    // Cấu hình nằm trong app và có tác dụng ngay; chỉ phần xe cần giữ khi mất sóng mới ghi xuống xe
+    if (!connected) snack('Đã lưu vào máy');
+    else snack(syncProfile(d) ? 'Đã lưu và đồng bộ failsafe với xe' : 'Đã lưu, có tác dụng ngay');
+  };
+  const syncFs = () => { syncProfile(prof(st.pid), true); snack('Đã đồng bộ failsafe với xe'); };
+  const reset = () => confirmDlg('Khôi phục mặc định?', 'Kênh, mix, hộp số và failsafe của hồ sơ về mặc định. Tên, kết nối và bố cục được giữ lại. Chỉ ghi vào máy khi bấm Lưu.', 'Khôi phục', () => {
+    Object.assign(d, { channels: defaultChannels(), mixes: [], gears: defaultGears(), failsafeMs: 400 });
+    syncLayout(d);
+  });
+  return `<div class="appbar" style="border-bottom:0"><button class="iconbtn" data-act="${A(settingsBack)}">${ic('back')}</button><div class="title">${esc(d.name.trim() || 'Cấu hình')}</div></div>
+    <div class="tabs">${tabs.map((t, i) => `<button class="${st.tab === i ? 'on' : ''}" data-act="${A(() => { st.tab = i; })}">${t}</button>`).join('')}</div>
+    <div class="body" data-scroll="set${st.tab}">${content}</div>
+    <div class="bottombar">
+      ${!valid ? `<div style="display:flex;gap:8px;align-items:center;color:var(--bad);font-size:14px;font-weight:500;margin-bottom:8px">${ic('warning', { mini: true })}${esc(errors[0])}</div>`
+        : !connected ? '<div class="muted" style="font-size:12px;font-weight:500;margin-bottom:8px">Chưa kết nối xe: Lưu vào máy, failsafe sẽ tự đồng bộ khi nối xe.</div>' : ''}
+      <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">
+        <button class="btn filled small" ${valid ? '' : 'disabled'} data-act="${A(save)}">${ic('save', { mini: true })}Lưu</button>
+        <button class="btn outlined small" ${connected ? '' : 'disabled'} title="${connected ? 'Gửi lại failsafe đã lưu xuống xe' : 'Cần kết nối xe'}" data-act="${A(syncFs)}">${ic('syncFailsafe', { mini: true })}Đồng bộ failsafe</button>
+        <button class="btn text small" data-act="${A(reset)}">${ic('reset', { mini: true })}Mặc định</button>
+      </div></div>`;
+}
+
+// ============================================================================
+//  Chi tiết kênh (channel_detail_screen.dart)
+// ============================================================================
+function openChannel(index) { S.chEdit = { index, preview: 0 }; go('channel'); }
+function channelBack() { syncLayout(S.settings.draft); back(); }
+/** ChannelDetailScreen._pickControl: phần tử có sẵn trên màn Lái, tạo mới, hoặc bỏ gán (B2, B4) */
+function pickControl(d, c) {
+  const l = d.layout, isMain = c.index <= 2;
+  const short = (n) => { const o = d.channels[n - 1]; return o.name === `Kênh ${n}` ? `CH${n}` : `CH${n} (${o.name})`; };
+  const bound = itemFor(l, c.index);
+  const done = (f) => () => { S.overlay = null; f(); };
+  const unassign = () => {
+    if (!bound) return;
+    if (isMain) { snack('Kênh Ga/Lái luôn cần một phần tử trên màn Lái. Hãy chọn phần tử khác thay vì bỏ gán.'); return; }
+    unassignChannel(l, c.index);
+  };
+  const pickSlot = (it, y) => {
+    const cur = y ? it.channelY : it.channel;
+    if (cur === c.index) return;
+    const assign = () => { assignChannel(l, it, c.index, y); c.enabled = true; };
+    if (cur == null) { assign(); return; }
+    confirmDlg('Phần tử đang được dùng', `${slotName(it, y)} đang gán ${short(cur)}. Thay bằng ${chLabel(c)}? ${short(cur)} sẽ thành chưa gán.`, 'Thay', () => {
+      assign();
+      if (cur <= 2) snack(`Nhớ gán lại ${short(cur)} vào một phần tử khác trước khi lưu.`);
+    });
+  };
+  const create = (k) => {
+    if (!addControl(l, k, c.index)) { snack('Màn Lái không còn chỗ trống đủ lớn. Vào Sửa bố cục để dọn chỗ.'); return; }
+    c.enabled = true;
+    snack(`Đã thêm ${KIND[k].toLowerCase()} lên màn Lái. Chỉnh vị trí và cấu hình riêng ở Sửa bố cục.`);
+  };
+  const slots = l.items.filter((i) => isControl(i.kind)).flatMap((i) => i.kind === 'stick2D' ? [[i, false], [i, true]] : [[i, false]]);
+  const row = (icon, title, sub, sel, fn) => `<div class="row" style="${sel ? 'color:var(--accent)' : ''}" data-act="${A(done(fn))}">${ic(icon, { color: sel ? 'var(--accent)' : 'var(--textMuted)' })}<div><div>${esc(title)}</div>${sub ? `<div class="muted" style="font-size:13px">${esc(sub)}</div>` : ''}</div></div>`;
+  S.overlay = { type: 'sheet', html: () => `<div class="handle"></div><div class="h-title">Gán ${chLabel(c)} vào</div>
+    <div class="muted" style="font-size:12px;margin:4px 0 8px">Bố cục "${esc(l.name)}". Mỗi kênh chỉ có một phần tử trên bố cục.</div>
+    ${row('close', 'Chưa gán', null, !bound, unassign)}
+    ${slots.length ? `<div class="divider"></div><div class="caption" style="margin-bottom:4px">PHẦN TỬ TRÊN MÀN LÁI</div>` + slots.map(([it, y]) => {
+      const cur = y ? it.channelY : it.channel, mine = cur === c.index;
+      return row('addControl', slotName(it, y), cur == null ? 'Chưa gán kênh' : mine ? 'Đang gán kênh này' : `Đang gán ${short(cur)}`, mine, () => pickSlot(it, y));
+    }).join('') : ''}
+    <div class="divider"></div><div class="caption" style="margin-bottom:4px">TẠO PHẦN TỬ MỚI TRÊN MÀN LÁI</div>
+    ${Object.keys(KIND).filter(isControl).map((k) => row('plus', KIND[k], null, false, () => create(k))).join('')}` };
+}
+/** OutputPipeline.toUs: reverse, nội suy quanh tâm thực tế (Center + trim + offset), kẹp [Min, Max] */
+function chOutUs(c, pct) {
+  let p = clamp(pct, -100, 100);
+  if (c.reverse) p = -p;
+  const ctr = effCenter(c);
+  return clamp(Math.round(p >= 0 ? ctr + p / 100 * (c.max - ctr) : ctr + p / 100 * (ctr - c.min)), c.min, c.max);
+}
+function chMetrics(c, pv, ok) {
+  const m = (l, v) => `<div><div class="caption">${l}</div><div class="v">${v}</div></div>`;
+  return m('VỊ TRÍ', `${Math.round(pv)}%`) + m('XUNG RA', ok ? `${chOutUs(c, pv)} µs` : '--') + m('TÂM THỰC TẾ', `${effCenter(c)} µs`);
+}
+function renderChannel() {
+  const d = S.settings.draft, ce = S.chEdit, c = d.channels[ce.index - 1], e = chErrors(c);
+  const isMain = c.index <= 2, ok = !Object.keys(e).length;
+  const upd = (k) => (v) => { c[k] = v; };
+  const bound = itemFor(d.layout, c.index), boundY = bound && bound.channelY === c.index;
+  let h = field('Tên kênh', c.name, { fid: 'cname', max: 20, err: e.name, on: (v) => { c.name = v; } }) + '<div style="height:8px"></div>' +
+    `<div class="card" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer" data-act="${A(() => pickControl(d, c))}">
+      <div style="flex:1;min-width:0"><div class="caption" style="letter-spacing:0">Phần tử điều khiển</div>
+      <div style="color:${bound ? 'var(--text)' : 'var(--textMuted)'}">${esc(bound ? slotName(bound, boundY) : 'Chưa gán — kênh không có trên màn Lái')}</div></div>
+      ${ic('edit', { mini: true, color: 'var(--textMuted)' })}</div>` +
+    switchRow('Bật kênh', c.enabled, () => { c.enabled = !c.enabled; if (!c.enabled) syncLayout(d); }, { disabled: isMain, sub: isMain ? 'Kênh Ga/Lái luôn cần có trên màn Lái' : 'Tắt kênh thì kênh được gỡ khỏi phần tử; phần tử vẫn ở trên màn Lái' }) +
+    '<div class="divider"></div>' +
+    numField('Min', c.min, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.min }, upd('min')) +
+    numField('Center', c.center, { min: 500, max: 2500, step: 5, unit: ' µs', err: e.center }, upd('center')) +
+    numField('Max', c.max, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.max }, upd('max')) + '<div class="divider"></div>' +
+    numField('Trim', c.trim, { min: -200, max: 200, unit: ' µs', err: e.trim }, upd('trim')) +
+    numField('Offset', c.offset, { min: -300, max: 300, unit: ' µs', err: e.offset }, upd('offset')) +
+    switchRow('Đảo chiều (Reverse)', c.reverse, () => { c.reverse = !c.reverse; }) +
+    numField('Failsafe', c.failsafe, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.failsafe }, upd('failsafe'));
+  if (bound && isSwitchLike(bound.kind)) h += numField('Giá trị khi tắt', Math.round(c.offPct), { min: -100, max: 100, step: 5, unit: '%', err: e.off }, upd('offPct'));
+  if (isMain && (c.min < 800 || c.max > 2200)) h += `<div style="display:flex;gap:8px;align-items:center;color:var(--warn);font-size:14px;font-weight:500;margin-top:8px">${ic('warning', { mini: true })}Firmware xe hiện tại chỉ nhận 800–2200 µs cho Ga/Lái.</div>`;
+  h += `<div class="divider"></div><div class="h-title">Xem trước</div><div class="lbl muted" style="margin-top:4px">Kéo thử để thấy giá trị xe sẽ xuất ra.</div>` +
+    slider({ min: -100, max: 100, value: ce.preview, disabled: !ok,
+      set: (v) => { ce.preview = v; }, after: () => { const el = document.getElementById('chm'); if (el) el.innerHTML = chMetrics(c, ce.preview, ok); } }) +
+    `<div class="metrics" id="chm">${chMetrics(c, ce.preview, ok)}</div><div style="height:24px"></div>`;
+  return `<div class="appbar"><button class="iconbtn" data-act="${A(channelBack)}">${ic('back')}</button><div class="title">${chLabel(c)} · ${esc(c.name)}</div></div>
+    <div class="body" data-scroll="ch${c.index}">${h}</div>`;
+}
+
+// ============================================================================
+//  Luật mix (mix_rule_screen.dart + widgets/mix_preview.dart)
+// ============================================================================
+function openMix(idx) {
+  const d = S.settings.draft;
+  if (idx == null && d.mixes.length >= MAX_MIX) { snack(`Tối đa ${MAX_MIX} luật mix`); return; }
+  const rule = idx == null ? newMix() : clone(d.mixes[idx]);
+  S.mixEdit = { idx, rule, engine: new MixEngine([rule]), src: 0, gate: true, select: false, lastType: null, out: new Array(10).fill(0) };
+  go('mix');
+}
+function mixError() {
+  const r = S.mixEdit.rule, e = mixValidate(r);
+  if (e) return e;
+  const others = S.settings.draft.mixes.filter((x) => x.id !== r.id);
+  const cyc = findCycle([...others, r].filter((x) => x.enabled));
+  return cyc ? `Tạo vòng lặp: ${cyc.map((c) => 'CH' + c).join(' → ')}` : null;
+}
+function mixRun() {
+  const m = S.mixEdit, r = m.rule;
+  if (m.lastType !== r.type) { m.engine.reset(); m.lastType = r.type; }
+  m.engine.rules = [r];
+  if (mixValidate(r)) return;
+  const input = new Array(10).fill(0);
+  input[r.src - 1] = m.src;
+  if (r.type === 'select') input[r.sel - 1] = m.select ? 100 : -100;
+  else if (r.gate != null) input[r.gate - 1] = m.gate ? 100 : -100;
+  m.out = m.engine.run(input);
+}
+function mixPvTop() {
+  const m = S.mixEdit, r = m.rule, chs = S.settings.draft.channels;
+  const nm = (ch) => { const c = chs[ch - 1]; return c.name === `Kênh ${ch}` ? `CH${ch}` : `CH${ch} ${c.name}`; };
+  const sel = r.type === 'select' ? m.engine.selectState(r.id) : null;
+  let h = `<div style="display:flex;align-items:center;gap:8px"><div class="lbl" style="flex:1">Nguồn ${esc(nm(r.src))}: ${Math.round(m.src)}%</div>
+    ${r.type === 'threshold' ? (m.engine.isOn(r.id) ? pill('var(--ok)', 'BẬT') : pill('var(--idle)', 'TẮT')) : ''}
+    ${sel && sel.pending ? pill('var(--warn)', 'Chờ về giữa') : ''}</div>`;
+  if (r.type === 'threshold') {
+    const x = (p) => (p + 100) / 2;
+    h += `<div class="band" style="margin-top:8px"><div class="tr"></div><div class="zone" style="left:${x(r.offBelow)}%;width:max(2px, ${x(r.onAt) - x(r.offBelow)}%)"></div><div class="cur" style="left:calc(${x(m.src)}% - 1px)"></div></div>
+      <div class="caption" style="text-align:center;letter-spacing:0">Vùng giữ trạng thái ${Math.round(r.offBelow)}–${Math.round(r.onAt)}%</div>`;
+  }
+  return h;
+}
+function mixPvBottom() {
+  const m = S.mixEdit, r = m.rule, chs = S.settings.draft.channels;
+  const nm = (ch) => { const c = chs[ch - 1]; return c.name === `Kênh ${ch}` ? `CH${ch}` : `CH${ch} ${c.name}`; };
+  const sel = r.type === 'select' ? m.engine.selectState(r.id) : null;
+  const col = (ch, active) => {
+    const v = m.out[ch - 1], hpx = Math.min(Math.abs(v) / 100 * 50, 50);
+    return `<div class="mixcol"><div class="mv" style="color:${active ? 'var(--text)' : 'var(--textMuted)'}">${Math.round(v)}%</div>
+      <div class="tube${active ? ' act' : ''}"><div class="fillv" style="${v >= 0 ? `bottom:50%` : `top:50%`};height:${hpx}%"></div><div class="zero"></div></div>
+      <div class="caption" style="letter-spacing:0;color:${active ? 'var(--accent)' : 'var(--textMuted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:96px">${esc(nm(ch))}</div></div>`;
+  };
+  let h = `<div class="chips" style="gap:8px">${chip('Về 0%', false, () => { m.src = 0; })}`;
+  if (r.type === 'select') h += chip(`Nút chọn ${esc(nm(r.sel))}: ${m.select ? 'BẬT' : 'TẮT'}`, m.select, () => { m.select = !m.select; });
+  else if (r.gate != null) h += chip(`Điều kiện ${esc(nm(r.gate))}: ${m.gate ? 'BẬT' : 'TẮT'}`, m.gate, () => { m.gate = !m.gate; });
+  h += '</div><div class="mixcols">';
+  h += r.type === 'select' ? col(r.dstOn, sel?.active === r.dstOn) + col(r.dstOff, sel?.active === r.dstOff) : col(r.dst, true);
+  return h + '</div>';
+}
+function renderMix() {
+  const m = S.mixEdit, r = m.rule, chs = S.settings.draft.channels, err = mixError();
+  mixRun();
+  const chPick = (label, val, set, allowNone) => selectField(label, val == null ? '' : String(val),
+    [...(allowNone ? [['', 'Không (luôn chạy)']] : []), ...CHS.map((i) => [String(i), chName(chs, i)])], (v) => set(v === '' ? null : +v));
+  const pct = (label, key, min = -100, max = 100) => numField(label, Math.round(r[key]), { min, max, step: 5, unit: '%' }, (v) => { r[key] = v; });
+  let h = segs(Object.entries(MIX_TYPE), r.type, (k) => { r.type = k; }, 'sm') + '<div style="height:12px"></div>';
+  if (r.type !== 'select') {
+    h += chPick('Kênh nguồn', r.src, (v) => { r.src = v ?? r.src; }) + '<div style="height:8px"></div>' +
+      chPick('Kênh đích', r.dst, (v) => { r.dst = v ?? r.dst; }) + '<div style="height:8px"></div>' +
+      chPick('Điều kiện bằng nút (gate)', r.gate, (v) => { r.gate = v; }, true);
+  } else {
+    h += chPick('Kênh nguồn (thường là cần gạt)', r.src, (v) => { r.src = v ?? r.src; }) + '<div style="height:8px"></div>' +
+      chPick('Nút chọn', r.sel, (v) => { r.sel = v ?? r.sel; }) + '<div style="height:8px"></div>' +
+      chPick('Đích khi nút BẬT', r.dstOn, (v) => { r.dstOn = v ?? r.dstOn; }) + '<div style="height:8px"></div>' +
+      chPick('Đích khi nút TẮT', r.dstOff, (v) => { r.dstOff = v ?? r.dstOff; });
+  }
+  h += '<div style="height:8px"></div>' + selectField('Khi kênh đích đang có nguồn điều khiển', r.mode, Object.entries(MIX_MODE), (v) => { r.mode = v; }) + '<div class="divider"></div>';
+  if (r.type === 'threshold') h += pct('Bật khi nguồn ≥', 'onAt') + pct('Tắt khi nguồn <', 'offBelow') + pct('Giá trị khi BẬT', 'onVal') + pct('Giá trị khi TẮT', 'offVal') +
+    '<div class="lbl muted">Nguồn nằm giữa hai ngưỡng thì giữ trạng thái trước. Trạng thái ban đầu là TẮT.</div>';
+  else if (r.type === 'linear') h += pct('Hệ số (gain)', 'gain', -200, 200) + pct('Độ lệch (offset)', 'offset') + '<div class="lbl muted">Đích = nguồn × hệ số + độ lệch, kẹp trong −100…+100%.</div>';
+  else if (r.type === 'curve') h += CURVE_XS.map((x, i) => numField(`Tại nguồn ${x}%`, Math.round(r.curve[i]), { min: -100, max: 100, step: 5, unit: '%' }, (v) => { r.curve[i] = v; })).join('');
+  else {
+    h += switchRow('Khoá an toàn', r.neutral, () => { r.neutral = !r.neutral; }, { sub: 'Chỉ đổi kênh đích khi nguồn đã về giữa' });
+    if (r.neutral) h += numField('Vùng coi là "giữa"', Math.round(r.dz), { min: 0, max: 50, unit: '%' }, (v) => { r.dz = v; });
+  }
+  h += '<div class="divider"></div><div class="h-title" style="margin-bottom:8px">Xem trước</div>';
+  const vErr = mixValidate(r);
+  if (vErr) h += `<div class="lbl" style="color:var(--bad)">Chưa xem trước được: ${esc(vErr)}</div>`;
+  else {
+    h += `<div id="mpTop">${mixPvTop()}</div>` +
+      slider({ min: -100, max: 100, value: Math.round(m.src), set: (v) => { m.src = v; },
+        after: () => { mixRun(); document.getElementById('mpTop').innerHTML = mixPvTop(); document.getElementById('mpBot').innerHTML = mixPvBottom(); } }) +
+      `<div id="mpBot">${mixPvBottom()}</div>`;
+  }
+  const done = () => {
+    const d = S.settings.draft;
+    if (m.idx == null) d.mixes.push(r); else d.mixes[m.idx] = r;
+    back();
+  };
+  return `<div class="appbar"><button class="iconbtn" data-act="${A(back)}">${ic('back')}</button><div class="title">Luật mix</div></div>
+    <div class="body" data-scroll="mix">${h}<div style="height:24px"></div></div>
+    <div class="bottombar" style="display:flex;align-items:center;gap:8px;padding:12px">
+      ${err ? `<span style="color:var(--bad)">${ic('warning', { mini: true })}</span><div style="flex:1;color:var(--bad);font-size:14px;font-weight:500">${esc(err)}</div>` : '<div style="flex:1"></div>'}
+      <button class="btn filled" ${err ? 'disabled' : ''} data-act="${A(done)}">Xong</button></div>`;
+}
+
+// ============================================================================
+//  Màn Lái + Sửa bố cục (control_screen.dart, layout/*)
+// ============================================================================
+const ctlProfile = () => S.ctl && prof(S.ctl.pid);
+const ctlLayout = () => S.ctl && (S.ctl.editing ? S.ctl.draft : ctlProfile()?.layout);
+const switchPct = (cfg, kind, pos) => kind === 'switch3' ? [cfg.offPct, 0, 100][pos] : pos === 1 ? 100 : cfg.offPct;
+
+function openControl(pid) {
+  const p = prof(pid);
+  S.ctl = { pid, editing: false, draft: null, sel: null, undo: [], redo: [], chSnap: null };
+  if (S.gear > p.gears.count) S.gear = p.gears.count;
+  initValues();
+  go('control');
+}
+/** _initValues: vị trí ban đầu khi vào màn (H3b) và trạng thái nút/công tắc */
+function initValues() {
+  const p = ctlProfile();
+  for (const it of p.layout.items) {
+    const ch = it.channel;
+    if (ch == null) continue;
+    const cfg = p.channels[ch - 1];
+    if (isStickK(it.kind)) {
+      S.values[ch - 1] = RM.initial(it.ret || newRet(), it.saved) / 100;
+      if (it.kind === 'stick2D' && it.channelY != null) S.values[it.channelY - 1] = RM.initial(it.retY || newRet(), it.savedY) / 100;
+    } else if (it.kind === 'button') { S.sw[ch] = 0; S.values[ch - 1] = cfg.offPct / 100; }
+    else if (it.kind === 'toggle' || it.kind === 'switch3') S.values[ch - 1] = switchPct(cfg, it.kind, S.sw[ch] || 0) / 100;
+  }
+  stopAxes();
+}
+/** _resetSticks: thoát màn / vào sửa bố cục → cần về vị trí thả; ga "Giữ vị trí" về Center */
+function resetSticks(remember) {
+  const p = ctlProfile();
+  if (!p) return;
+  for (const it of p.layout.items) {
+    const axis = (ch, cfg, save) => {
+      if (ch == null) return;
+      const r = cfg || newRet();
+      if (remember && r.mode === 'hold' && r.remember) save(S.values[ch - 1] * 100);
+      S.values[ch - 1] = RM.onExit(r, ch === 2) / 100;
+    };
+    if (isStickK(it.kind)) {
+      axis(it.channel, it.ret, (v) => { it.saved = v; });
+      if (it.kind === 'stick2D') axis(it.channelY, it.retY, (v) => { it.savedY = v; });
+    } else if (it.kind === 'button' && it.channel != null) {
+      S.sw[it.channel] = 0; S.values[it.channel - 1] = p.channels[it.channel - 1].offPct / 100;
+    }
+  }
+  stopAxes();
+}
+function leaveControl() {
+  if (S.screen !== 'control' || !S.ctl) return;
+  if (S.ctl.editing) cancelEdit();
+  resetSticks(true);
+}
+
+function itemLabel(p, it) {
+  if (!it.style.showLabel) return null;
+  if (it.style.label && it.style.label.trim()) return it.style.label;
+  if (it.channel != null) return p.channels[it.channel - 1].name;
+  if (it.kind === 'gauge') return GAUGES[it.gauge];
+  return KIND[it.kind];
+}
+function valText(p, it, ch) {
+  const pct = S.values[ch - 1] * 100;
+  if (it.style.valueDisplay === 'hidden') return null;
+  return it.style.valueDisplay === 'us' ? `${pctToUs(p.channels[ch - 1], pct)} µs` : `${Math.round(pct)}%`;
+}
+function trailingText(p, it) {
+  if (it.channel == null) return null;
+  if (it.kind === 'stick2D') {
+    const xs = valText(p, it, it.channel), ys = it.channelY == null ? null : valText(p, it, it.channelY);
+    return xs == null ? null : `X ${xs}${ys == null ? '' : ' · Y ' + ys}`;
+  }
+  return valText(p, it, it.channel);
+}
+function frame(label, trailing, inner, style = '') {
+  return `<div class="frameitem" style="${style}">${label != null || trailing != null ? `<div class="hd"><span class="caption">${esc(label ?? '')}</span>${trailing != null ? `<span class="val">${trailing}</span>` : ''}</div>` : ''}<div class="ct">${inner}</div></div>`;
+}
+function gaugeData(key) {
+  const t = S.tel;
+  switch (key) {
+    case 'battery': return [t ? 'batteryHalf' : 'batteryEmpty', t ? `${t.v.toFixed(2)} V` : '--', null];
+    case 'current': return ['current', t ? `${t.a.toFixed(1)} A` : '--', null];
+    case 'speed': return ['speedometer', t ? `${t.kmh.toFixed(1)} km/h` : '--', null];
+    // Ping ngầm khi lái (F6) thuộc Sprint 4 — như app: tạm hiện RSSI ở dòng phụ
+    case 'ping': return ['signal', '--', t && t.rssi ? `RSSI ${t.rssi} dBm` : null];
+    case 'rssi': return [t && t.rssi ? 'signal' : 'signalOff', t && t.rssi ? `${t.rssi} dBm` : '--', null];
+  }
+}
+
+// ---------- Trục cần gạt: vị trí thô, tự về (ReturnMotion), vùng chết ----------
+const AXS = {};      // trạng thái bền: {raw, held, anim, kb}
+let AXD = {};        // mô tả trục, dựng lại mỗi lần vẽ: {vertical, knob, dz, ret(), get(), set(out)}
+const ax = (k) => (AXS[k] ||= { raw: 0, held: false, anim: null });
+function regAxis(key, d) { AXD[key] = d; }
+function chAxis(key, ch, o) {
+  regAxis(key, { ...o, get: () => ch == null ? 0 : S.values[ch - 1] * 100, set: (out) => { if (ch != null) S.values[ch - 1] = out / 100; } });
+}
+function stopAxes() { for (const k in AXS) { AXS[k].held = false; AXS[k].anim = null; AXS[k].kb = false; } }
+function setRaw(k, v) { const a = ax(k), d = AXD[k]; a.raw = clamp(v, -100, 100); if (d) d.set(RM.dz(a.raw, d.dz)); }
+/** Không chạm và không đang tự về → đi theo giá trị bị đặt từ ngoài (thoát màn, failsafe…) */
+function follow(k) {
+  const a = ax(k), d = AXD[k];
+  if (d && !a.held && !a.anim) { const g = d.get(); if (Math.abs(RM.dz(a.raw, d.dz) - g) > 0.01) a.raw = g; }
+  return a;
+}
+let rafId = null;
+function loop() { if (rafId == null) rafId = requestAnimationFrame(tick); }
+function tick(now) {
+  rafId = null;
+  let any = false;
+  for (const k in AXS) {
+    const a = AXS[k];
+    if (!a.anim) continue;
+    if (!AXD[k]) { a.anim = null; continue; }
+    const ms = now - a.anim.t0;
+    setRaw(k, RM.valueAt(a.anim.cfg, a.anim.from, ms));
+    if (ms >= RM.total(a.anim.cfg)) a.anim = null; else any = true;
+  }
+  drawAxes();
+  if (any) loop();
+}
+function releaseAxis(k) {
+  const a = ax(k), d = AXD[k];
+  a.held = false;
+  const cfg = d?.ret?.();
+  if (cfg && returnsFrom(cfg, a.raw)) { a.anim = { cfg, from: a.raw, t0: performance.now() }; loop(); }
+}
+
+function renderItem(p, it) {
+  const lbl = itemLabel(p, it), ch = it.channel;
+  if (isControl(it.kind) && ch == null) return frame(KIND[it.kind], null, '<div class="lbl muted" style="text-align:center;padding-top:8px">Chưa gán kênh</div>');
+  const knob = KNOB[it.style.knobSize][1], tr = trailingText(p, it);
+  const trail = tr == null ? null : `<span data-vt="${it.id}">${esc(tr)}</span>`;
+  const iconName = PICK_ICONS[it.style.icon];
+  switch (it.kind) {
+    case 'stickH': case 'stickV': {
+      const key = it.id + ':x';
+      chAxis(key, ch, { vertical: it.kind === 'stickV', knob, dz: it.style.deadzone, ret: () => it.ret });
+      return frame(lbl, trail, `<div class="axis" data-axis="${key}"><div class="cl"></div><div class="bar"></div><div class="th"></div></div>`);
+    }
+    case 'stick2D': {
+      chAxis(it.id + ':x', ch, { knob, dz: it.style.deadzone, ret: () => it.ret });
+      chAxis(it.id + ':y', it.channelY, { knob, dz: it.style.deadzone, ret: () => it.retY });
+      return frame(lbl, trail, `<div class="s2" data-s2="${it.id}"><div class="b2"></div><div class="h2"></div><div class="v2"></div><div class="k2"></div></div>`);
+    }
+    case 'button': case 'toggle': {
+      const on = (S.sw[ch] || 0) === 1;
+      const toggle = it.kind === 'toggle' ? `data-act="${A(() => { S.sw[ch] = on ? 0 : 1; S.values[ch - 1] = switchPct(p.channels[ch - 1], 'toggle', S.sw[ch]) / 100; })}"` : '';
+      return `<div class="chbtn${on ? ' on' : ''}" data-chbtn="${it.id}" ${toggle}>${iconName ? ic(iconName, { solid: on }) : ''}${lbl ? `<span class="lbl">${esc(lbl)}</span>` : ''}${it.kind === 'toggle' ? `<span class="caption">${on ? 'BẬT' : 'TẮT'}</span>` : ''}</div>`;
+    }
+    case 'switch3': {
+      const pos = S.sw[ch] || 0, cfg = p.channels[ch - 1];
+      const sw = `<div class="sw3">${['◀', '●', '▶'].map((m, i) => `<button class="${pos === i ? 'on' : ''}" data-act="${A(() => { if (i === pos) return; S.sw[ch] = i; S.values[ch - 1] = switchPct(cfg, 'switch3', i) / 100; })}">${m}</button>`).join('')}</div>`;
+      return frame(lbl, null, `<div style="display:flex;align-items:center;gap:4px;height:100%">${iconName ? `<span style="color:var(--textMuted)">${ic(iconName, { mini: true })}</span>` : ''}<div style="flex:1;height:100%;display:flex;align-items:center">${sw}</div></div>`);
+    }
+    case 'knob': {
+      chAxis(it.id + ':k', ch, { dz: it.style.deadzone });
+      return frame(lbl, trail, `<div class="knob" data-knob="${it.id}"></div>`);
+    }
+    case 'gauge': {
+      const [icon, v, sub] = gaugeData(it.gauge);
+      const glabel = it.style.showLabel ? (it.style.label ?? GAUGES[it.gauge]) : '';
+      return `<div class="gauge" data-gauge="${it.id}"><div class="gh">${ic(icon)}<span class="caption">${esc(glabel.toUpperCase())}</span></div><div class="gv">${v}</div><div class="gs">${sub ?? ''}</div></div>`;
+    }
+    case 'gearBox': {
+      const g = clamp(S.gear, 1, p.gears.count);
+      return frame(lbl, null, `<div class="rowctl"><button class="iconbtn outlined" ${S.gear > 1 ? '' : 'disabled'} data-act="${A(() => { S.gear--; })}">${ic('minus')}</button>
+        <div class="mid"><div style="font-size:26px;font-weight:800;line-height:1.1">Số ${g}</div><div class="muted" style="font-size:12px;font-weight:500">Ga tối đa ${p.gears.max[g - 1]}%</div></div>
+        <button class="iconbtn outlined" ${S.gear < p.gears.count ? '' : 'disabled'} data-act="${A(() => { S.gear++; })}">${ic('plus')}</button></div>`, 'padding:4px');
+    }
+    case 'trim': {
+      const s = p.channels[0];
+      const trim = (d) => {
+        const nv = clamp(s.trim + d, -200, 200);
+        if (nv === s.trim) return;
+        s.trim = nv;
+        if (isConnected(p)) S.carCfg[p.id] = carConfigOf(p);
+      };
+      return frame(lbl, null, `<div class="rowctl"><button class="btn outlined small" data-act="${A(() => trim(-5))}">◀</button>
+        <div class="mid" style="font-size:18px;font-weight:700;white-space:nowrap">Trim ${s.trim} µs</div>
+        <button class="btn outlined small" data-act="${A(() => trim(5))}">▶</button></div>`, 'padding:4px');
+    }
+    case 'statusBadge':
+      return `<div style="height:100%;display:flex;align-items:center;justify-content:center">${statusPill(S.connectedId === p.id ? S.link : 'disconnected')}</div>`;
+  }
+  return '';
+}
+function driveMenu(ev) {
+  const l = ctlProfile().layout;
+  openMenu(ev, [
+    { icon: 'settings', label: 'Cấu hình', run: () => openSettings(S.ctl.pid) },
+    { icon: 'edit', label: 'Sửa bố cục', sub: l.locked ? 'Đang khoá' : null, disabled: l.locked, run: startEdit },
+    { icon: l.locked ? 'locked' : 'unlocked', label: l.locked ? 'Mở khoá bố cục' : 'Khoá bố cục', run: () => { l.locked = !l.locked; snack(l.locked ? 'Đã khoá bố cục' : 'Đã mở khoá bố cục'); } },
+  ]);
+}
+function startEdit() {
+  const p = ctlProfile();
+  if (p.layout.locked) { snack('Bố cục đang khoá. Mở khoá trong menu trước.'); return; }
+  // Ga phải ở vị trí nghỉ (vị trí về đã cài, vd −28%), không bắt buộc đúng 0%
+  if (Math.abs(S.values[1] * 100 - RM.restPct(p.layout, 2, true)) > 0.1) { snack('Thả cần ga trước khi sửa bố cục'); return; }
+  resetSticks(false);
+  Object.assign(S.ctl, { editing: true, draft: clone(p.layout), chSnap: clone(p.channels), sel: null, undo: [], redo: [] });
+}
+function endEdit() { Object.assign(S.ctl, { editing: false, draft: null, sel: null, chSnap: null }); initValues(); }
+function cancelEdit() { if (S.ctl.chSnap) ctlProfile().channels = S.ctl.chSnap; endEdit(); }
+function saveEdit() {
+  const p = ctlProfile(), d = S.ctl.draft;
+  const err = layoutValidate(d);
+  if (err) { snack(err); return; }
+  const commit = () => { p.layout = S.ctl.draft; endEdit(); snack('Đã lưu bố cục'); };
+  const risky = d.items.some((it) => (it.channel === 2 && it.ret && retRisky(it.ret)) || (it.channelY === 2 && it.retY && retRisky(it.retY)));
+  if (risky) confirmDlg('Cần ga không tự về ngay', 'Xe có thể tiếp tục chạy sau khi thả tay. Vẫn lưu bố cục?', 'Vẫn lưu', commit);
+  else commit();
+}
+/** LayoutHistory: tối đa 30 bước */
+function pushUndo() { const c = S.ctl; c.undo.push(clone(c.draft)); if (c.undo.length > 30) c.undo.shift(); c.redo = []; }
+function addSheet() {
+  const p = ctlProfile(), d = S.ctl.draft;
+  const pick = (fn) => { pushUndo(); const it = fn(); S.overlay = null; if (it) S.ctl.sel = it.id; else snack('Không còn chỗ trống đủ lớn trên màn'); };
+  const hintOf = { stickH: '−100…+100%, tự về khi thả (chỉnh được)', stickV: '−100…+100%, tự về khi thả (chỉnh được)', stick2D: 'Điều khiển 2 kênh X/Y',
+    button: 'Bật khi giữ, thả ra là tắt', toggle: 'Mỗi lần bấm đổi trạng thái', switch3: 'Tắt / 0% / +100%', knob: 'Giữ nguyên vị trí' };
+  S.overlay = { type: 'sheet', html: () => {
+    const controls = Object.keys(KIND).filter(isControl);
+    const gauges = Object.keys(GAUGES).filter((g) => !d.items.some((i) => i.gauge === g));
+    const extras = ['gearBox', 'trim', 'statusBadge'].filter((k) => !d.items.some((i) => i.kind === k));
+    return `<div class="handle"></div><div class="h-title" style="margin-bottom:8px">Thêm điều khiển</div>
+    ${controls.map((k) => `<div class="row" data-act="${A(() => pick(() => addControl(d, k)))}">${ic('addControl', { color: 'var(--textMuted)' })}<div><div>${KIND[k]}</div><div class="muted" style="font-size:13px">${hintOf[k]}</div></div></div>`).join('')}
+    ${gauges.length || extras.length ? '<div class="divider"></div>' : ''}
+    ${gauges.map((g) => `<div class="row" data-act="${A(() => pick(() => place(d, 'gauge', { gauge: g })))}">${ic('speedometer', { color: 'var(--textMuted)' })}Ô ${GAUGES[g]}</div>`).join('')}
+    ${extras.map((k) => `<div class="row" data-act="${A(() => pick(() => place(d, k)))}">${ic('addControl', { color: 'var(--textMuted)' })}${KIND[k]}</div>`).join('')}
+    <div class="muted" style="font-size:12px;margin-top:8px">Thêm xong, chọn phần tử để gán kênh và chỉnh cấu hình riêng của nó.</div>`;
+  } };
+}
+/** PropertiesPanel._setChannel: gán / bỏ gán kênh; kênh đang ở phần tử khác thì chuyển sang phần tử này (H7) */
+function setItemChannel(p, it, newCh, y) {
+  const old = y ? it.channelY : it.channel;
+  if (newCh === old) return;
+  if (newCh != null && it.kind === 'stick2D' && newCh === (y ? it.channel : it.channelY)) { snack('Hai trục phải dùng hai kênh khác nhau'); return; }
+  pushUndo();
+  const moved = assignChannel(S.ctl.draft, it, newCh, y);
+  if (newCh != null) p.channels[newCh - 1].enabled = true;
+  if (moved && moved.id !== it.id) snack(`Đã chuyển CH${newCh} từ ${itemTitle(moved).toLowerCase()} sang phần tử này`);
+}
+function returnEditor(it, axis) {
+  const cfg = axis === 'x' ? (it.ret ||= newRet()) : (it.retY ||= newRet());
+  const isThr = (axis === 'x' ? it.channel : it.channelY) === 2;
+  const pvKey = `pv:${it.id}:${axis}`;
+  regAxis(pvKey, { vertical: false, knob: KNOB.medium[1], dz: 0, ret: () => cfg, get: () => ax(pvKey).raw, set: () => {} });
+  const ed = (f) => () => { pushUndo(); f(); };
+  const hold = cfg.mode === 'hold', err = retError(cfg);
+  const sl = (o) => slider({ ...o, start: pushUndo });
+  let h = `<div class="chips">${RET_PRESETS.map(([l, o]) => chip(l, false, ed(() => { Object.assign(cfg, newRet(o)); ax(pvKey).raw = cfg.target; }))).join('')}</div><div style="height:8px"></div>` +
+    segs(Object.entries(RET_MODE), cfg.mode, (k) => { pushUndo(); cfg.mode = k; }, 'sm');
+  if (!hold) {
+    h += sl({ min: -100, max: 100, value: cfg.target, label: (v) => `Vị trí về: ${Math.round(v)}%`, set: (v) => { cfg.target = v; } }) +
+      sl({ min: 0, max: 1000, step: 50, value: cfg.delay, label: (v) => `Trễ trước khi về: ${v} ms`, set: (v) => { cfg.delay = v; } }) +
+      sl({ min: 0, max: 2000, step: 50, value: cfg.duration, label: (v) => `Thời gian về: ${v == 0 ? 'ngay lập tức' : v + ' ms'}`, set: (v) => { cfg.duration = v; } });
+    if (cfg.duration > 0) h += segs(Object.entries(RET_CURVE), cfg.curve, (k) => { pushUndo(); cfg.curve = k; }, 'sm');
+  }
+  if (cfg.mode === 'halfSpring') {
+    h += switchRow('Chỉ tự về ở nửa dương', cfg.posOnly, ed(() => { cfg.posOnly = !cfg.posOnly; })) +
+      switchRow('Chỉ tự về ở nửa âm', cfg.negOnly, ed(() => { cfg.negOnly = !cfg.negOnly; }));
+  }
+  if (hold) {
+    const setRemember = () => {
+      if (!cfg.remember && isThr) confirmDlg('Nhớ vị trí cần ga?', 'Mở lại màn Lái thì ga sẽ ở vị trí cũ. Xe có thể chạy ngay khi vào màn.', 'Vẫn bật', () => { pushUndo(); cfg.remember = true; });
+      else { pushUndo(); cfg.remember = !cfg.remember; }
+    };
+    h += switchRow('Nhớ vị trí khi thoát', cfg.remember, setRemember);
+  }
+  if (err) h += `<div style="color:var(--bad);font-size:12px;font-weight:500">${esc(err)}</div>`;
+  else if (isThr && retRisky(cfg)) h += `<div style="display:flex;gap:4px;align-items:center;color:var(--warn);font-size:12px;font-weight:500">${ic('warning', { mini: true })}Xe có thể tiếp tục chạy sau khi thả tay</div>`;
+  h += `<div class="lbl" style="margin-top:8px" data-pvl="${pvKey}">Xem trước: kéo rồi thả — ${Math.round(ax(pvKey).raw)}%</div>
+    <div class="axis pv" data-axis="${pvKey}"><div class="cl"></div><div class="bar"></div><div class="th"></div></div>`;
+  return h;
+}
+function renderPanel(p, it) {
+  const k = it.kind, stick = isStickK(k), hasValue = stick || k === 'knob', isThr = itemChs(it).includes(2);
+  const sec = (title, inner) => `<div class="caption" style="margin:16px 0 6px">${esc(title.toUpperCase())}</div>${inner}`;
+  // Kênh đang ở phần tử khác thì ghi chú; chọn sẽ chuyển kênh sang phần tử này
+  const chOpts = [['', 'Chưa gán'], ...CHS.map((i) => {
+    const holder = itemFor(S.ctl.draft, i);
+    return [String(i), !holder || holder.id === it.id ? chName(p.channels, i) : `${chName(p.channels, i)} (đang ở ${KIND[holder.kind].toLowerCase()})`];
+  })];
+  const pickCh = (v, y) => setItemChannel(p, it, v === '' ? null : +v, y);
+  let h = '';
+  if (isControl(k)) {
+    h += sec('Gán kênh', selectField(k === 'stick2D' ? 'Trục X' : 'Kênh', it.channel == null ? '' : String(it.channel), chOpts, (v) => pickCh(v, false), true) +
+      (k === 'stick2D' ? '<div style="height:8px"></div>' + selectField('Trục Y', it.channelY == null ? '' : String(it.channelY), chOpts, (v) => pickCh(v, true), true) : '') +
+      (it.channel != null && isSwitchLike(k) ? '<div style="height:8px"></div>' + numField('Giá trị khi tắt', Math.round(p.channels[it.channel - 1].offPct), { min: -100, max: 100, step: 5, unit: '%' }, (v) => { p.channels[it.channel - 1].offPct = v; }) : ''));
+  }
+  if (k === 'gauge') h += sec('Ô đồng hồ', selectField('Loại', it.gauge, Object.entries(GAUGES), (v) => { pushUndo(); it.gauge = v; }, true));
+  h += sec('Nhãn', `<input class="tin" data-in="${I((v) => { it.style.label = v.trim() ? v : null; })}" data-fid="plabel-${it.id}" value="${esc(it.style.label ?? '')}" placeholder="${esc(it.channel != null ? p.channels[it.channel - 1].name : KIND[k])}">` +
+    switchRow('Hiện nhãn', it.style.showLabel, () => { pushUndo(); it.style.showLabel = !it.style.showLabel; }));
+  if (isSwitchLike(k)) {
+    h += sec('Icon', `<div class="chips">${chip('Không', it.style.icon == null, () => { pushUndo(); it.style.icon = null; })}${Object.entries(PICK_ICONS).map(([key, name]) =>
+      chip(ic(name, { mini: true }), it.style.icon === key, () => { pushUndo(); it.style.icon = key; })).join('')}</div>`);
+  }
+  if (hasValue) h += sec('Hiện giá trị', segs(Object.entries(VALUE_DISPLAY), it.style.valueDisplay, (v) => { pushUndo(); it.style.valueDisplay = v; }, 'sm'));
+  if (stick) h += sec('Kích thước núm cầm', segs(Object.entries(KNOB).map(([kk, [l]]) => [kk, l]), it.style.knobSize, (v) => { pushUndo(); it.style.knobSize = v; }, 'sm'));
+  if (stick) {
+    h += sec(k === 'stick2D' ? 'Tự về · trục X' : 'Tự về', returnEditor(it, 'x'));
+    if (k === 'stick2D') h += sec('Tự về · trục Y', returnEditor(it, 'y'));
+  }
+  if (hasValue) h += slider({ min: 0, max: 20, value: it.style.deadzone, capLabel: true, label: (v) => `VÙNG CHẾT: ${Math.round(v)}%`, start: pushUndo, set: (v) => { it.style.deadzone = v; } });
+  if (isControl(k)) h += '<div style="height:8px"></div>' + switchRow('Rung khi chạm', it.style.haptic, () => { pushUndo(); it.style.haptic = !it.style.haptic; });
+  h += slider({ min: 30, max: 100, step: 5, value: it.style.opacity, capLabel: true, label: (v) => `ĐỘ TRONG SUỐT: ${Math.round(v)}%`, start: pushUndo,
+    set: (v) => { it.style.opacity = v; }, after: (v) => { const el = scr.querySelector(`[data-item="${it.id}"]`); if (el) el.style.opacity = v / 100; } });
+  if (isThr && isControl(k)) h += '<div class="muted" style="font-size:12px;font-weight:500;margin-top:8px">Phần tử này điều khiển kênh Ga — bố cục bắt buộc phải có.</div>';
+  h += `<button class="btn outlined" style="margin-top:16px;color:var(--bad)" data-act="${A(() => { pushUndo(); S.ctl.draft.items = S.ctl.draft.items.filter((i) => i.id !== it.id); S.ctl.sel = null; })}">${ic('delete', { mini: true })}Xoá khỏi màn</button>`;
+  return `<div class="panel"><div class="appbar" style="height:48px"><div class="title" style="font-size:16px">${KIND[k]}</div>
+    <button class="iconbtn" data-act="${A(() => { S.ctl.sel = null; })}">${ic('close')}</button></div>
+    <div class="body" data-scroll="panel${it.id}">${h}</div></div>`;
+}
+function renderControl() {
+  const p = ctlProfile(), c = S.ctl, l = ctlLayout();
+  const here = S.connectedId === p.id && S.link !== 'disconnected' && S.link !== 'connecting';
+  const alarm = !here || S.link === 'lost' || S.tel?.failsafe;
+  const bar = c.editing
+    ? `<button class="btn text" data-act="${A(cancelEdit)}">${ic('close', { mini: true })}Huỷ</button>
+       <button class="iconbtn" title="Hoàn tác" ${c.undo.length ? '' : 'disabled'} data-act="${A(() => { c.redo.push(clone(c.draft)); c.draft = c.undo.pop(); })}">${ic('undo')}</button>
+       <button class="iconbtn" title="Làm lại" ${c.redo.length ? '' : 'disabled'} data-act="${A(() => { c.undo.push(clone(c.draft)); c.draft = c.redo.pop(); })}">${ic('redo')}</button>
+       <div style="flex:1;display:flex;justify-content:center;min-width:0"><div class="pill trash" id="trash" style="color:var(--textMuted);border-color:var(--line);font-weight:500;background:transparent">${ic('delete', { mini: true })}<span id="trashTxt">Sửa bố cục · kéo để di chuyển</span></div></div>
+       <button class="btn outlined" data-act="${A(addSheet)}">${ic('plus', { mini: true })}Thêm</button>
+       <button class="btn filled" data-act="${A(saveEdit)}">${ic('save', { mini: true })}Lưu</button>`
+    : `<button class="iconbtn" data-act="${A(back)}">${ic('back')}</button>
+       <div class="h-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto">${esc(p.name)}</div><div style="width:12px"></div>
+       <div style="flex:1;min-width:0">${alarm ? `<span class="alarm">${ic('warning', { mini: true })}${!here ? 'Chưa kết nối xe' : 'Failsafe: xe đang ở chế độ an toàn'}</span>` : ''}</div>
+       <button class="iconbtn" title="Tuỳ chọn" data-menu="${A(driveMenu)}">${ic('config')}</button>`;
+  const items = l.items.map((it) => `<div class="item${c.sel === it.id ? ' sel' : ''}" data-item="${it.id}" style="left:${it.x / COLS * 100}%;top:${it.y / ROWS * 100}%;width:${it.w / COLS * 100}%;height:${it.h / ROWS * 100}%;opacity:${clamp(it.style.opacity / 100, 0.3, 1)}">
+      <div class="in">${renderItem(p, it)}</div><div class="rz" data-rz="${it.id}"></div></div>`).join('');
+  const sel = c.editing ? l.items.find((i) => i.id === c.sel) : null;
+  return `<div style="display:flex;height:100%"><div class="screen drive" style="position:relative;flex:1">
+      <div class="drivebar">${bar}</div>
+      <div class="canvas${c.editing ? ' editing' : ''}" id="canvas">${items}<div id="guides"></div></div></div>
+    ${sel ? renderPanel(p, sel) : ''}</div>`;
+}
+
+// ---------- Vẽ cần gạt (tương đương _AxisPainter / _Stick2DPainter / _KnobPainter) ----------
+function paintAxis(el, raw, d) {
+  const vertical = d.vertical, w = el.clientWidth, h = el.clientHeight, short = Math.min(w, h);
+  if (!w || !h) return;
+  el.style.borderRadius = short / 2 + 'px';
+  const pos = raw / 100;
+  const thumbR = clamp(short * (0.45 + d.knob) / 2, 10, short / 2);
+  const along = (vertical ? h : w) / 2 - thumbR;
+  const cx = vertical ? w / 2 : w / 2 + pos * along, cy = vertical ? h / 2 - pos * along : h / 2;
+  const [cl, bar, th] = el.children;
+  Object.assign(cl.style, vertical ? { left: w * .2 + 'px', width: w * .6 + 'px', top: h / 2 - 1 + 'px', height: '2px' } : { top: h * .2 + 'px', height: h * .6 + 'px', left: w / 2 - 1 + 'px', width: '2px' });
+  const bw = short * 0.3;
+  if (vertical) Object.assign(bar.style, { left: w / 2 - bw / 2 + 'px', width: bw + 'px', top: Math.min(cy, h / 2) - bw / 2 + 'px', height: Math.abs(cy - h / 2) + bw + 'px' });
+  else Object.assign(bar.style, { top: h / 2 - bw / 2 + 'px', height: bw + 'px', left: Math.min(cx, w / 2) - bw / 2 + 'px', width: Math.abs(cx - w / 2) + bw + 'px' });
+  Object.assign(th.style, { left: cx - thumbR + 'px', top: cy - thumbR + 'px', width: thumbR * 2 + 'px', height: thumbR * 2 + 'px' });
+}
+function paint2d(el, x, y, knob) {
+  const w = el.clientWidth, h = el.clientHeight, side = Math.min(w, h), r = side / 2, cx = w / 2, cy = h / 2;
+  const [b, hl, vl, k] = el.children;
+  Object.assign(b.style, { left: cx - r + 'px', top: cy - r + 'px', width: side + 'px', height: side + 'px' });
+  Object.assign(hl.style, { left: cx - r * .8 + 'px', top: cy - .75 + 'px', width: r * 1.6 + 'px', height: '1.5px' });
+  Object.assign(vl.style, { top: cy - r * .8 + 'px', left: cx - .75 + 'px', height: r * 1.6 + 'px', width: '1.5px' });
+  const kr = r * (0.25 + knob * 0.5), travel = r - kr;
+  const kx = cx + x / 100 * travel, ky = cy - y / 100 * travel;
+  Object.assign(k.style, { left: kx - kr + 'px', top: ky - kr + 'px', width: kr * 2 + 'px', height: kr * 2 + 'px' });
+}
+function paintKnob(el, v) {
+  const c = 50, r = 46, a0 = -Math.PI / 2 - Math.PI * 0.75, sweep = Math.PI * 1.5, mid = -Math.PI / 2;
+  const pt = (a, rr = r) => `${(c + rr * Math.cos(a)).toFixed(2)} ${(c + rr * Math.sin(a)).toFixed(2)}`;
+  const arc = (s, e) => `M${pt(s)}A${r} ${r} 0 ${e - s > Math.PI ? 1 : 0} 1 ${pt(e)}`;
+  const a = v / 100 * sweep / 2, ang = mid + a;
+  el.innerHTML = `<svg viewBox="0 0 100 100" style="width:100%;height:100%">
+    <path d="${arc(a0, a0 + sweep)}" stroke="var(--line)" stroke-width="6" fill="none" stroke-linecap="round"/>
+    ${Math.abs(a) > 0.001 ? `<path d="${arc(a >= 0 ? mid : mid + a, a >= 0 ? mid + a : mid)}" stroke="var(--accentFill)" stroke-width="6" fill="none" stroke-linecap="round"/>` : ''}
+    <circle cx="50" cy="50" r="${r * 0.72}" fill="var(--surface2)"/>
+    <path d="M${pt(ang, r * 0.25)}L${pt(ang, r * 0.62)}" stroke="var(--accentFill)" stroke-width="4" stroke-linecap="round"/></svg>`;
+}
+function drawAxes() {
+  scr.querySelectorAll('[data-axis]').forEach((el) => { const k = el.dataset.axis, d = AXD[k]; if (d) paintAxis(el, follow(k).raw, d); });
+  scr.querySelectorAll('[data-s2]').forEach((el) => {
+    const id = el.dataset.s2, d = AXD[id + ':x'];
+    if (d) paint2d(el, follow(id + ':x').raw, follow(id + ':y').raw, d.knob);
+  });
+  scr.querySelectorAll('[data-knob]').forEach((el) => { const k = el.dataset.knob + ':k'; if (AXD[k]) paintKnob(el, follow(k).raw); });
+  const p = ctlProfile(), l = ctlLayout();
+  if (p && l) scr.querySelectorAll('[data-vt]').forEach((el) => { const it = l.items.find((i) => i.id === el.dataset.vt); if (it) el.textContent = trailingText(p, it) ?? ''; });
+  scr.querySelectorAll('[data-pvl]').forEach((el) => { el.textContent = `Xem trước: kéo rồi thả — ${Math.round(ax(el.dataset.pvl).raw)}%`; });
+}
+function updateGauges() {
+  if (S.screen !== 'control' || !S.ctl) return;
+  ctlLayout().items.filter((i) => i.kind === 'gauge').forEach((it) => {
+    const el = scr.querySelector(`[data-gauge="${it.id}"]`);
+    if (!el) return;
+    const [, v, sub] = gaugeData(it.gauge);
+    el.querySelector('.gv').textContent = v;
+    el.querySelector('.gs').textContent = sub ?? '';
+  });
+}
+function drawGuides(l, id, r, cw, chh) {
+  const g = document.getElementById('guides');
+  if (!g) return;
+  if (!r) { g.innerHTML = ''; return; }
+  const { xs, ys } = guides(l, id, r);
+  g.innerHTML = [...xs].map((x) => `<div class="gl" style="left:${x * cw - 0.5}px;top:0;bottom:0;width:1px"></div>`).join('') +
+    [...ys].map((y) => `<div class="gl" style="top:${y * chh - 0.5}px;left:0;right:0;height:1px"></div>`).join('');
+}
+
+// ============================================================================
+//  Điều hướng & render
+// ============================================================================
+const scr = document.getElementById('screen');
+function go(screen) { S.history.push(S.screen); S.screen = screen; S.overlay = null; render(); }
+function back() {
+  if (S.screen === 'control' && S.ctl) {
+    if (S.ctl.editing) { cancelEdit(); render(); return; }
+    resetSticks(true);
+  }
+  S.screen = S.history.pop() || 'garage';
+  S.overlay = null;
+  if (S.screen === 'control') {
+    const p = ctlProfile();
+    if (!p) S.screen = 'garage';
+    else { if (S.gear > p.gears.count) S.gear = p.gears.count; initValues(); }
+  }
+  if ((S.screen === 'settings' && !S.settings) || (S.screen === 'channel' && !S.chEdit) || (S.screen === 'mix' && !S.mixEdit)) S.screen = 'garage';
+  render();
+}
+function effectiveTheme() { return S.theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : S.theme; }
+
+function render() {
+  for (const reg of [actions, INP, RG]) for (const k in reg) delete reg[k];
+  AXD = {};
+  const dev = document.getElementById('device');
+  const t = effectiveTheme();
+  dev.dataset.t = t;
+  document.documentElement.dataset.theme = t;
+  dev.className = 'device ' + (S.screen === 'control' ? 'landscape' : 'portrait');
+  const keep = {};
+  scr.querySelectorAll('[data-scroll]').forEach((el) => { keep[el.dataset.scroll] = el.scrollTop; });
+  const fn = { garage: renderGarage, wizard: renderWizard, settings: renderSettings, channel: renderChannel, mix: renderMix, control: renderControl }[S.screen];
+  scr.innerHTML = fn() + renderOverlay();
+  scr.querySelectorAll('[data-scroll]').forEach((el) => { if (keep[el.dataset.scroll] != null) el.scrollTop = keep[el.dataset.scroll]; });
+  drawAxes();
+  requestAnimationFrame(drawAxes);
+  renderNav();
+  fit();
+}
+function renderNav() {
+  const nav = [['garage', 'Xe của tôi'], ['wizard', 'Tạo xe mới'], ['control', 'Màn Lái'], ['settings', 'Cấu hình']];
+  const cur = S.screen === 'channel' || S.screen === 'mix' ? 'settings' : S.screen;
+  document.getElementById('nav').innerHTML = nav.map(([k, l]) => `<button class="tb${cur === k ? ' on' : ''}" data-nav="${k}">${l}</button>`).join('');
+  document.getElementById('themeBtn').textContent = effectiveTheme() === 'dark' ? '☾ Tối' : '☀ Sáng';
+}
+function fit() {
+  const stage = document.getElementById('stage'), frame = document.getElementById('frame');
+  frame.style.transform = 'none';
+  const s = Math.min(1, (stage.clientWidth - 24) / frame.offsetWidth, (stage.clientHeight - 24) / frame.offsetHeight);
+  frame.style.transform = `scale(${s})`;
+}
+
+// ============================================================================
+//  Sự kiện
+// ============================================================================
+document.getElementById('nav').addEventListener('click', (e) => {
+  const k = e.target.dataset.nav;
+  if (!k) return;
+  const p0 = S.profiles[0];
+  if ((k === 'control' || k === 'settings') && !p0) { snack('Chưa có xe nào — tạo xe trước'); return; }
+  leaveControl();
+  S.history = []; S.overlay = null; S.screen = 'garage';
+  const pid = S.connectedId && prof(S.connectedId) ? S.connectedId : p0?.id;
+  if (k === 'wizard') openWizard();
+  else if (k === 'control') openControl(pid);
+  else if (k === 'settings') openSettings(pid);
+  else render();
+});
+document.getElementById('themeBtn').onclick = () => { S.theme = effectiveTheme() === 'dark' ? 'light' : 'dark'; render(); };
+document.getElementById('simFail').onchange = render;
+document.getElementById('simEmpty').onchange = render;
+document.getElementById('simLost').onchange = (e) => {
+  if (S.connectedId && (S.link === 'connected' || S.link === 'lost')) S.link = e.target.checked ? 'lost' : 'connected';
+  render();
+};
+window.addEventListener('resize', () => { fit(); drawAxes(); });
+
+// Nhấn giữ nút −/+ (đổi gấp 10 lần)
+let lpTimer = null, lpFired = false;
+
+scr.addEventListener('click', (e) => {
+  if (lpFired) { lpFired = false; return; }
+  const m = e.target.closest('[data-menu]');
+  if (m) { const fn = actions[m.dataset.menu]; if (fn) fn({ currentTarget: m }); return; }
+  const stop = e.target.closest('[data-stop]');
+  const a = stop ? (stop.dataset.act ? stop : null) : e.target.closest('[data-act]');
+  if (!a || a.disabled) return;
+  const fn = actions[a.dataset.act];
+  if (fn) { fn(e); render(); }
+});
+scr.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.dataset.rg) {
+    const r = RG[el.dataset.rg];
+    if (!r) return;
+    if (!r.started) { r.started = true; r.start?.(); }
+    const v = +el.value;
+    r.set(v);
+    if (r.label) { const l = scr.querySelector(`[data-rgl="${el.dataset.rg}"]`); if (l) l.textContent = r.label(v); }
+    r.after?.(v);
+    return;
+  }
+  if (el.dataset.in) {
+    const fn = INP[el.dataset.in];
+    if (!fn) return;
+    const fid = el.dataset.fid, pos = el.selectionStart;
+    fn(el.value);
+    render();
+    const again = scr.querySelector(`[data-fid="${fid}"]`);
+    if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
+  }
+});
+scr.addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.dataset.rg) {
+    if (S.screen === 'channel') S.chEdit.preview = 0; // thả tay → thanh xem trước về 0
+    render();
+    return;
+  }
+  if (el.dataset.sel) { const fn = INP[el.dataset.sel]; if (fn) { fn(el.value); render(); } }
+});
+scr.addEventListener('dblclick', (e) => {
+  const k = e.target.closest('[data-knob]');
+  if (k && !S.ctl?.editing) { setRaw(k.dataset.knob + ':k', 0); drawAxes(); }
+});
+
+// Chạm: cần gạt, núm, nút giữ, kéo/đổi cỡ khi sửa bố cục, kéo đổi thứ tự luật mix. Hỗ trợ nhiều ngón.
+const drags = new Map();
+scr.addEventListener('pointerdown', (e) => {
+  lpFired = false;
+  const lp = e.target.closest('[data-lp]');
+  if (lp && !lp.disabled) {
+    clearTimeout(lpTimer);
+    const k = lp.dataset.lp;
+    lpTimer = setTimeout(() => { lpFired = true; actions[k]?.(); render(); }, 500);
+  }
+  if (S.overlay) return;
+  const ro = e.target.closest('[data-reorder]');
+  if (ro) { drags.set(e.pointerId, { mode: 'reorder', from: +ro.dataset.reorder, to: null }); e.preventDefault(); return; }
+  const editing = S.screen === 'control' && S.ctl?.editing;
+  const axEl = e.target.closest('[data-axis]');
+  if (axEl && !(editing && axEl.closest('#canvas'))) {
+    const key = axEl.dataset.axis, a = ax(key);
+    a.held = true; a.anim = null;
+    const d = { mode: 'axis', key };
+    drags.set(e.pointerId, d);
+    moveAxis(e, d);
+    e.preventDefault();
+    return;
+  }
+  if (S.screen !== 'control' || !S.ctl) return;
+  const c = S.ctl;
+  if (editing) {
+    if (!e.target.closest('#canvas')) return;
+    const rz = e.target.closest('[data-rz]'), itEl = e.target.closest('[data-item]');
+    if (!itEl) { c.sel = null; render(); return; }
+    const it = c.draft.items.find((i) => i.id === itEl.dataset.item);
+    // Chọn phần tử làm hiện bảng thuộc tính → canvas hẹp lại, nên đo sau khi vẽ lại
+    if (c.sel !== it.id) { c.sel = it.id; render(); }
+    const cv = document.getElementById('canvas'), r = cv.getBoundingClientRect();
+    const scale = r.width / cv.offsetWidth;
+    drags.set(e.pointerId, { mode: rz ? 'resize' : 'move', it, start: { ...it }, sx: e.clientX, sy: e.clientY, cw: r.width / COLS, ch: r.height / ROWS, scale, pushed: false });
+    e.preventDefault();
+    return;
+  }
+  const s2 = e.target.closest('[data-s2]');
+  if (s2) {
+    const id = s2.dataset.s2;
+    for (const k of [id + ':x', id + ':y']) { const a = ax(k); a.held = true; a.anim = null; }
+    const d = { mode: 's2', id };
+    drags.set(e.pointerId, d);
+    moveS2(e, d);
+    e.preventDefault();
+    return;
+  }
+  const kn = e.target.closest('[data-knob]');
+  if (kn) {
+    const key = kn.dataset.knob + ':k', r = kn.getBoundingClientRect();
+    ax(key).held = true;
+    drags.set(e.pointerId, { mode: 'knob', key, y0: e.clientY, raw0: follow(key).raw, side: Math.min(r.width, r.height) || 1 });
+    e.preventDefault();
+    return;
+  }
+  const btn = e.target.closest('[data-chbtn]');
+  if (btn) {
+    const it = ctlLayout().items.find((i) => i.id === btn.dataset.chbtn);
+    if (it?.kind === 'button') {
+      const ch = it.channel, cfg = ctlProfile().channels[ch - 1];
+      S.sw[ch] = 1; S.values[ch - 1] = switchPct(cfg, 'button', 1) / 100;
+      drags.set(e.pointerId, { mode: 'button', ch, cfg });
+      render();
+    }
+  }
+});
+function moveAxis(e, d) {
+  const el = scr.querySelector(`[data-axis="${d.key}"]`), desc = AXD[d.key];
+  if (!el || !desc) return;
+  const r = el.getBoundingClientRect();
+  const v = desc.vertical ? (1 - (e.clientY - r.top) / r.height * 2) * 100 : ((e.clientX - r.left) / r.width * 2 - 1) * 100;
+  setRaw(d.key, v);
+  drawAxes();
+}
+function moveS2(e, d) {
+  const el = scr.querySelector(`[data-s2="${d.id}"]`);
+  if (!el) return;
+  const r = el.getBoundingClientRect(), half = Math.min(r.width, r.height) / 2;
+  setRaw(d.id + ':x', (e.clientX - (r.left + r.width / 2)) / half * 100);
+  setRaw(d.id + ':y', -(e.clientY - (r.top + r.height / 2)) / half * 100);
+  drawAxes();
+}
+window.addEventListener('pointermove', (e) => {
+  const d = drags.get(e.pointerId);
+  if (!d) return;
+  if (d.mode === 'axis') { moveAxis(e, d); return; }
+  if (d.mode === 's2') { moveS2(e, d); return; }
+  if (d.mode === 'knob') { setRaw(d.key, d.raw0 - (e.clientY - d.y0) / d.side * 200); drawAxes(); return; }
+  if (d.mode === 'reorder') {
+    const cards = [...scr.querySelectorAll('[data-mi]')];
+    let to = cards.length;
+    for (const [i, el] of cards.entries()) { const r = el.getBoundingClientRect(); if (e.clientY < r.top + r.height / 2) { to = i; break; } }
+    d.to = to;
+    cards.forEach((el, i) => el.classList.toggle('dropto', i === to && to !== d.from && to !== d.from + 1));
+    return;
+  }
+  if (d.mode !== 'move' && d.mode !== 'resize') return;
+  const c = S.ctl, it = d.it, s = d.start;
+  const dx = Math.round((e.clientX - d.sx) / d.cw), dy = Math.round((e.clientY - d.sy) / d.ch);
+  let r;
+  if (d.mode === 'move') r = { x: clamp(s.x + dx, 0, COLS - s.w), y: clamp(s.y + dy, 0, ROWS - s.h), w: s.w, h: s.h };
+  else {
+    const [mnW, mnH, mxW, mxH] = limitsFor(it.kind, d.cw / d.scale, d.ch / d.scale, touchable(it));
+    r = { x: s.x, y: s.y, w: clamp(s.w + dx, mnW, Math.min(mxW, COLS - s.x)), h: clamp(s.h + dy, mnH, Math.min(mxH, ROWS - s.y)) };
+  }
+  if ((r.x !== it.x || r.y !== it.y || r.w !== it.w || r.h !== it.h) && fits(c.draft, r, it.id)) {
+    if (!d.pushed) { const snap = clone(c.draft); Object.assign(snap.items.find((i) => i.id === it.id), { x: s.x, y: s.y, w: s.w, h: s.h }); c.undo.push(snap); if (c.undo.length > 30) c.undo.shift(); c.redo = []; d.pushed = true; }
+    Object.assign(it, r);
+    const el = scr.querySelector(`[data-item="${it.id}"]`);
+    if (el) Object.assign(el.style, { left: it.x / COLS * 100 + '%', top: it.y / ROWS * 100 + '%', width: it.w / COLS * 100 + '%', height: it.h / ROWS * 100 + '%' });
+    drawAxes();
+  }
+  drawGuides(c.draft, it.id, it, d.cw / d.scale, d.ch / d.scale);
+  if (d.mode === 'move') {
+    const trash = document.getElementById('trash');
+    const tr = trash.getBoundingClientRect();
+    d.over = e.clientX >= tr.left && e.clientX <= tr.right && e.clientY >= tr.top - 8 && e.clientY <= tr.bottom + 8;
+    trash.classList.add('hot'); trash.classList.toggle('over', d.over);
+    document.getElementById('trashTxt').textContent = 'Thả vào đây để xoá';
+  }
+});
+function endPointer(e) {
+  clearTimeout(lpTimer);
+  const d = drags.get(e.pointerId);
+  if (!d) return;
+  drags.delete(e.pointerId);
+  if (d.mode === 'axis') { releaseAxis(d.key); drawAxes(); }
+  else if (d.mode === 's2') { releaseAxis(d.id + ':x'); releaseAxis(d.id + ':y'); drawAxes(); }
+  else if (d.mode === 'knob') { ax(d.key).held = false; }
+  else if (d.mode === 'button') { S.sw[d.ch] = 0; S.values[d.ch - 1] = switchPct(d.cfg, 'button', 0) / 100; render(); }
+  else if (d.mode === 'reorder') {
+    const mixes = S.settings?.draft.mixes;
+    if (mixes && d.to != null && d.to !== d.from && d.to !== d.from + 1) {
+      let to = d.to;
+      if (to > d.from) to--;
+      mixes.splice(to, 0, mixes.splice(d.from, 1)[0]);
+    }
+    render();
+  } else if (d.mode === 'move' || d.mode === 'resize') {
+    if (d.over) {
+      if (!d.pushed) pushUndo();
+      S.ctl.draft.items = S.ctl.draft.items.filter((i) => i.id !== d.it.id);
+      S.ctl.sel = null;
+    }
+    render();
+  }
+}
+window.addEventListener('pointerup', endPointer);
+window.addEventListener('pointercancel', endPointer);
+
+// Bàn phím: W/S ga (CH2), A/D lái (CH1) — như ngón tay giữ cần, thả phím thì tự về theo cài đặt
+const keys = new Set();
+function axisKeyFor(ch) {
+  const it = itemFor(ctlLayout(), ch);
+  if (!it) return null;
+  if (it.kind === 'stickH' || it.kind === 'stickV') return it.id + ':x';
+  if (it.kind === 'stick2D') return it.id + (it.channel === ch ? ':x' : ':y');
+  return null;
+}
+function applyKeys() {
+  if (S.screen !== 'control' || !S.ctl || S.ctl.editing) return;
+  const dirs = { 1: (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0), 2: (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0) };
+  for (const ch of [1, 2]) {
+    const k = axisKeyFor(ch);
+    if (!k || !AXD[k]) continue;
+    const a = ax(k);
+    if (dirs[ch]) { a.held = true; a.kb = true; a.anim = null; setRaw(k, dirs[ch] * 100); }
+    else if (a.kb) { a.kb = false; releaseAxis(k); }
+  }
+  drawAxes();
+}
+window.addEventListener('keydown', (e) => {
+  if (['INPUT', 'SELECT'].includes(e.target.tagName) || e.repeat) return;
+  keys.add(e.key.toLowerCase()); applyKeys();
+});
+window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); applyKeys(); });
+
+// Telemetry giả lập khi đang kết nối
+let battery = 8.2;
+setInterval(() => {
+  if (S.screen !== 'control' || !S.ctl) return;
+  const p = ctlProfile();
+  if (!p) return;
+  const failsafe = document.getElementById('simFail').checked;
+  if (S.connectedId !== p.id || S.link !== 'connected') { if (S.connectedId !== p.id) S.tel = null; updateGauges(); return; }
+  const wasFail = !!S.tel?.failsafe;
+  const lim = p.gears.max[clamp(S.gear, 1, p.gears.count) - 1] / 100;
+  const thr = failsafe ? 0 : S.values[1] * lim;
+  battery = Math.max(6.4, battery - 0.0004 - Math.abs(thr) * 0.002);
+  S.tel = { failsafe, v: battery - Math.abs(thr) * 0.35, a: 0.4 + Math.abs(thr) * 18 + Math.random() * 0.3, kmh: Math.abs(thr) * 42 + (thr ? Math.random() : 0), rssi: -55 - Math.round(Math.random() * 6) };
+  if (wasFail !== failsafe) render(); else updateGauges();
+}, 200);
+
+// Mở thẳng một màn: ui_preview.html#control | #settings | #wizard | #light | #connected
+render();
+const hash = location.hash.slice(1).split(',');
+if (hash.includes('light')) { S.theme = 'light'; render(); }
+if (hash.includes('connected')) { const p = S.profiles[0]; S.connectedId = p.id; S.link = 'connected'; S.carCfg[p.id] = carConfigOf(p); }
+const startNav = hash.find((h) => ['control', 'settings', 'wizard'].includes(h));
+if (startNav) document.querySelector(`[data-nav="${startNav}"]`).click();
+</script>
+</body>
+</html>

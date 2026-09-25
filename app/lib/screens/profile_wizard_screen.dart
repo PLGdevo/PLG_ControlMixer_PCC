@@ -1,0 +1,433 @@
+// Tạo xe mới: 3 bước (E3). Trả về CarProfile đã lưu qua Navigator.pop.
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
+import '../controller/car_controller.dart';
+import '../data/profile_repository.dart';
+import '../models/car_profile.dart';
+import '../services/quick_ping.dart';
+import '../theme/app_icons.dart';
+import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../transport/ble_transport.dart';
+import '../widgets/status_badge.dart';
+
+class ProfileWizardScreen extends StatefulWidget {
+  const ProfileWizardScreen({super.key, required this.repo, required this.controller});
+
+  final ProfileRepository repo;
+  final CarController controller;
+
+  @override
+  State<ProfileWizardScreen> createState() => _ProfileWizardScreenState();
+}
+
+class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
+  int step = 0;
+  late final CarProfile p = CarProfile(
+    id: CarProfile.newId(),
+    name: widget.repo.uniqueName('Xe mới'),
+    connType: ConnType.wifi,
+    wifi: WifiConn(),
+    ble: BleConn(),
+  );
+  late final _name = TextEditingController(text: p.name);
+  final _ip = TextEditingController(text: '192.168.4.1');
+  final _port = TextEditingController(text: '4210');
+  final _ssid = TextEditingController();
+  final _mac = TextEditingController();
+  final _devName = TextEditingController();
+
+  ProfileTemplate template = ProfileTemplate.basic;
+  String? copyFromId;
+
+  QuickPingResult? pingResult;
+  bool pinging = false;
+  bool saving = false;
+
+  // BLE
+  List<ScanResult> results = [];
+  bool scanning = false;
+  StreamSubscription<List<ScanResult>>? _scanSub;
+  StreamSubscription<bool>? _scanningSub;
+
+  @override
+  void initState() {
+    super.initState();
+    try {
+      _scanSub = FlutterBluePlus.scanResults.listen((r) {
+        if (mounted) setState(() => results = r);
+      });
+      _scanningSub = FlutterBluePlus.isScanning.listen((s) {
+        if (mounted) setState(() => scanning = s);
+      });
+    } catch (_) {
+      // Nền tảng không hỗ trợ BLE (vd Windows) — vẫn nhập tay được
+    }
+  }
+
+  @override
+  void dispose() {
+    _scanSub?.cancel();
+    _scanningSub?.cancel();
+    FlutterBluePlus.stopScan().catchError((_) {});
+    for (final t in [_name, _ip, _port, _ssid, _mac, _devName]) {
+      t.dispose();
+    }
+    super.dispose();
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Map<String, String> get _errors => p.validateGeneral(otherNames: widget.repo.list().map((e) => e.name));
+
+  bool get _stepValid => switch (step) {
+        0 => !_errors.containsKey('name'),
+        1 => p.connType == ConnType.wifi
+            ? !_errors.containsKey('ip') && !_errors.containsKey('port')
+            : !_errors.containsKey('ble'),
+        _ => template != ProfileTemplate.copy || copyFromId != null,
+      };
+
+  Future<void> _scan() async {
+    try {
+      final adapter = await FlutterBluePlus.adapterState
+          .where((s) => s != BluetoothAdapterState.unknown)
+          .first
+          .timeout(const Duration(seconds: 3));
+      if (adapter != BluetoothAdapterState.on) {
+        _snack('Hãy bật Bluetooth trên điện thoại');
+        return;
+      }
+      setState(() => results = []);
+      await FlutterBluePlus.startScan(withServices: [BleUuids.service], timeout: const Duration(seconds: 6));
+    } catch (e) {
+      _snack('Không quét được Bluetooth trên thiết bị này');
+    }
+  }
+
+  void _pickBle(ScanResult r) {
+    final name = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
+    setState(() {
+      p.ble!
+        ..mac = r.device.remoteId.str.toUpperCase()
+        ..deviceName = name;
+      _mac.text = p.ble!.mac;
+      _devName.text = name;
+      pingResult = null;
+    });
+  }
+
+  Future<void> _test() async {
+    setState(() {
+      pinging = true;
+      pingResult = null;
+    });
+    final isBle = p.connType == ConnType.ble;
+    if (isBle) {
+      try {
+        await FlutterBluePlus.stopScan();
+      } catch (_) {}
+    }
+    final r = await QuickPing.run(
+      ble: isBle,
+      ip: p.wifi!.ip,
+      port: p.wifi!.port,
+      bleId: p.ble!.mac,
+      controller: widget.controller,
+      connectedKey: widget.controller.connectedKey,
+    );
+    if (!mounted) return;
+    setState(() {
+      pinging = false;
+      pingResult = r;
+    });
+  }
+
+  Future<void> _finish() async {
+    if (pingResult?.ok != true) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Chưa kiểm tra được kết nối'),
+          content: Text(pingResult == null
+              ? 'Bạn chưa bấm Kiểm tra. Xe có thể đang tắt — vẫn lưu hồ sơ được và kết nối sau.'
+              : 'Xe không phản hồi (${pingResult!.error}). Xe có thể đang tắt — vẫn lưu hồ sơ được.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Quay lại')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Vẫn lưu')),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
+    setState(() => saving = true);
+    try {
+      final src = copyFromId == null ? null : widget.repo.get(copyFromId!);
+      template.applyTo(p, source: src);
+      if (p.connType == ConnType.wifi) {
+        p.ble = null;
+      } else {
+        p.wifi = null;
+      }
+      await widget.repo.save(p);
+      if (mounted) Navigator.pop(context, p);
+    } catch (e) {
+      _snack('Không lưu được: $e');
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    const titles = ['Tên và kiểu kết nối', 'Thông tin kết nối', 'Mẫu khởi đầu'];
+    return Scaffold(
+      appBar: AppBar(title: const Text('Tạo xe mới')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Gap.l, Gap.l, Gap.l, 0),
+            child: Row(
+              children: [
+                for (var i = 0; i < 3; i++) ...[
+                  Expanded(
+                    child: Container(
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: i <= step ? t.accentFill : t.surface2,
+                        borderRadius: BorderRadius.circular(Radii.pill),
+                      ),
+                    ),
+                  ),
+                  if (i < 2) const SizedBox(width: Gap.s),
+                ],
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Gap.l, Gap.m, Gap.l, 0),
+            child: Row(children: [
+              Text('BƯỚC ${step + 1}/3', style: AppText.caption.copyWith(color: t.accent)),
+              const SizedBox(width: Gap.s),
+              Text(titles[step], style: AppText.title.copyWith(color: t.text)),
+            ]),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(Gap.l),
+              children: switch (step) {
+                0 => _step1(),
+                1 => _step2(),
+                _ => _step3(),
+              },
+            ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          decoration: BoxDecoration(color: t.surface, border: Border(top: BorderSide(color: t.line))),
+          padding: const EdgeInsets.all(Gap.m),
+          child: Row(
+            children: [
+              if (step > 0)
+                OutlinedButton.icon(
+                  onPressed: saving ? null : () => setState(() => step--),
+                  icon: const AppIcon(AppIcons.back, mini: true),
+                  label: const Text('Quay lại'),
+                ),
+              const Spacer(),
+              FilledButton(
+                onPressed: !_stepValid || saving
+                    ? null
+                    : step < 2
+                        ? () => setState(() => step++)
+                        : _finish,
+                child: Text(step < 2 ? 'Tiếp' : 'Tạo xe'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _step1() => [
+        TextField(
+          controller: _name,
+          maxLength: 32,
+          autofocus: true,
+          decoration: InputDecoration(labelText: 'Tên xe', hintText: 'Xe tải đỏ', errorText: _errors['name']),
+          onChanged: (v) => setState(() => p.name = v),
+        ),
+        const SizedBox(height: Gap.m),
+        SegmentedButton<ConnType>(
+          segments: const [
+            ButtonSegment(value: ConnType.wifi, label: Text('WiFi'), icon: AppIcon(AppIcons.wifi, mini: true)),
+            ButtonSegment(
+                value: ConnType.ble, label: Text('Bluetooth'), icon: CustomIconView(CustomIcon.bluetooth, size: 20)),
+          ],
+          selected: {p.connType},
+          onSelectionChanged: (s) => setState(() {
+            p.connType = s.first;
+            pingResult = null;
+          }),
+        ),
+      ];
+
+  List<Widget> _step2() {
+    final t = context.tokens;
+    final e = _errors;
+    return [
+      if (p.connType == ConnType.wifi) ...[
+        Text('Kết nối điện thoại vào WiFi của xe (mặc định "RC-CAR", mật khẩu 12345678).',
+            style: AppText.label.copyWith(color: t.textMuted)),
+        const SizedBox(height: Gap.m),
+        TextField(
+          controller: _ip,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(labelText: 'Địa chỉ IP', errorText: e['ip']),
+          onChanged: (v) => setState(() {
+            p.wifi!.ip = v.trim();
+            pingResult = null;
+          }),
+        ),
+        const SizedBox(height: Gap.m),
+        TextField(
+          controller: _port,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(labelText: 'Port UDP', errorText: e['port']),
+          onChanged: (v) => setState(() {
+            p.wifi!.port = int.tryParse(v.trim()) ?? 0;
+            pingResult = null;
+          }),
+        ),
+        const SizedBox(height: Gap.m),
+        TextField(
+          controller: _ssid,
+          decoration: const InputDecoration(labelText: 'SSID (tuỳ chọn)'),
+          onChanged: (v) => p.wifi!.ssid = v.trim().isEmpty ? null : v.trim(),
+        ),
+      ] else ...[
+        Row(children: [
+          Expanded(child: Text('Xe tìm thấy', style: AppText.title.copyWith(color: t.text))),
+          OutlinedButton.icon(
+            onPressed: scanning ? null : _scan,
+            icon: scanning
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const AppIcon(AppIcons.scan, mini: true),
+            label: Text(scanning ? 'Đang quét' : 'Quét'),
+          ),
+        ]),
+        const SizedBox(height: Gap.s),
+        if (results.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: Gap.l),
+            child: Text('Chưa thấy xe nào. Bật nguồn xe rồi bấm Quét, hoặc nhập tay bên dưới.',
+                textAlign: TextAlign.center, style: AppText.label.copyWith(color: t.textMuted)),
+          )
+        else
+          for (final r in results) _bleTile(r),
+        const SizedBox(height: Gap.m),
+        TextField(
+          controller: _mac,
+          decoration: InputDecoration(labelText: 'MAC', hintText: 'AA:BB:CC:DD:EE:FF', errorText: e['ble']),
+          onChanged: (v) => setState(() {
+            p.ble!.mac = v.trim().toUpperCase();
+            pingResult = null;
+          }),
+        ),
+        const SizedBox(height: Gap.m),
+        TextField(
+          controller: _devName,
+          decoration: const InputDecoration(labelText: 'Tên thiết bị BLE'),
+          onChanged: (v) => setState(() => p.ble!.deviceName = v.trim()),
+        ),
+      ],
+      const SizedBox(height: Gap.l),
+      Row(children: [
+        OutlinedButton.icon(
+          onPressed: pinging || !_stepValid ? null : _test,
+          icon: pinging
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const AppIcon(AppIcons.signal, mini: true),
+          label: const Text('Kiểm tra'),
+        ),
+        const SizedBox(width: Gap.m),
+        if (pingResult != null)
+          Flexible(child: Pill(color: pingResult!.ok ? t.ok : t.bad, label: pingResult!.label)),
+      ]),
+      if (pingResult?.ok == false)
+        Padding(
+          padding: const EdgeInsets.only(top: Gap.s),
+          child: Text('Vẫn lưu được hồ sơ khi xe đang tắt.', style: AppText.label.copyWith(color: t.textMuted)),
+        ),
+    ];
+  }
+
+  Widget _bleTile(ScanResult r) {
+    final t = context.tokens;
+    final name = r.device.platformName.isNotEmpty
+        ? r.device.platformName
+        : (r.advertisementData.advName.isNotEmpty ? r.advertisementData.advName : 'Không tên');
+    final sel = p.ble!.mac.toUpperCase() == r.device.remoteId.str.toUpperCase();
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Radii.card),
+        side: BorderSide(color: sel ? t.accent : t.line),
+      ),
+      child: ListTile(
+        leading: CustomIconView(CustomIcon.car, color: sel ? t.accent : t.textMuted),
+        title: Text(name),
+        subtitle: Text('${r.device.remoteId}   ${r.rssi} dBm'),
+        trailing: sel ? AppIcon(AppIcons.success, color: t.accent, solid: true) : null,
+        onTap: () => _pickBle(r),
+      ),
+    );
+  }
+
+  List<Widget> _step3() {
+    final others = widget.repo.list();
+    return [
+      RadioGroup<ProfileTemplate>(
+        groupValue: template,
+        onChanged: (v) => setState(() => template = v ?? template),
+        child: Column(
+          children: [
+            for (final tpl in ProfileTemplate.values)
+              Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(Radii.card),
+                  side: BorderSide(color: template == tpl ? context.tokens.accent : context.tokens.line),
+                ),
+                child: RadioListTile<ProfileTemplate>(
+                  value: tpl,
+                  enabled: tpl != ProfileTemplate.copy || others.isNotEmpty,
+                  title: Text(tpl.label),
+                  subtitle: Text(tpl == ProfileTemplate.copy && others.isEmpty ? 'Chưa có xe nào để sao chép' : tpl.description),
+                ),
+              ),
+          ],
+        ),
+      ),
+      if (template == ProfileTemplate.copy && others.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(top: Gap.m),
+          child: DropdownButtonFormField<String>(
+            initialValue: copyFromId,
+            decoration: const InputDecoration(labelText: 'Sao chép từ xe'),
+            items: [for (final o in others) DropdownMenuItem(value: o.id, child: Text(o.name))],
+            onChanged: (v) => setState(() => copyFromId = v),
+          ),
+        ),
+    ];
+  }
+}
