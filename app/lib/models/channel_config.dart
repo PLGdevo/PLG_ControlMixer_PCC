@@ -1,5 +1,5 @@
-// Mô hình kênh điều khiển (B1). Kênh không quyết định loại phần tử trên màn Lái:
-// phần tử (cần gạt, nút, ...) được thêm và cấu hình riêng trong bố cục, rồi gán kênh vào (B2, H3).
+// Kênh đầu ra (Sprint 4 — O1): Min/Center/Max, trim, offset, reverse, failsafe.
+// Kênh nhận giá trị từ luật mix (M); kênh tắt luôn ra failsafeUs.
 
 class ChannelConfig {
   static const minLimitUs = 500;
@@ -13,9 +13,6 @@ class ChannelConfig {
   int failsafeUs;
   bool enabled;
 
-  /// Giá trị khi nút/công tắc ở trạng thái tắt, −100…+100% (mặc định −100%)
-  double offValuePct;
-
   ChannelConfig({
     required this.index,
     required this.name,
@@ -27,10 +24,9 @@ class ChannelConfig {
     this.reverse = false,
     this.failsafeUs = 1500,
     this.enabled = false,
-    this.offValuePct = -100,
   });
 
-  /// CH1 = Lái, CH2 = Ga (bố cục mẫu gán vào cần ngang / cần dọc), CH3–CH10 tắt
+  /// CH1 = Lái, CH2 = Ga, CH3–CH10 tắt
   factory ChannelConfig.defaults(int index) => switch (index) {
         1 => ChannelConfig(index: 1, name: 'Lái', enabled: true, minUs: 1100, maxUs: 1900),
         2 => ChannelConfig(index: 2, name: 'Ga', enabled: true),
@@ -41,9 +37,6 @@ class ChannelConfig {
       List.generate(10, (i) => ChannelConfig.defaults(i + 1));
 
   String get label => 'CH$index';
-
-  /// Kênh đang dùng (được gán vào phần tử trên màn Lái)
-  bool get active => enabled;
 
   int get effectiveCenter => (centerUs + trimUs + offsetUs).clamp(minUs, maxUs).toInt();
 
@@ -76,7 +69,6 @@ class ChannelConfig {
     if (failsafeUs < minUs || failsafeUs > maxUs) e['failsafe'] = 'Failsafe phải nằm trong [Min, Max]';
     if (trimUs.abs() > 200) e['trim'] = 'Trim trong khoảng ±200 µs';
     if (offsetUs.abs() > 300) e['offset'] = 'Offset trong khoảng ±300 µs';
-    if (offValuePct < -100 || offValuePct > 100) e['off'] = 'Giá trị tắt trong khoảng −100…+100%';
     return e;
   }
 
@@ -91,7 +83,6 @@ class ChannelConfig {
         'reverse': reverse,
         'failsafeUs': failsafeUs,
         'enabled': enabled,
-        'offValuePct': offValuePct,
       };
 
   factory ChannelConfig.fromJson(Map<String, dynamic> j) => ChannelConfig(
@@ -105,7 +96,6 @@ class ChannelConfig {
         reverse: j['reverse'] as bool? ?? false,
         failsafeUs: j['failsafeUs'] as int? ?? 1500,
         enabled: j['enabled'] as bool? ?? false,
-        offValuePct: (j['offValuePct'] as num?)?.toDouble() ?? -100,
       );
 
   ChannelConfig copy() => ChannelConfig.fromJson(toJson());

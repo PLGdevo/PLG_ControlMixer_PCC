@@ -4,7 +4,7 @@ import '../models/channel_config.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 
-/// Một hàng trong tab Kênh: CHn · tên · phần tử đang gán · công tắc bật/tắt (B3)
+/// Một hàng trong tab Kênh: CHn · tên · luật mix ghi vào · công tắc bật/tắt (O1)
 class ChannelTile extends StatelessWidget {
   const ChannelTile({
     super.key,
@@ -16,7 +16,7 @@ class ChannelTile extends StatelessWidget {
 
   final ChannelConfig channel;
 
-  /// Phần tử trên màn Lái đang giữ kênh (null = chưa gán)
+  /// Tóm tắt nguồn của kênh (vd "Lái · 2 luật"); null = chưa có luật nào
   final String? controlLabel;
   final VoidCallback onTap;
   final ValueChanged<bool> onEnabled;
@@ -53,7 +53,7 @@ class ChannelTile extends StatelessWidget {
                   children: [
                     Text(c.name, style: AppText.title.copyWith(fontSize: 16, color: on ? t.text : t.disabled)),
                     Text(
-                      '${controlLabel ?? 'Chưa gán'} · ${c.minUs}/${c.centerUs}/${c.maxUs} µs${c.reverse ? ' · đảo' : ''}',
+                      '${controlLabel ?? 'Chưa có luật'} · ${c.minUs}/${c.centerUs}/${c.maxUs} µs${c.reverse ? ' · đảo' : ''}',
                       style: AppText.label.copyWith(color: on ? t.textMuted : t.disabled, fontSize: 13),
                     ),
                   ],

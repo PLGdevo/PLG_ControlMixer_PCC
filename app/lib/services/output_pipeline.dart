@@ -1,38 +1,63 @@
-// Đường tính giá trị gửi đi (B1), chạy trong app mỗi chu kỳ gửi:
-// phần tử (%) → giới hạn hộp số (kênh Ga) → mix (G) → reverse → µs quanh Center + trim + offset
-// → kẹp [Min, Max]. Xe chỉ nhận kết quả cuối (0.5).
+// Đường tính giá trị gửi đi (Sprint 4 — 0.2, O2), chạy trong app mỗi chu kỳ gửi:
+// Input → Condition → Mixer (%) → hộp số (kênh Ga) → reverse → µs quanh Center + trim + offset
+// → kẹp [Min, Max]. Kênh tắt ra failsafeUs. Xe chỉ nhận kết quả cuối (0.5).
+import 'dart:typed_data';
+
+import '../layout/return_motion.dart';
 import '../models/car_profile.dart';
 import '../models/channel_config.dart';
-import 'mix_engine.dart';
+import '../models/control_layout.dart';
+import '../models/input_def.dart';
+import 'input_manager.dart';
+import 'mixer_engine.dart';
 
 class OutputPipeline {
-  OutputPipeline(this.profile) : mix = MixEngine(profile.mixes);
+  OutputPipeline(CarProfile p)
+      : profile = p,
+        inputs = InputManager(p.inputs),
+        _restInputs = InputManager(p.inputs) {
+    mixer = MixerEngine(inputs, conditions: p.conditions, rules: p.mixer);
+    _restMixer = MixerEngine(_restInputs, conditions: p.conditions, rules: p.mixer);
+  }
 
   CarProfile profile;
-  final MixEngine mix;
+  final InputManager inputs;
+  late final MixerEngine mixer;
+  final InputManager _restInputs;
+  late final MixerEngine _restMixer;
 
-  /// Nạp lại hồ sơ sau khi sửa cấu hình (có tác dụng ngay ở chu kỳ tiếp theo)
+  /// Kết quả mixer của chu kỳ gần nhất (10 kênh %, CH1 ở vị trí 0)
+  Float64List get lastPct => mixer.out;
+
+  /// Nạp lại hồ sơ sau khi sửa cấu hình (có tác dụng ngay ở chu kỳ tiếp theo). Giữ trạng thái Input.
   void update(CarProfile p) {
     profile = p;
-    mix.rules = p.mixes;
+    inputs.load(p.inputs);
+    mixer.load(conditions: p.conditions, rules: p.mixer);
+    _restInputs.load(p.inputs);
+    _restMixer.load(conditions: p.conditions, rules: p.mixer);
   }
 
-  /// Mất kết nối, thoát màn Lái, xe báo failsafe: reset trạng thái hysteresis / select (G3)
-  void reset() => mix.reset();
+  /// Mất kết nối, DISARM, thoát màn Lái, xe báo failsafe: reset hysteresis / khoá an toàn (M4, K2)
+  void reset() => mixer.reset();
 
-  /// Giá trị % sau hộp số và mix, trước khi đổi sang µs. `input`: 10 kênh, null = chưa gán.
-  List<double> mixedPct(List<double?> input, {required int gear}) {
-    final pct = List<double>.generate(10, (i) => i < input.length ? (input[i] ?? 0) : 0);
-    const thr = CarProfile.throttleCh - 1;
-    pct[thr] = pct[thr] * gearLimitPct(gear) / 100;
-    return mix.run(pct);
-  }
+  /// Chạy mixer một chu kỳ: 10 kênh % (−100…+100)
+  Float64List mixed() => mixer.run();
 
-  /// 10 kênh µs gửi xuống xe. Kênh chưa gán và không bị mix ghi vào thì ra Center.
-  List<int> run(List<double?> input, {required int gear}) {
-    final pct = mixedPct(input, gear: gear);
-    return List<int>.generate(10, (i) => toUs(profile.channels[i], pct[i]));
-  }
+  /// Chạy một chu kỳ và đổi sang 10 kênh µs gửi xuống xe
+  List<int> run({required int gear}) => toUsList(mixed(), gear: gear);
+
+  /// % sau mixer → µs (O2): hộp số áp lên kênh Ga sau mixer; kênh tắt ra failsafeUs
+  List<int> toUsList(List<double> pct, {required int gear}) => List<int>.generate(10, (i) {
+        final ch = profile.channels[i];
+        if (!ch.enabled) return ch.failsafeUs;
+        var p = pct[i];
+        if (i == CarProfile.throttleCh - 1) p = p * gearLimitPct(gear) / 100;
+        return toUs(ch, p);
+      });
+
+  /// Failsafe của 10 kênh (READY gửi giá trị này — R1)
+  List<int> failsafeUs() => [for (final c in profile.channels) c.failsafeUs];
 
   double gearLimitPct(int gear) {
     final g = profile.gears;
@@ -48,4 +73,24 @@ class OutputPipeline {
     final us = p >= 0 ? center + p / 100 * (ch.maxUs - center) : center + p / 100 * (center - ch.minUs);
     return us.round().clamp(ch.minUs, ch.maxUs).toInt();
   }
+
+  /// Giá trị % của kênh `ch` khi mọi cần gạt trên bố cục ở vị trí nghỉ (R2, H5).
+  /// Nút / công tắc giữ trạng thái hiện tại, riêng nút nhấn giữ coi như đã thả.
+  double restPct(int ch, ControlLayout layout) {
+    for (final d in _restInputs.defs) {
+      if (d.isAxis) {
+        _restInputs.setPosition(d.id, ReturnMotion.restPct(layout, d.id, isThrottle: profile.isThrottleInput(d.id)));
+      } else if (d.type != InputType.constant) {
+        final momentary = layout.itemForInput(d.id)?.kind == ItemKind.button;
+        _restInputs.setState(d.id, momentary ? d.restState : inputs.stateOf(d.id));
+      }
+    }
+    _restMixer.reset();
+    return _restMixer.run()[ch - 1];
+  }
+
+  /// Kênh Ga đang ở vị trí nghỉ (sai số ±5%). Tính lại mixer với Input hiện tại (tính lặp với
+  /// cùng đầu vào không đổi trạng thái trễ / khoá an toàn).
+  bool throttleAtRest(ControlLayout layout) =>
+      (mixed()[CarProfile.throttleCh - 1] - restPct(CarProfile.throttleCh, layout)).abs() <= 5;
 }

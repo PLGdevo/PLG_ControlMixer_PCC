@@ -25,13 +25,11 @@ abstract final class ReturnMotion {
   static double onExit(ReturnConfig cfg, {required bool isThrottle}) =>
       isThrottle && cfg.mode == ReturnMode.hold ? 0 : cfg.targetPct;
 
-  /// Vị trí nghỉ (%) của kênh `ch` trên bố cục: cần gạt → `onExit` của trục gán kênh đó,
-  /// phần tử khác hoặc chưa có phần tử → 0. Dùng để kiểm "ga đã thả" trước khi sửa bố cục (H5).
-  static double restPct(ControlLayout layout, int ch, {required bool isThrottle}) {
-    final it = layout.itemForChannel(ch);
-    if (it == null || !it.kind.isStick) return 0;
-    final cfg = (it.kind == ItemKind.stick2D && it.channelY == ch ? it.returnCfgY : it.returnCfg) ?? ReturnConfig();
-    return onExit(cfg, isThrottle: isThrottle);
+  /// Vị trí nghỉ (%) của Input `inputId` trên bố cục: cần gạt → `onExit` của trục gắn Input đó,
+  /// phần tử khác hoặc chưa có phần tử → 0. Dùng để tính vị trí nghỉ của kênh Ga (H5, R2).
+  static double restPct(ControlLayout layout, String inputId, {required bool isThrottle}) {
+    final cfg = layout.itemForInput(inputId)?.returnFor(inputId);
+    return cfg == null ? 0 : onExit(cfg, isThrottle: isThrottle);
   }
 
   /// Vùng chết: |v| < dz → 0, phần còn lại co giãn lại về 0…100

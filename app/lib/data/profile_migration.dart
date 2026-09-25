@@ -1,4 +1,4 @@
-// Nâng JSON hồ sơ cũ lên `CarProfile.schemaVersion` hiện tại (B5, E1).
+// Nâng JSON hồ sơ cũ lên `CarProfile.schemaVersion` hiện tại (B5, E1, Sprint 4 — J4).
 import 'dart:convert';
 
 import '../models/car_profile.dart';
@@ -17,7 +17,8 @@ class ProfileFormatException implements Exception {
 
 abstract final class ProfileMigration {
   /// Trả về bản JSON ở định dạng mới nhất; ném [ProfileFormatException] nếu không đọc được.
-  static Map<String, dynamic> migrate(Map<String, dynamic> input) {
+  /// Cảnh báo của bước chuyển v1 → v2 (báo cáo chuyển đổi — J4) được thêm vào `warnings`.
+  static Map<String, dynamic> migrate(Map<String, dynamic> input, {List<String>? warnings}) {
     var j = Map<String, dynamic>.from(input);
     var v = j['schemaVersion'] as int? ?? 0;
     if (v > CarProfile.schemaVersion) {
@@ -26,6 +27,12 @@ abstract final class ProfileMigration {
     if (v == 0) {
       j = _v0ToV1(j);
       v = 1;
+    }
+    if (v == 1) {
+      final r = v1ToV2(j);
+      j = r.json;
+      warnings?.addAll(r.warnings);
+      v = 2;
     }
     if (j['id'] is! String || (j['id'] as String).isEmpty) {
       throw ProfileFormatException('Hồ sơ thiếu mã (id)');
@@ -235,7 +242,7 @@ abstract final class ProfileMigration {
               ..weightPct = d('gainPct', 100)
               ..offsetPct = d('offsetPct', 0);
           } else {
-            r.curve = Curve(
+            r.curve = MixCurve(
               type: CurveType.points,
               points: (m['curvePts'] as List?)?.map((e) => (e as num).toDouble()).toList(),
             );

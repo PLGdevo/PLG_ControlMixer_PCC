@@ -2,7 +2,9 @@
 
 > Mô hình điều khiển mới: người dùng tạo **Input**, dùng **luật mix** có **Condition** để quyết định Input tác động lên kênh nào, rồi **kênh** đổi sang µs gửi xuống xe.
 >
-> Phiên bản: 1.0 · Ngày: 25/09/2026 · Dự án: `rc_car` · Thay thế: B1 (đường tính), B2–B4 (gán kênh 1:1), G1–G6 (`MixRule`), phần "Gán kênh" của H3 trong `dac_ta_sprint_3.md`
+> Phiên bản: 1.1 · Ngày: 25/09/2026 · Dự án: `rc_car` · Thay thế: B1 (đường tính), B2–B4 (gán kênh 1:1), G1–G6 (`MixRule`), phần "Gán kênh" của H3 trong `dac_ta_sprint_3.md`
+>
+> **Thay đổi ở bản 1.1 (chốt khi làm):** giới hạn 64 luật / 32 Condition đặt tên / 48 Input (đủ chỗ cho hồ sơ Sprint 3 chuyển sang); `hyst` 0…200; "tầng" chỉ tính AND/OR/NOT; J4 dùng điều kiện có trễ viết thẳng trong luật thay cho Condition đặt tên, thêm luật hằng 0% cho kênh nhận luật `max`; tên file theo mã đã viết (P1); ghi rõ cầu nối giao thức v1 (R1).
 >
 > Giữ nguyên từ Sprint 3: nguyên tắc 0.5 (app giữ cấu hình, xe chỉ nhận 10 kênh µs + failsafe), giao thức C1, failsafe E5–E6, bố cục H1–H6, tự về H3b.
 
@@ -64,7 +66,7 @@ Cả chuỗi chạy trong app, mỗi chu kỳ gửi (**25 ms**, giữ nhịp hi�
 | Input từ phần tử trên màn Lái; Input hằng số | Input từ cảm biến điện thoại (gyro, gia tốc), GPS, telemetry |
 | UDP, BLE (như hiện tại) | UART, MAVLink, SBUS/CRSF (Protocol Engine để sẵn interface) |
 | Nhịp gửi 25 ms | 50 / 100 / 200 Hz |
-| Tối đa 32 luật, 16 Condition đặt tên, 32 Input | — |
+| Tối đa 64 luật, 32 Condition đặt tên, 48 Input | — |
 
 ---
 
@@ -91,7 +93,7 @@ class InputLevels {
 
 - Input thuộc **hồ sơ** (`CarProfile.inputs`), không thuộc bố cục. Nhiều bố cục dùng chung một Input, nên đổi bố cục không phải cấu hình lại mix.
 - `constant` là Input ảo không cần phần tử trên màn (vd luật "CH5 = 30% khi A bật").
-- Giới hạn 32 Input.
+- Giới hạn 48 Input.
 
 ### I2. Loại Input và phần tử tương thích
 
@@ -147,12 +149,12 @@ Condition là cây biểu thức, lưu JSON:
 | So với | **Trạng thái** của Input (I2) |
 | `==` / `!=` trên axis | So với sai số ±0,5% |
 
-- Giới hạn: sâu tối đa 4 tầng, tối đa 8 phép `cmp` trong một biểu thức.
+- Giới hạn: lồng tối đa 4 tầng AND / OR / NOT (phép so sánh, `ref`, `true` không tính tầng), tối đa 8 phép `cmp` trong một biểu thức.
 - `input` phải tồn tại trong hồ sơ; xoá Input đang được dùng thì app liệt kê các luật/Condition bị ảnh hưởng và hỏi xác nhận (luật bị ảnh hưởng chuyển sang tắt).
 
 ### K2. Hysteresis (thay cho luật threshold G2a)
 
-- `hyst` chỉ dùng với `>`, `>=`, `<`, `<=`; mặc định 0; khoảng 0…50.
+- `hyst` chỉ dùng với `>`, `>=`, `<`, `<=`; mặc định 0; khoảng 0…200.
 - `>= 80, hyst 10`: chuyển **đúng** khi trạng thái ≥ 80; chuyển **sai** khi < 70; ở giữa thì **giữ kết quả trước**. Ban đầu là sai.
 - `<= 20, hyst 10`: đúng khi ≤ 20; sai khi > 30.
 - Mỗi `cmp` có hysteresis giữ trạng thái riêng trong RAM, reset về sai khi: mất kết nối, DISARM, thoát màn Lái, xe báo failsafe.
@@ -175,7 +177,8 @@ class ConditionDef { String id; String name; Expr expr; }
 - Dùng lại một điều kiện ở nhiều luật (vd `cond_emergency`), sửa một chỗ.
 - `ref` không được tạo vòng (A tham chiếu B, B tham chiếu A): app báo lỗi và không cho lưu.
 - Condition đặt tên có hysteresis thì mọi luật tham chiếu dùng **chung** một trạng thái.
-- Giới hạn 16 Condition đặt tên.
+- Giới hạn 32 Condition đặt tên.
+- AND / OR luôn tính **mọi** nhánh (không dừng sớm) để trạng thái trễ của từng nhánh luôn được cập nhật.
 
 ---
 
@@ -212,7 +215,7 @@ class SwitchSafety {
 }
 ```
 
-Giới hạn **32 luật** (`MixRule.maxRules`); đủ thì khoá nút *Thêm luật*.
+Giới hạn **64 luật** (`MixRule.maxRules`); đủ thì khoá nút *Thêm luật*.
 
 ### M2. Tính một luật
 
@@ -288,7 +291,7 @@ Bảng dưới chỉ xét hai luật này (không có luật lái `r_steer` như
 
 ### M5. Hiệu năng
 
-- 32 luật, 16 Condition đặt tên, 32 Input: tính một chu kỳ ≤ **2 ms** trên Android tầm trung (như G1).
+- 64 luật, 32 Condition đặt tên, 48 Input: tính một chu kỳ ≤ **2 ms** trên Android tầm trung (như G1).
 - Không cấp phát đối tượng mới trong vòng tính: biểu thức được **biên dịch** một lần khi nạp hồ sơ thành danh sách phẳng; mọi trạng thái (hysteresis, latch) nằm trong mảng có sẵn.
 
 ### M6. Mô tả tự sinh
@@ -361,8 +364,10 @@ DISCONNECTED ──kết nối──► CONNECTED ──FS_WRITE/FS_ACK ok──
 |---|---|---|
 | DISCONNECTED | Không | Huy hiệu "Chưa kết nối" |
 | CONNECTED | Không gửi `CONTROL` (đang đồng bộ failsafe) | "Đang đồng bộ…" |
-| READY | `CONTROL` với **`failsafeUs`** của từng kênh | Nút **ARM**, phần tử hiện mờ nhưng vẫn kéo được để kiểm tra |
-| ARMED | `CONTROL` với kết quả mixer | Lái bình thường; huy hiệu `ARMED` màu `accent` |
+| READY | `CONTROL` với **`failsafeUs`** của từng kênh | Nút **ARM**, phần tử vẫn kéo được để kiểm tra |
+| ARMED | `CONTROL` với kết quả mixer | Lái bình thường; nút `ARMED` màu `accent` |
+
+**Cầu nối giao thức v1** (tới khi có C1–C2): xe chỉ nhận CH1/CH2 dạng −1…+1 và tự áp servo, hộp số, failsafe. READY gửi trung tính (0, 0); ARMED gửi kết quả mixer của CH1/CH2 (chưa qua hộp số, vì xe v1 tự áp). "Đồng bộ failsafe" dùng `CarController.syncProfile` (ghi cấu hình v1).
 
 ### R2. Điều kiện ARM
 
@@ -374,11 +379,11 @@ Tất cả phải đúng:
 4. Không ở chế độ Sửa bố cục.
 5. Nếu hồ sơ đặt `armCondition` (Condition, vd `sw_arm == 1`) thì Condition đó đúng.
 
-Thao tác: **nhấn giữ nút ARM 1 s** (có vòng tiến trình). Tuỳ chọn `autoArm` trong hồ sơ (mặc định tắt): tự ARM khi đủ điều kiện, dùng cho người không muốn thêm thao tác.
+Thao tác: **nhấn giữ nút ARM 1 s** (có vòng tiến trình). Tuỳ chọn `autoArm` trong hồ sơ (mặc định tắt): tự ARM **một lần** sau mỗi lần kết nối, khi đủ điều kiện. DISARM rồi (tự động hay do người dùng) thì phải giữ nút ARM lại.
 
 ### R3. DISARM
 
-Tự DISARM khi: mất kết nối, telemetry báo xe đang failsafe, app xuống nền, vào Sửa bố cục, thoát màn Lái, `armCondition` chuyển sai. Người dùng bấm nút DISARM thì DISARM ngay (không cần giữ).
+Tự DISARM khi: mất kết nối hoặc mất tín hiệu (không có telemetry quá 1 s), telemetry báo xe đang failsafe, app xuống nền, vào Sửa bố cục, mở Cấu hình, thoát màn Lái, `armCondition` chuyển sai. Người dùng bấm nút DISARM thì DISARM ngay (không cần giữ).
 
 Sau DISARM: về READY, reset hysteresis và khoá an toàn, phải thoả lại R2 mới ARM được.
 
@@ -418,7 +423,8 @@ Lỗi thì khoá nút Lưu; cảnh báo thì hiện vàng, vẫn lưu được.
 
 - Danh sách **nhóm theo kênh đích** (CH1 … CH10), trong nhóm xếp theo priority rồi thứ tự; kéo để đổi thứ tự trong nhóm.
 - Mỗi thẻ: mô tả tự sinh (M6), công tắc bật/tắt, chấm `accent` khi luật đang active (lúc lái hoặc xem trước), nhãn *Chờ về giữa* khi đang chờ.
-- Đầu danh sách: *"14/32 luật · 12 đang bật"*.
+- Cuối danh sách: *"14/64 luật · 12 đang bật · priority cao chạy sau"*.
+- Kéo chỉ đổi thứ tự giữa các luật cùng priority trong nhóm (priority vẫn quyết định trước).
 
 ### U4. Trình sửa luật
 
@@ -527,7 +533,7 @@ File `app/assets/schema/profile.v2.schema.json` (JSON Schema draft 2020-12) mô 
 
 ### J4. Chuyển hồ sơ Sprint 3 (v1 → v2)
 
-Chạy trong `profile_migration.dart` khi đọc file có `schemaVersion: 1`; file gốc được sao lưu thành `profiles/<id>.v1.json`.
+Chạy trong `profile_migration.dart` khi đọc file có `schemaVersion` < 2 (v0 → v1 → v2); file gốc được sao lưu thành `profiles/<id>.v1.bak` (không đuôi `.json` để không bị đọc lại như một hồ sơ), rồi ghi bản đã chuyển.
 
 | Sprint 3 | Sprint 4 |
 |---|---|
@@ -538,7 +544,11 @@ Chạy trong `profile_migration.dart` khi đọc file có `schemaVersion: 1`; fi
 | Luật linear | `source = ch{src}`, `weight = gainPct`, `offset = offsetPct`, `combine`: override→replace, add→add, max→max; `priority 1`; thứ tự giữ nguyên |
 | Luật curve | Như linear, `curve = points(curvePts)` |
 | `gateCh` | `condition = ch{gate} > 0` |
-| Luật threshold | Condition đặt tên `c_{id}` = `ch{src} >= onAt, hyst = onAt − offBelow`; hai luật hằng số: `offValue` (Condition `not ref`) và `onValue` (Condition `ref`), cùng đích, `priority 1` |
+| Luật threshold | Hai luật hằng số cùng đích, `priority 1`: `onValue` khi `ch{src} >= onAt, hyst = onAt − offBelow`, `offValue` khi `not (…)` cùng biểu thức. Hai biểu thức cùng đầu vào nên trạng thái trễ luôn trùng nhau, không cần Condition đặt tên |
+| Hằng số trong luật threshold / kênh không có phần tử | Input hằng số `k_{giá trị}` (vd `k_100`, `k_m40`); kênh nguồn không có phần tử đọc `k_0` như Sprint 3 đọc 0% |
+| Luật `max` ghi vào kênh không có phần tử | Thêm luật gốc `k_0 → CHn` (priority 0) để so với 0% như Sprint 3 |
+| Luật mix Sprint 3 (không phải select) | `safety.requireNeutral = false` (Sprint 3 không có khoá an toàn ở các loại này) |
+| Luật đang bật ghi vào kênh đang tắt | Bật kênh (Sprint 3 vẫn xuất giá trị mix; Sprint 4 kênh tắt ra failsafe) |
 | Luật select | Hai luật: nguồn → `targetOnCh` khi `ch{select} > 0`; nguồn → `targetOffCh` khi `not`; `safety` lấy từ `requireNeutralToSwitch`, `neutralDeadzonePct` |
 | Luật lấy nguồn là kênh **đã bị luật khác ghi** (chuỗi CH1→CH3→CH5) | Dùng Input của kênh nguồn (giá trị **trước** mix); ghi cảnh báo "kết quả có thể khác" |
 | Kênh bật nhưng không có phần tử và không bị luật ghi | Không tạo luật (ra Center như cũ) |
@@ -557,18 +567,22 @@ Chạy trong `profile_migration.dart` khi đọc file có `schemaVersion: 1`; fi
 |---|---|
 | `models/input_def.dart` | Mới: `InputDef`, `InputLevels`, enum `InputType`, `AxisRange` |
 | `models/condition.dart` | Mới: cây `Expr`, `ConditionDef`, (de)serialize, kiểm tra |
-| `models/mix_rule.dart` | **Viết lại** theo M1; bỏ `MixType`, `findCycle` |
+| `models/mixer_rule.dart` | Mới: `MixRule`, `MixCurve`, `SwitchSafety`, `Combine`, `validateMixer` (M1, V). `models/mix_rule.dart` cũ bị xoá |
 | `models/channel_config.dart` | Bỏ `offValuePct` |
 | `models/control_layout.dart` | `channel/channelY` → `inputId/inputIdY`; `assignChannel` → `bindInput` |
 | `models/car_profile.dart` | Thêm `inputs`, `conditions`, `arm`, `output`; `mixes` → `mixer`; `schemaVersion = 2` |
 | `data/profile_migration.dart` | Thêm bước v1 → v2 (J4) |
 | `services/input_manager.dart` | Mới: đọc giá trị phần tử → trạng thái + % của từng Input |
 | `services/condition_engine.dart` | Mới: biên dịch `Expr` thành chương trình phẳng, giữ trạng thái hysteresis |
-| `services/mix_engine.dart` | **Viết lại** theo M2–M4 |
+| `services/mixer_engine.dart` | Mới: `MixerEngine` theo M2–M4. `services/mix_engine.dart` cũ bị xoá |
 | `services/output_pipeline.dart` | Input → Condition → Mixer → Channel Stage (O2) → ARM gate |
 | `services/arm_controller.dart` | Mới: máy trạng thái R1–R3 |
-| `protocol/output_protocol.dart` | Mới: interface O4 + `RcV2Udp`, `RcV2Ble`, `RcV1Legacy` |
-| `controller/car_controller.dart` | Bỏ `syncProfile`, `holdNeutral` 2 kênh; dùng `OutputPipeline` + `ArmController` + `OutputProtocol` |
+| `protocol/output_protocol.dart` | Mới: interface O4 + `RcV2Udp`, `RcV2Ble`, `RcV1Legacy` — **làm cùng C1–C2** (chưa làm) |
+| `controller/car_controller.dart` | Đã: bỏ `values` / `holdNeutral`, dùng `OutputPipeline` + `ArmController`, vị trí theo mã Input. Còn lại khi có C1: bỏ `syncProfile`, dùng `OutputProtocol` |
+| `data/profile_repository.dart` | Tự chuyển hồ sơ cũ lúc mở app, giữ bản `.bak`, `migrationReports` cho báo cáo |
+| `screens/settings_screen.dart` | 6 tab (U1): thêm Input, Mix nhóm theo kênh, mục ARM trong Chung |
+| `screens/garage_screen.dart` | Hộp thoại báo cáo chuyển đổi (J4) |
+| `test/support/sprint3_reference.dart`, `test/fixtures/sprint3_profile.json` | Bản đóng băng thuật toán Sprint 3 + hồ sơ Sprint 3 thật cho N4 |
 | `screens/input_screen.dart`, `widgets/condition_builder.dart` | Mới (U2, U4) |
 | `screens/mix_rule_screen.dart`, `widgets/mix_rule_card.dart`, `widgets/mix_preview.dart` | Viết lại (U3, U4) |
 | `layout/properties_panel.dart`, `layout/layout_templates.dart` | U5; mẫu dựng bằng Input + luật |
@@ -611,7 +625,7 @@ class OutputPipeline {
 | N3 | Vector test `tests/mix_vectors.json` (đầu vào theo thời gian → 10 kênh µs mong đợi), chạy qua cả `OutputPipeline` |
 | N4 | Migration: mỗi dòng bảng J4 một ca; hồ sơ Sprint 3 thật trong `app/test/fixtures/` chuyển xong qua J3 và V; **so kết quả µs** Sprint 3 và Sprint 4 trên cùng chuỗi đầu vào (khác nhau chỉ được phép ở ca có cảnh báo) |
 | N5 | `ArmController`: mọi cạnh của R1; không ARM được khi ga lệch nghỉ, khi đang sửa bố cục, khi `armCondition` sai; tự DISARM khi app xuống nền |
-| N6 | Hiệu năng: 32 luật + 16 Condition + 32 Input, 10 000 chu kỳ, p99 ≤ 2 ms trên máy thật; không cấp phát trong vòng (đếm bằng `dart:developer` timeline) |
+| N6 | Hiệu năng: 64 luật + 32 Condition + 48 Input, 10 000 chu kỳ, p99 ≤ 2 ms (đã chạy trên PC; còn đo trên máy Android thật); không cấp phát trong vòng |
 | N7 | Tích hợp với `fake_car.py`: READY gửi `failsafeUs`; ARM rồi gạt A khi Slider X = 70% → `fake_car.py` in CH1 giữ 70% tới khi về giữa |
 
 ---
@@ -627,7 +641,7 @@ class OutputPipeline {
 - [ ] Mở hồ sơ Sprint 3 (có đèn, còi, luật select và threshold): tự chuyển, có báo cáo, lái ra **cùng µs** như Sprint 3 với cùng thao tác.
 - [ ] Đổi sang bố cục khác dùng chung Input: mix vẫn đúng, không phải cấu hình lại.
 - [ ] Nhập file hồ sơ sai schema: báo lỗi rõ trường nào sai, không ghi đè hồ sơ đang có.
-- [ ] 32 luật chạy ≤ 2 ms một chu kỳ trên Android tầm trung.
+- [ ] 64 luật chạy ≤ 2 ms một chu kỳ trên Android tầm trung.
 
 ---
 
@@ -656,5 +670,5 @@ Làm song song với các mục Sprint 4 còn lại trong `dac_ta_sprint_3.md` (
 | 1 | Mặc định ARM: giữ nút 1 s hay tự ARM? | Giữ nút 1 s, `autoArm` tắt | R2, U6 |
 | 2 | READY gửi `failsafeUs` hay Center? | `failsafeUs` (cùng hành vi với lúc mất sóng) | R1 |
 | 3 | Kênh Ga/Lái cố định CH2/CH1 hay chọn được? | Cố định trong Sprint 4 | O1, R2, H5 |
-| 4 | Giới hạn 32 luật / 16 Condition / 32 Input có đủ? | Đủ cho xe; tăng sau nếu cần | M1, M5 |
+| 4 | Giới hạn 64 luật / 32 Condition / 48 Input có đủ? | Đủ cho xe và cho hồ sơ Sprint 3 chuyển sang | M1, M5 |
 | 5 | Có giữ nút *Toàn dải* hay đổi mặc định unipolar thành Min…Max? | Giữ nút; mặc định unipolar 0…100 → Center…Max | I2, M4 |

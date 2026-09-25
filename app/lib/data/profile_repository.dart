@@ -17,6 +17,10 @@ class ProfileRepository extends ChangeNotifier {
   final Map<String, CarProfile> _cache = {};
   final List<String> loadErrors = [];
 
+  /// Hồ sơ vừa được tự chuyển sang định dạng mới lúc mở app: mã hồ sơ → cảnh báo (báo cáo J4).
+  /// Màn Xe của tôi hiện một lần rồi xoá.
+  final Map<String, List<String>> migrationReports = {};
+
   static Future<ProfileRepository> open() async {
     final base = await getApplicationSupportDirectory();
     final repo = ProfileRepository(Directory('${base.path}${Platform.pathSeparator}profiles'));
@@ -33,8 +37,18 @@ class ProfileRepository extends ChangeNotifier {
     await for (final f in dir.list()) {
       if (f is! File || !f.path.endsWith('.json')) continue;
       try {
-        final p = decode(await f.readAsString());
+        final text = await f.readAsString();
+        final raw = jsonDecode(text);
+        final old = raw is Map<String, dynamic> ? raw['schemaVersion'] as int? ?? 0 : 0;
+        final warnings = <String>[];
+        final p = decode(text, warnings: warnings);
         _cache[p.id] = p;
+        if (old < CarProfile.schemaVersion) {
+          // Giữ bản gốc (không đuôi .json để không bị đọc lại), rồi ghi bản đã chuyển
+          await File('${f.path.substring(0, f.path.length - 5)}.v$old.bak').writeAsString(text);
+          await save(p, touch: false);
+          migrationReports[p.id] = warnings;
+        }
       } catch (e) {
         loadErrors.add('${f.uri.pathSegments.last}: $e');
       }
@@ -137,10 +151,10 @@ class ProfileRepository extends ChangeNotifier {
     return p;
   }
 
-  static CarProfile decode(String json) {
+  static CarProfile decode(String json, {List<String>? warnings}) {
     final raw = jsonDecode(json);
     if (raw is! Map<String, dynamic>) throw ProfileFormatException('File không phải hồ sơ xe');
-    return CarProfile.fromJson(ProfileMigration.migrate(raw));
+    return CarProfile.fromJson(ProfileMigration.migrate(raw, warnings: warnings));
   }
 }
 

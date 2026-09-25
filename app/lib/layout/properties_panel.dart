@@ -1,13 +1,14 @@
-// Bảng thuộc tính phần tử (H3) và cài đặt tự về của cần gạt (H3b).
+// Bảng thuộc tính phần tử (H3), gắn Input + gắn nhanh tới kênh (Sprint 4 — U5)
+// và cài đặt tự về của cần gạt (H3b).
 import 'package:flutter/material.dart';
 
 import '../models/car_profile.dart';
-import '../models/channel_config.dart';
-import '../widgets/number_field.dart';
 import '../models/control_layout.dart';
+import '../models/input_def.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/number_field.dart';
 import 'item_widgets.dart';
 
 class PropertiesPanel extends StatelessWidget {
@@ -21,6 +22,7 @@ class PropertiesPanel extends StatelessWidget {
     required this.onDelete,
     required this.onClose,
     required this.onMessage,
+    required this.onOpenMix,
   });
 
   final ControlItem item;
@@ -35,35 +37,33 @@ class PropertiesPanel extends StatelessWidget {
   final VoidCallback onDelete, onClose;
   final ValueChanged<String> onMessage;
 
+  /// Mở tab Mix (Input có cấu hình mix phức tạp — U5)
+  final VoidCallback onOpenMix;
+
   void _edit(VoidCallback f) {
     beforeChange();
     f();
     changed();
   }
 
-  String _chName(int n) {
-    final c = profile.ch(n);
-    return c.name == 'Kênh $n' ? 'CH$n' : 'CH$n · ${c.name}';
-  }
+  static const _newInput = '\u0000new';
 
-  /// Gán / bỏ gán kênh cho phần tử (H3). Kênh đang ở phần tử khác thì chuyển sang phần tử này (H7).
-  void _setChannel(int? newCh, {bool y = false}) {
-    final old = y ? item.channelY : item.channel;
-    if (newCh == old) return;
-    if (newCh != null && item.kind == ItemKind.stick2D && newCh == (y ? item.channel : item.channelY)) {
-      onMessage('Hai trục phải dùng hai kênh khác nhau');
+  /// Gắn / bỏ gắn Input cho phần tử (I3). Input đang ở phần tử khác thì chuyển sang phần tử này.
+  void _setInput(String? id, {bool y = false}) {
+    final old = y ? item.inputIdY : item.inputId;
+    if (id == old) return;
+    if (id != null && id != _newInput && item.kind == ItemKind.stick2D && id == (y ? item.inputId : item.inputIdY)) {
+      onMessage('Hai trục phải dùng hai Input khác nhau');
       return;
     }
     ControlItem? moved;
     _edit(() {
-      if (newCh == null) {
-        layout.assignChannel(item, null, y: y);
-      } else {
-        moved = profile.assignChannel(item, newCh, y: y, l: layout);
-      }
+      var target = id;
+      if (id == _newInput) target = profile.createInput(item.kind).id;
+      moved = layout.bindInput(item, target, y: y);
     });
     final m = moved;
-    if (m != null && m.id != item.id) onMessage('Đã chuyển CH$newCh từ ${itemTitle(m).toLowerCase()} sang phần tử này');
+    if (m != null && m.id != item.id) onMessage('Đã chuyển Input từ ${itemTitle(m).toLowerCase()} sang phần tử này');
   }
 
   /// Tên hiển thị của phần tử: nhãn tự đặt, nếu không thì loại phần tử
@@ -78,7 +78,7 @@ class PropertiesPanel extends StatelessWidget {
     final k = item.kind;
     final isStick = k.isStick;
     final hasValue = isStick || k == ItemKind.knob;
-    final isThrottle = item.channels.contains(CarProfile.throttleCh);
+    final isThrottle = item.inputIds.any(profile.isThrottleInput);
 
     Widget section(String title, List<Widget> children) => Padding(
           padding: const EdgeInsets.only(top: Gap.m),
@@ -89,25 +89,38 @@ class PropertiesPanel extends StatelessWidget {
           ]),
         );
 
-    // Kênh đang ở phần tử khác thì ghi chú; chọn sẽ chuyển kênh sang phần tử này
-    String chOption(int i) {
-      final holder = layout.itemForChannel(i);
-      return holder == null || holder.id == item.id ? _chName(i) : '${_chName(i)} (đang ở ${holder.kind.label.toLowerCase()})';
+    // Input đang ở phần tử khác thì ghi chú; chọn sẽ chuyển Input sang phần tử này
+    String inputOption(InputDef d) {
+      final holder = layout.itemForInput(d.id);
+      return holder == null || holder.id == item.id
+          ? d.name
+          : '${d.name} (đang ở ${holder.kind.label.toLowerCase()})';
     }
 
-    Widget chPicker(int? value, ValueChanged<int?> onPick, String label) => DropdownButtonFormField<int?>(
-          key: ValueKey('$label-$value'),
-          initialValue: value,
+    Widget inputSlot(String? value, {bool y = false}) {
+      final options = profile.inputs.where((d) => d.accepts(k)).toList();
+      final d = profile.input(value);
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        DropdownButtonFormField<String?>(
+          key: ValueKey('in-$y-$value-${profile.inputs.length}'),
+          initialValue: d == null ? null : value,
           isDense: true,
           isExpanded: true,
-          decoration: InputDecoration(labelText: label),
+          decoration: InputDecoration(labelText: k == ItemKind.stick2D ? 'Input trục ${y ? 'Y' : 'X'}' : 'Input'),
           items: [
-            const DropdownMenuItem<int?>(value: null, child: Text('Chưa gán')),
-            for (var i = 1; i <= 10; i++)
-              DropdownMenuItem<int?>(value: i, child: Text(chOption(i), overflow: TextOverflow.ellipsis)),
+            const DropdownMenuItem<String?>(value: null, child: Text('Chưa gắn')),
+            for (final o in options)
+              DropdownMenuItem<String?>(value: o.id, child: Text(inputOption(o), overflow: TextOverflow.ellipsis)),
+            const DropdownMenuItem<String?>(value: _newInput, child: Text('+ Tạo Input mới')),
           ],
-          onChanged: onPick,
-        );
+          onChanged: (v) => _setInput(v, y: y),
+        ),
+        if (d != null) ...[
+          const SizedBox(height: Gap.s),
+          _InputEditor(key: ValueKey('ed-${d.id}'), input: d, profile: profile, edit: _edit, onOpenMix: onOpenMix),
+        ],
+      ]);
+    }
 
     return Material(
       color: t.surface,
@@ -122,15 +135,11 @@ class PropertiesPanel extends StatelessWidget {
               IconButton(onPressed: onClose, icon: const AppIcon(AppIcons.close)),
             ]),
             if (k.isControl)
-              section('Gán kênh', [
-                chPicker(item.channel, (v) => _setChannel(v), k == ItemKind.stick2D ? 'Trục X' : 'Kênh'),
+              section('Input', [
+                inputSlot(item.inputId),
                 if (k == ItemKind.stick2D) ...[
-                  const SizedBox(height: Gap.s),
-                  chPicker(item.channelY, (v) => _setChannel(v, y: true), 'Trục Y'),
-                ],
-                if (item.channel != null && k.isSwitchLike) ...[
-                  const SizedBox(height: Gap.s),
-                  _OffValueField(ch: profile.ch(item.channel!), beforeChange: beforeChange, changed: changed),
+                  const SizedBox(height: Gap.m),
+                  inputSlot(item.inputIdY, y: true),
                 ],
               ]),
             if (k == ItemKind.gauge)
@@ -148,7 +157,7 @@ class PropertiesPanel extends StatelessWidget {
                 key: ValueKey('label-${item.id}'),
                 initialValue: item.style.labelText ?? '',
                 decoration: InputDecoration(
-                  hintText: item.channel != null ? profile.ch(item.channel!).name : k.label,
+                  hintText: profile.input(item.inputId)?.name ?? k.label,
                   isDense: true,
                 ),
                 onChanged: (v) {
@@ -202,7 +211,7 @@ class PropertiesPanel extends StatelessWidget {
               section(k == ItemKind.stick2D ? 'Tự về · trục X' : 'Tự về', [
                 ReturnEditor(
                   cfg: item.returnCfg ??= ReturnConfig(),
-                  isThrottle: item.channel == CarProfile.throttleCh,
+                  isThrottle: profile.isThrottleInput(item.inputId),
                   vertical: k == ItemKind.stickV,
                   beforeChange: beforeChange,
                   changed: changed,
@@ -212,7 +221,7 @@ class PropertiesPanel extends StatelessWidget {
                 section('Tự về · trục Y', [
                   ReturnEditor(
                     cfg: item.returnCfgY ??= ReturnConfig(),
-                    isThrottle: item.channelY == CarProfile.throttleCh,
+                    isThrottle: profile.isThrottleInput(item.inputIdY),
                     vertical: true,
                     beforeChange: beforeChange,
                     changed: changed,
@@ -272,27 +281,72 @@ class PropertiesPanel extends StatelessWidget {
   }
 }
 
-/// Giá trị khi tắt của kênh gán vào nút / công tắc (B1)
-class _OffValueField extends StatelessWidget {
-  const _OffValueField({required this.ch, required this.beforeChange, required this.changed});
+/// Sửa nhanh Input đang gắn: tên, dải (axis), mức tắt (nút/công tắc), gửi tới kênh (U5)
+class _InputEditor extends StatelessWidget {
+  const _InputEditor({super.key, required this.input, required this.profile, required this.edit, required this.onOpenMix});
 
-  final ChannelConfig ch;
-  final VoidCallback beforeChange, changed;
+  final InputDef input;
+  final CarProfile profile;
+  final void Function(VoidCallback) edit;
+  final VoidCallback onOpenMix;
 
   @override
-  Widget build(BuildContext context) => NumberField(
-        label: 'Giá trị khi tắt',
-        unit: '%',
-        value: ch.offValuePct.round(),
-        min: -100,
-        max: 100,
-        step: 5,
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final d = input;
+    final quick = profile.canQuickRoute(d.id);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      TextFormField(
+        initialValue: d.name,
+        maxLength: 24,
+        decoration: const InputDecoration(labelText: 'Tên Input', isDense: true, counterText: ''),
         onChanged: (v) {
-          beforeChange();
-          ch.offValuePct = v.toDouble();
-          changed();
+          if (v.trim().isNotEmpty) edit(() => d.name = v.trim());
         },
-      );
+      ),
+      if (d.isAxis) ...[
+        const SizedBox(height: Gap.s),
+        SegmentedButton<AxisRange>(
+          showSelectedIcon: false,
+          segments: [for (final r in AxisRange.values) ButtonSegment(value: r, label: Text(r.label))],
+          selected: {d.range},
+          onSelectionChanged: (s) => edit(() => d.range = s.first),
+        ),
+      ],
+      if (d.type == InputType.binary || d.type == InputType.ternary)
+        NumberField(
+          label: 'Giá trị khi tắt',
+          unit: '%',
+          value: d.levels.offPct.round(),
+          min: -100,
+          max: 100,
+          step: 5,
+          onChanged: (v) => edit(() => d.levels.offPct = v.toDouble()),
+        ),
+      const SizedBox(height: Gap.s),
+      if (quick)
+        DropdownButtonFormField<int?>(
+          key: ValueKey('route-${d.id}-${profile.quickRoute(d.id)}'),
+          initialValue: profile.quickRoute(d.id),
+          isDense: true,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Gửi tới kênh'),
+          items: [
+            const DropdownMenuItem<int?>(value: null, child: Text('Không gửi (chỉ dùng trong luật mix)')),
+            for (var i = 1; i <= 10; i++) DropdownMenuItem<int?>(value: i, child: Text(profile.chLabel(i))),
+          ],
+          onChanged: (v) => edit(() => profile.setQuickRoute(d.id, v)),
+        )
+      else
+        Row(children: [
+          Expanded(
+            child: Text('Input này có luật mix riêng (${profile.rulesUsing(d.id).length} luật).',
+                style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
+          ),
+          TextButton(onPressed: onOpenMix, child: const Text('Dùng tab Mix')),
+        ]),
+    ]);
+  }
 }
 
 /// Cài đặt tự về cho một trục (H3b), có thanh xem trước

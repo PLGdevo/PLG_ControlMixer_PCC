@@ -76,10 +76,13 @@ abstract final class LayoutGrid {
     return (xs: xs, ys: ys);
   }
 
-  /// Kiểm tra trước khi lưu (H5 + H7). Trả về lỗi đầu tiên hoặc null.
-  static String? validate(ControlLayout l, {int throttleCh = 2, int steeringCh = 1}) {
+  /// Kiểm tra trước khi lưu (H5, I3, V). `throttleInputs` / `steerInputs`: Input đang điều khiển
+  /// kênh Ga / Lái qua luật mix; bố cục phải có phần tử cho ít nhất một Input mỗi loại.
+  /// Trả về lỗi đầu tiên hoặc null.
+  static String? validate(ControlLayout l,
+      {Set<String> throttleInputs = const {}, Set<String> steerInputs = const {}}) {
     if (l.name.trim().isEmpty) return 'Tên bố cục không được trống';
-    final seen = <int>{};
+    final seen = <String>{};
     for (final i in l.items) {
       final r = GridRect.of(i);
       if (!r.inside(l.cols, l.rows)) return '${i.kind.label} nằm ngoài lưới';
@@ -88,16 +91,20 @@ abstract final class LayoutGrid {
         return '${i.kind.label} có kích thước ngoài giới hạn';
       }
       if (collides(l, i.id, r)) return 'Có phần tử chồng lên nhau';
-      for (final ch in i.channels) {
-        if (!seen.add(ch)) return 'CH$ch có nhiều hơn một phần tử trên màn';
+      for (final id in i.inputIds) {
+        if (!seen.add(id)) return 'Input "$id" có nhiều hơn một phần tử trên màn';
       }
       final err = i.returnCfg?.validate() ?? i.returnCfgY?.validate();
       if (err != null) return err;
       if (i.style.deadzonePct < 0 || i.style.deadzonePct > 20) return 'Vùng chết trong khoảng 0–20%';
       if (i.style.opacityPct < 30 || i.style.opacityPct > 100) return 'Độ trong suốt trong khoảng 30–100%';
     }
-    if (!seen.contains(throttleCh)) return 'Bố cục phải có phần tử điều khiển kênh Ga (CH$throttleCh)';
-    if (!seen.contains(steeringCh)) return 'Bố cục phải có phần tử điều khiển kênh Lái (CH$steeringCh)';
+    if (throttleInputs.isNotEmpty && !throttleInputs.any(seen.contains)) {
+      return 'Bố cục phải có phần tử điều khiển kênh Ga';
+    }
+    if (steerInputs.isNotEmpty && !steerInputs.any(seen.contains)) {
+      return 'Bố cục phải có phần tử điều khiển kênh Lái';
+    }
     return null;
   }
 }

@@ -38,7 +38,7 @@ void main() {
   test('weight → offset → curve → min/max', () {
     final e = engine([
       MixRule(id: 'r', source: 'steer', destCh: 1, weightPct: 50, offsetPct: 10, minPct: -20, maxPct: 30),
-      MixRule(id: 'c', source: 'steer', destCh: 2, curve: Curve(type: CurveType.points, points: [-100, -20, 0, 20, 100])),
+      MixRule(id: 'c', source: 'steer', destCh: 2, curve: MixCurve(type: CurveType.points, points: [-100, -20, 0, 20, 100])),
     ]);
     im.setPosition('steer', 40);
     expect(e.run()[0], 30); // 40×50% + 10 = 30
@@ -52,7 +52,7 @@ void main() {
   });
 
   test('expo: giữ đầu mút, mềm quanh tâm khi dương, gắt khi âm', () {
-    final soft = Curve(type: CurveType.expo, expoPct: 50), hard = Curve(type: CurveType.expo, expoPct: -50);
+    final soft = MixCurve(type: CurveType.expo, expoPct: 50), hard = MixCurve(type: CurveType.expo, expoPct: -50);
     for (final c in [soft, hard]) {
       expect(c.apply(100), closeTo(100, 1e-9));
       expect(c.apply(-100), closeTo(-100, 1e-9));
@@ -255,7 +255,7 @@ void main() {
           destCh: i % 10 + 1,
           condition: i.isEven ? ExprRef('c${i % 32}') : const ExprTrue(),
           combine: Combine.values[i % Combine.values.length],
-          curve: i % 3 == 0 ? Curve(type: CurveType.expo, expoPct: 30) : null,
+          curve: i % 3 == 0 ? MixCurve(type: CurveType.expo, expoPct: 30) : null,
           priority: i % 5,
         ),
     ];

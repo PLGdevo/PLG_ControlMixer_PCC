@@ -1,4 +1,5 @@
-// Hồ sơ xe (E1): kết nối + toàn bộ cấu hình, sửa được khi chưa nối xe.
+// Hồ sơ xe (E1, Sprint 4 — J1): kết nối + toàn bộ cấu hình, sửa được khi chưa nối xe.
+// Cấu hình điều khiển: Input (I) → Condition (K) → luật mix (M) → kênh (O).
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
@@ -7,8 +8,10 @@ import 'dart:typed_data';
 import '../layout/layout_templates.dart';
 import '../protocol/protocol.dart';
 import 'channel_config.dart';
+import 'condition.dart';
 import 'control_layout.dart';
-import 'mix_rule.dart';
+import 'input_def.dart';
+import 'mixer_rule.dart';
 import 'ping_config.dart';
 
 enum ConnType { wifi, ble }
@@ -61,8 +64,39 @@ class GearConfig {
   }
 }
 
+/// Cài đặt ARM (R2)
+class ArmConfig {
+  bool autoArm;
+  Expr? armCondition; // null = không có điều kiện riêng
+
+  ArmConfig({this.autoArm = false, this.armCondition});
+
+  Map<String, dynamic> toJson() => {
+        'autoArm': autoArm,
+        if (armCondition != null) 'armCondition': armCondition!.toJson(),
+      };
+
+  factory ArmConfig.fromJson(Map<String, dynamic>? j) => ArmConfig(
+        autoArm: j?['autoArm'] as bool? ?? false,
+        armCondition: j?['armCondition'] == null ? null : Expr.fromJson(j!['armCondition']),
+      );
+}
+
+/// Giao thức đầu ra (O4)
+class OutputConfig {
+  String protocol;
+  int periodMs;
+
+  OutputConfig({this.protocol = 'rc_v2', this.periodMs = 25});
+
+  Map<String, dynamic> toJson() => {'protocol': protocol, 'periodMs': periodMs};
+
+  factory OutputConfig.fromJson(Map<String, dynamic>? j) =>
+      OutputConfig(protocol: j?['protocol'] as String? ?? 'rc_v2', periodMs: j?['periodMs'] as int? ?? 25);
+}
+
 class CarProfile {
-  static const schemaVersion = 1;
+  static const schemaVersion = 2;
   static const steeringCh = 1; // channels[0]
   static const throttleCh = 2; // channels[1]
 
@@ -75,7 +109,11 @@ class CarProfile {
   GearConfig gears;
   int failsafeTimeoutMs;
   List<ChannelConfig> channels; // đúng 10 phần tử
-  List<MixRule> mixes; // tối đa MixRule.maxRules (20)
+  List<InputDef> inputs;
+  List<ConditionDef> conditions;
+  List<MixRule> mixer;
+  ArmConfig arm;
+  OutputConfig output;
   PingConfig ping;
   List<ControlLayout> layouts;
   String activeLayoutId;
@@ -84,6 +122,7 @@ class CarProfile {
   String? lastSyncedHash;
   DateTime? lastConnectedAt;
 
+  /// Hồ sơ mới (không truyền `inputs` / `layouts`) được dựng sẵn Lái + Ga như mẫu "Xe cơ bản" (U5)
   CarProfile({
     required this.id,
     required this.name,
@@ -94,7 +133,11 @@ class CarProfile {
     GearConfig? gears,
     this.failsafeTimeoutMs = 400,
     List<ChannelConfig>? channels,
-    List<MixRule>? mixes,
+    List<InputDef>? inputs,
+    List<ConditionDef>? conditions,
+    List<MixRule>? mixer,
+    ArmConfig? arm,
+    OutputConfig? output,
     PingConfig? ping,
     List<ControlLayout>? layouts,
     String? activeLayoutId,
@@ -104,11 +147,18 @@ class CarProfile {
     this.lastConnectedAt,
   })  : gears = gears ?? GearConfig(),
         channels = channels ?? ChannelConfig.defaultList(),
-        mixes = mixes ?? [],
+        inputs = inputs ?? [],
+        conditions = conditions ?? [],
+        mixer = mixer ?? [],
+        arm = arm ?? ArmConfig(),
+        output = output ?? OutputConfig(),
         ping = ping ?? PingConfig(),
         layouts = layouts ?? [],
         activeLayoutId = activeLayoutId ?? '',
         updatedAt = updatedAt ?? DateTime.now() {
+    if (inputs == null && layouts == null && mixer == null) {
+      ProfileTemplate.basic.applyTo(this);
+    }
     if (this.layouts.isEmpty) this.layouts.add(LayoutTemplates.standard());
     if (!this.layouts.any((l) => l.id == this.activeLayoutId)) this.activeLayoutId = this.layouts.first.id;
   }
@@ -136,34 +186,131 @@ class CarProfile {
       ? 'wifi:${wifi?.ip}:${wifi?.port}'
       : 'ble:${(ble?.mac ?? '').toUpperCase()}';
 
-  /// Phần tử điều khiển kênh `ch` trên bố cục đang dùng (null = chưa gán)
-  ControlItem? controlOf(int ch) => activeLayout.itemForChannel(ch);
+  // ---------------- Input · luật ----------------
+  InputDef? input(String? id) => id == null ? null : inputs.where((i) => i.id == id).firstOrNull;
 
-  /// Gán kênh `ch` vào phần tử `item` của bố cục `l` (mặc định bố cục đang dùng) và bật kênh.
-  /// Trả về phần tử bị gỡ kênh này (nếu có).
-  ControlItem? assignChannel(ControlItem item, int ch, {bool y = false, ControlLayout? l}) {
-    final moved = (l ?? activeLayout).assignChannel(item, ch, y: y);
-    this.ch(ch).enabled = true;
-    return moved;
+  Map<String, InputDef> get inputMap => {for (final i in inputs) i.id: i};
+
+  /// Tên hiển thị của kênh: "CH3" hoặc "CH3 · Đèn"
+  String chLabel(int n) {
+    final c = ch(n);
+    return c.name == 'Kênh $n' ? 'CH$n' : 'CH$n · ${c.name}';
   }
 
-  /// Đồng bộ bố cục sau khi bật/tắt kênh: kênh đang tắt được gỡ khỏi mọi phần tử.
-  /// Phần tử vẫn giữ nguyên trên màn (cấu hình riêng), chỉ hiện "Chưa gán kênh".
-  void syncLayouts() {
-    for (final c in channels.where((c) => !c.enabled)) {
-      for (final l in layouts) {
-        l.unassignChannel(c.index);
-      }
+  /// Luật đang bật ghi vào kênh `ch`
+  List<MixRule> rulesTo(int ch) => mixer.where((r) => r.enabled && r.destCh == ch).toList();
+
+  /// Luật dùng Input `id` làm nguồn hoặc trong điều kiện
+  List<MixRule> rulesUsing(String id) =>
+      mixer.where((r) => r.source == id || r.condition.inputs.contains(id)).toList();
+
+  /// Input (không phải hằng số) đang là nguồn của luật bật ghi vào kênh `ch`
+  Set<String> driversOf(int ch) => {
+        for (final r in rulesTo(ch))
+          if (input(r.source)?.type != InputType.constant) r.source,
+      };
+
+  /// Input điều khiển kênh Ga (dùng cho cảnh báo tự về và "ga Giữ vị trí về Center" — H3b)
+  bool isThrottleInput(String? id) => id != null && driversOf(throttleCh).contains(id);
+
+  /// Luật "gắn nhanh" của Input (U5): không điều kiện, weight 100, offset 0, tuyến tính, replace, priority 0
+  static bool isPlain(MixRule r) =>
+      r.condition.isTrue &&
+      r.weightPct == 100 &&
+      r.offsetPct == 0 &&
+      r.curve.isLinear &&
+      r.minPct == -100 &&
+      r.maxPct == 100 &&
+      r.combine == Combine.replace &&
+      r.priority == 0;
+
+  /// Kênh mà Input được gắn nhanh tới; null nếu chưa gắn. Ném [StateError] nếu cấu hình
+  /// phức tạp hơn (nhiều luật / có điều kiện) — khi đó giao diện chuyển sang tab Mix.
+  int? quickRoute(String inputId) {
+    final rs = rulesUsing(inputId);
+    if (rs.isEmpty) return null;
+    if (rs.length == 1 && rs.first.source == inputId && isPlain(rs.first)) return rs.first.destCh;
+    throw StateError('Input có cấu hình mix phức tạp');
+  }
+
+  bool canQuickRoute(String inputId) {
+    try {
+      quickRoute(inputId);
+      return true;
+    } on StateError {
+      return false;
     }
   }
 
-  /// Đưa cấu hình (kênh, mix, hộp số, failsafe) về mặc định; giữ tên, kết nối, bố cục
+  /// Gắn nhanh Input → kênh (U5): tạo / sửa / xoá luật mặc định; gắn thì bật kênh
+  void setQuickRoute(String inputId, int? ch) {
+    mixer.removeWhere((r) => r.source == inputId && isPlain(r));
+    if (ch == null) return;
+    mixer.add(MixRule(id: InputDef.uniqueId('r_$inputId', mixer.map((r) => r.id)), source: inputId, destCh: ch));
+    this.ch(ch).enabled = true;
+  }
+
+  /// Tạo Input mới phù hợp với loại phần tử
+  InputDef createInput(ItemKind kind, {String? name, String? baseId}) {
+    final type = InputDef.typeFor(kind);
+    final base = baseId ??
+        switch (kind) {
+          ItemKind.stickH || ItemKind.stickV || ItemKind.stick2D => 'stick',
+          ItemKind.knob => 'knob',
+          ItemKind.toggle => 'toggle',
+          ItemKind.switch3 => 'switch',
+          _ => 'button',
+        };
+    final id = InputDef.uniqueId(base, inputs.map((i) => i.id));
+    final n = inputs.where((i) => i.type == type).length + 1;
+    final d = InputDef(id: id, name: name ?? '${kind.label} $n', type: type);
+    if (d.name.length > 24) d.name = d.name.substring(0, 24);
+    inputs.add(d);
+    return d;
+  }
+
+  /// Xoá Input: gỡ khỏi mọi bố cục, các luật / điều kiện dùng nó bị tắt (K1)
+  void deleteInput(String id) {
+    inputs.removeWhere((i) => i.id == id);
+    for (final l in layouts) {
+      l.unbindInput(id);
+    }
+    for (final r in mixer) {
+      if (r.source == id || r.condition.inputs.contains(id)) r.enabled = false;
+    }
+  }
+
+  /// Đổi mã Input ở mọi nơi (bố cục, luật, điều kiện)
+  void renameInput(String from, String to) {
+    if (from == to) return;
+    input(from)?.id = to;
+    for (final l in layouts) {
+      l.renameInput(from, to);
+    }
+    for (final r in mixer) {
+      if (r.source == from) r.source = to;
+      r.condition = r.condition.renameInput(from, to);
+    }
+    for (final c in conditions) {
+      c.expr = c.expr.renameInput(from, to);
+    }
+    final a = arm.armCondition;
+    if (a != null) arm.armCondition = a.renameInput(from, to);
+  }
+
+  /// Đưa cấu hình (kênh, mix, hộp số, failsafe) về mặc định; giữ tên, kết nối, Input và bố cục.
+  /// Luật mix về dạng tối thiểu: Input đang điều khiển Lái → CH1, Ga → CH2.
   void resetConfig() {
+    final steer = driversOf(steeringCh).firstOrNull, thr = driversOf(throttleCh).firstOrNull;
     channels = ChannelConfig.defaultList();
-    mixes = [];
+    conditions = [];
+    mixer = [
+      if (steer != null) MixRule(id: 'r_steer', source: steer, destCh: steeringCh),
+      if (thr != null) MixRule(id: 'r_throttle', source: thr, destCh: throttleCh),
+    ];
     gears = GearConfig();
     failsafeTimeoutMs = 400;
-    syncLayouts();
+    arm = ArmConfig();
   }
 
   // ---------------- Đổi qua lại với cấu hình firmware v1 (B5) ----------------
@@ -205,7 +352,7 @@ class CarProfile {
     gears = GearConfig(gearCount: c.gearCount, maxThrottle: List<int>.from(c.gearLimit));
   }
 
-  // ---------------- Kiểm tra (E7) ----------------
+  // ---------------- Kiểm tra (E7, V) ----------------
   /// Lỗi của các trường chung (tên, kết nối, hộp số, failsafe). `otherNames` để chống trùng tên.
   Map<String, String> validateGeneral({Iterable<String> otherNames = const []}) {
     final e = <String, String>{};
@@ -238,13 +385,58 @@ class CarProfile {
     return e;
   }
 
-  /// Bố cục thiếu phần tử cho kênh Ga hoặc Lái (H5). Trả về câu lỗi hoặc null.
+  /// Kênh Ga / Lái thiếu luật, hoặc bố cục thiếu phần tử cho Input điều khiển chúng (V, thay H5).
+  /// Trả về câu lỗi hoặc null.
   String? missingMainControl() {
-    for (final l in layouts) {
-      if (l.itemForChannel(throttleCh) == null) return 'Bố cục "${l.name}" chưa có phần tử cho kênh Ga (CH$throttleCh)';
-      if (l.itemForChannel(steeringCh) == null) return 'Bố cục "${l.name}" chưa có phần tử cho kênh Lái (CH$steeringCh)';
+    for (final (ch, label) in [(steeringCh, 'Lái'), (throttleCh, 'Ga')]) {
+      if (rulesTo(ch).isEmpty) return 'Chưa có luật mix nào điều khiển kênh $label (CH$ch)';
+      final drivers = driversOf(ch);
+      if (drivers.isEmpty) continue; // chỉ có luật hằng số: không cần phần tử
+      for (final l in layouts) {
+        if (!drivers.any((d) => l.itemForInput(d) != null)) {
+          return 'Bố cục "${l.name}" chưa có phần tử cho kênh $label (CH$ch)';
+        }
+      }
     }
     return null;
+  }
+
+  /// Kiểm tra Input / Condition / luật (V)
+  ({List<String> errors, List<String> warnings}) validateMixerPart() {
+    final r = validateMixer(
+      inputs: inputs,
+      conditions: conditions,
+      rules: mixer,
+      disabledChannels: {for (final c in channels) if (!c.enabled) c.index},
+    );
+    final ids = inputMap;
+    final condIds = {for (final c in conditions) c.id};
+    final a = arm.armCondition;
+    if (a != null) {
+      final e = a.validate(ids, condIds);
+      if (e != null) r.errors.add('Điều kiện ARM: $e');
+    }
+    for (final l in layouts) {
+      for (final it in l.items) {
+        for (final id in it.inputIds) {
+          final d = ids[id];
+          if (d == null) {
+            r.errors.add('Bố cục "${l.name}": phần tử gắn Input "$id" không tồn tại');
+          } else if (!d.accepts(it.kind)) {
+            r.errors.add('Bố cục "${l.name}": ${it.kind.label.toLowerCase()} không gắn được Input ${d.type.label.toLowerCase()} "${d.name}"');
+          }
+        }
+      }
+    }
+    final used = {for (final m in mixer.where((m) => m.enabled)) ...[m.source, ...m.condition.inputs]};
+    for (final id in used) {
+      final d = ids[id];
+      if (d == null || d.type == InputType.constant) continue;
+      if (activeLayout.itemForInput(id) == null) {
+        r.warnings.add('Input "${d.name}" được luật mix dùng nhưng chưa có phần tử trên bố cục "${activeLayout.name}"');
+      }
+    }
+    return r;
   }
 
   /// Toàn bộ lỗi của hồ sơ, dạng danh sách câu, dùng để khoá nút Lưu
@@ -254,10 +446,9 @@ class CarProfile {
       final e = c.validate();
       if (e.isNotEmpty) errs.add('${c.label}: ${e.values.first}');
     }
+    errs.addAll(validateMixerPart().errors);
     final miss = missingMainControl();
     if (miss != null) errs.add(miss);
-    final mixErr = MixRule.validateAll(mixes);
-    if (mixErr != null) errs.add(mixErr);
     return errs;
   }
 
@@ -306,7 +497,11 @@ class CarProfile {
         'gears': gears.toJson(),
         'failsafeTimeoutMs': failsafeTimeoutMs,
         'channels': channels.map((c) => c.toJson()).toList(),
-        'mixes': mixes.map((m) => m.toJson()).toList(),
+        'inputs': inputs.map((i) => i.toJson()).toList(),
+        'conditions': conditions.map((c) => c.toJson()).toList(),
+        'mixer': mixer.map((m) => m.toJson()).toList(),
+        'arm': arm.toJson(),
+        'output': output.toJson(),
         'ping': ping.toJson(),
         'layouts': layouts.map((l) => l.toJson()).toList(),
         'activeLayoutId': activeLayoutId,
@@ -319,9 +514,9 @@ class CarProfile {
   /// `j` phải đã qua ProfileMigration.migrate
   factory CarProfile.fromJson(Map<String, dynamic> j) {
     DateTime? dt(String k) => j[k] == null ? null : DateTime.tryParse(j[k] as String);
-    final chList = (j['channels'] as List? ?? const [])
-        .map((e) => ChannelConfig.fromJson(e as Map<String, dynamic>))
-        .toList();
+    List<T> list<T>(String k, T Function(Map<String, dynamic>) f) =>
+        [for (final e in (j[k] as List? ?? const [])) f(e as Map<String, dynamic>)];
+    final chList = list('channels', ChannelConfig.fromJson);
     final channels = List.generate(
       10,
       (i) => chList.where((c) => c.index == i + 1).firstOrNull ?? ChannelConfig.defaults(i + 1),
@@ -336,11 +531,13 @@ class CarProfile {
       gears: GearConfig.fromJson(j['gears'] as Map<String, dynamic>?),
       failsafeTimeoutMs: j['failsafeTimeoutMs'] as int? ?? 400,
       channels: channels,
-      mixes: (j['mixes'] as List? ?? const []).map((e) => MixRule.fromJson(e as Map<String, dynamic>)).toList(),
+      inputs: list('inputs', InputDef.fromJson),
+      conditions: list('conditions', ConditionDef.fromJson),
+      mixer: list('mixer', MixRule.fromJson),
+      arm: ArmConfig.fromJson(j['arm'] as Map<String, dynamic>?),
+      output: OutputConfig.fromJson(j['output'] as Map<String, dynamic>?),
       ping: PingConfig.fromJson(j['ping'] as Map<String, dynamic>?),
-      layouts: (j['layouts'] as List? ?? const [])
-          .map((e) => ControlLayout.fromJson(e as Map<String, dynamic>))
-          .toList(),
+      layouts: list('layouts', ControlLayout.fromJson),
       activeLayoutId: j['activeLayoutId'] as String?,
       updatedAt: dt('updatedAt'),
       lastSyncedAt: dt('lastSyncedAt'),
@@ -352,11 +549,11 @@ class CarProfile {
   CarProfile copy() => CarProfile.fromJson(jsonDecode(jsonEncode(toJson())) as Map<String, dynamic>);
 }
 
-/// Mẫu khởi đầu ở bước 3 tạo xe (E3)
+/// Mẫu khởi đầu ở bước 3 tạo xe (E3), dựng bằng Input + luật mặc định (U5)
 enum ProfileTemplate {
   basic('Xe cơ bản 2 kênh', 'Lái (CH1) và Ga (CH2)'),
   lightsHorn('Xe có đèn/còi', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)'),
-  copy('Sao chép từ xe khác', 'Lấy kênh, mix, hộp số và bố cục của một xe có sẵn');
+  copy('Sao chép từ xe khác', 'Lấy Input, mix, kênh, hộp số và bố cục của một xe có sẵn');
 
   const ProfileTemplate(this.label, this.description);
   final String label, description;
@@ -369,7 +566,11 @@ enum ProfileTemplate {
       final c = s.copy();
       p
         ..channels = c.channels
-        ..mixes = c.mixes
+        ..inputs = c.inputs
+        ..conditions = c.conditions
+        ..mixer = c.mixer
+        ..arm = c.arm
+        ..output = c.output
         ..gears = c.gears
         ..failsafeTimeoutMs = c.failsafeTimeoutMs
         ..ping = c.ping
@@ -379,21 +580,34 @@ enum ProfileTemplate {
     }
     p
       ..channels = ChannelConfig.defaultList()
-      ..mixes = []
+      ..inputs = [
+        InputDef(id: 'steer', name: 'Lái'),
+        InputDef(id: 'throttle', name: 'Ga'),
+      ]
+      ..conditions = []
+      ..mixer = [
+        MixRule(id: 'r_steer', source: 'steer', destCh: CarProfile.steeringCh),
+        MixRule(id: 'r_throttle', source: 'throttle', destCh: CarProfile.throttleCh),
+      ]
       ..layouts = [LayoutTemplates.standard()];
     p.activeLayoutId = p.layouts.first.id;
     if (this == ProfileTemplate.lightsHorn) {
       final l = p.activeLayout;
       p.ch(3)
         ..name = 'Đèn'
-        ..enabled = true
         ..failsafeUs = 1000;
       p.ch(4)
         ..name = 'Còi'
-        ..enabled = true
         ..failsafeUs = 1000;
-      LayoutTemplates.addControl(l, ItemKind.toggle, channel: 3);
-      LayoutTemplates.addControl(l, ItemKind.button, channel: 4);
+      p.inputs.addAll([
+        InputDef(id: 'light', name: 'Đèn', type: InputType.binary),
+        InputDef(id: 'horn', name: 'Còi', type: InputType.binary),
+      ]);
+      p
+        ..setQuickRoute('light', 3)
+        ..setQuickRoute('horn', 4);
+      LayoutTemplates.addControl(l, ItemKind.toggle, inputId: 'light');
+      LayoutTemplates.addControl(l, ItemKind.button, inputId: 'horn');
     }
   }
 }

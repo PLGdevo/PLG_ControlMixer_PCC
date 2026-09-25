@@ -1,4 +1,5 @@
 // Mô hình bố cục màn Lái (H1), thuộc tính phần tử (H3) và cài đặt tự về (H3b).
+// Phần tử gắn vào Input (Sprint 4 — I3), không gắn thẳng vào kênh.
 import 'dart:collection';
 import 'dart:math';
 
@@ -33,7 +34,8 @@ enum GaugeKey {
   current('Dòng'),
   speed('Tốc độ'),
   ping('Ping'),
-  rssi('RSSI');
+  rssi('RSSI'),
+  channels('Kênh đầu ra');
 
   const GaugeKey(this.label);
   final String label;
@@ -84,7 +86,7 @@ enum KnobSize {
 }
 
 class ItemStyle {
-  String? labelText; // null = dùng tên kênh
+  String? labelText; // null = dùng tên Input
   bool showLabel;
   String? iconName; // khoá trong AppIcons.pickable
   ValueDisplay valueDisplay;
@@ -222,8 +224,8 @@ class ReturnConfig {
 class ControlItem {
   String id;
   ItemKind kind;
-  int? channel; // 1..10; với stick2D là trục X
-  int? channelY; // chỉ stick2D
+  String? inputId; // Input gắn vào; với stick2D là trục X
+  String? inputIdY; // chỉ stick2D
   String? gaugeKey; // với kind = gauge
   int x, y, w, h; // theo ô lưới
   ItemStyle style;
@@ -234,8 +236,8 @@ class ControlItem {
   ControlItem({
     required this.id,
     required this.kind,
-    this.channel,
-    this.channelY,
+    this.inputId,
+    this.inputIdY,
     this.gaugeKey,
     required this.x,
     required this.y,
@@ -251,16 +253,23 @@ class ControlItem {
   static String newId() =>
       'it-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-${Random().nextInt(1 << 20).toRadixString(36)}';
 
-  /// Các kênh mà phần tử này điều khiển
-  List<int> get channels => [if (channel != null) channel!, if (channelY != null) channelY!];
+  /// Các Input mà phần tử này điều khiển
+  List<String> get inputIds => [if (inputId != null) inputId!, if (inputIdY != null) inputIdY!];
+
+  /// Cài đặt tự về của trục gắn Input `id` (null nếu không phải cần gạt hoặc không gắn Input đó)
+  ReturnConfig? returnFor(String id) {
+    if (!kind.isStick) return null;
+    if (kind == ItemKind.stick2D && inputIdY == id) return returnCfgY ?? ReturnConfig();
+    return inputId == id ? returnCfg ?? ReturnConfig() : null;
+  }
 
   bool get touchable => kind.isControl || kind == ItemKind.gearBox || kind == ItemKind.trim;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'kind': kind.name,
-        'channel': channel,
-        'channelY': channelY,
+        'inputId': inputId,
+        'inputIdY': inputIdY,
         'gaugeKey': gaugeKey,
         'x': x,
         'y': y,
@@ -276,8 +285,8 @@ class ControlItem {
   factory ControlItem.fromJson(Map<String, dynamic> j) => ControlItem(
         id: j['id'] as String? ?? newId(),
         kind: ItemKind.values.asNameMap()[j['kind']] ?? ItemKind.button,
-        channel: j['channel'] as int?,
-        channelY: j['channelY'] as int?,
+        inputId: j['inputId'] as String?,
+        inputIdY: j['inputIdY'] as String?,
         gaugeKey: j['gaugeKey'] as String?,
         x: j['x'] as int,
         y: j['y'] as int,
@@ -314,38 +323,46 @@ class ControlLayout {
 
   static String newId() => 'lay-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
 
-  ControlItem? itemForChannel(int ch) => items.where((i) => i.channels.contains(ch)).firstOrNull;
+  ControlItem? itemForInput(String id) => items.where((i) => i.inputIds.contains(id)).firstOrNull;
 
-  /// Gán kênh `ch` cho phần tử `item` (trục Y nếu `y`). Mỗi kênh chỉ có một phần tử trên
-  /// một bố cục (H7) nên kênh được gỡ khỏi phần tử đang giữ nó. `ch` = null để bỏ gán.
-  /// Trả về phần tử bị gỡ kênh (nếu có) để báo cho người dùng.
-  ControlItem? assignChannel(ControlItem item, int? ch, {bool y = false}) {
+  /// Gắn Input `id` vào phần tử `item` (trục Y nếu `y`). Một Input chỉ có một phần tử trên
+  /// một bố cục (I3) nên Input được gỡ khỏi phần tử đang giữ nó. `id` = null để bỏ gắn.
+  /// Trả về phần tử bị gỡ Input (nếu có) để báo cho người dùng.
+  ControlItem? bindInput(ControlItem item, String? id, {bool y = false}) {
     ControlItem? moved;
-    if (ch != null) {
+    if (id != null) {
       for (final o in items) {
-        if (o.channel == ch && !(o.id == item.id && !y)) {
-          o.channel = null;
+        if (o.inputId == id && !(o.id == item.id && !y)) {
+          o.inputId = null;
           moved = o;
         }
-        if (o.channelY == ch && !(o.id == item.id && y)) {
-          o.channelY = null;
+        if (o.inputIdY == id && !(o.id == item.id && y)) {
+          o.inputIdY = null;
           moved = o;
         }
       }
     }
     if (y) {
-      item.channelY = ch;
+      item.inputIdY = id;
     } else {
-      item.channel = ch;
+      item.inputId = id;
     }
     return moved;
   }
 
-  /// Gỡ kênh `ch` khỏi mọi phần tử (khi tắt kênh)
-  void unassignChannel(int ch) {
+  /// Gỡ Input `id` khỏi mọi phần tử (khi xoá Input)
+  void unbindInput(String id) {
     for (final o in items) {
-      if (o.channel == ch) o.channel = null;
-      if (o.channelY == ch) o.channelY = null;
+      if (o.inputId == id) o.inputId = null;
+      if (o.inputIdY == id) o.inputIdY = null;
+    }
+  }
+
+  /// Đổi mã Input trên mọi phần tử
+  void renameInput(String from, String to) {
+    for (final o in items) {
+      if (o.inputId == from) o.inputId = to;
+      if (o.inputIdY == from) o.inputIdY = to;
     }
   }
 

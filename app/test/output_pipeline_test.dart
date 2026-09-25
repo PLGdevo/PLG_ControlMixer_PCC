@@ -1,75 +1,101 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rc_controller/models/car_profile.dart';
-import 'package:rc_controller/models/mix_rule.dart';
+import 'package:rc_controller/models/condition.dart';
+import 'package:rc_controller/models/input_def.dart';
+import 'package:rc_controller/models/mixer_rule.dart';
 import 'package:rc_controller/services/output_pipeline.dart';
 
-// Đường tính giá trị gửi đi (B1)
+// Đường tính giá trị gửi đi (Sprint 4 — 0.2, O2)
 void main() {
   CarProfile profile() => CarProfile(id: 'p', name: 'p', connType: ConnType.wifi);
 
-  List<double?> input({double? steer, double? thr}) {
-    final v = List<double?>.filled(10, null);
-    v[CarProfile.steeringCh - 1] = steer;
-    v[CarProfile.throttleCh - 1] = thr;
-    return v;
+  List<int> run(OutputPipeline pipe, {double steer = 0, double thr = 0, int gear = 3}) {
+    pipe.inputs
+      ..setPosition('steer', steer)
+      ..setPosition('throttle', thr);
+    return pipe.run(gear: gear);
   }
 
-  test('kênh chưa gán và không bị mix ghi vào thì ra Center', () {
-    final out = OutputPipeline(profile()).run(input(), gear: 3);
-    expect(out, List.filled(10, 1500));
+  test('kênh không có luật ra Center, kênh tắt ra failsafe', () {
+    final p = profile();
+    p.ch(3).enabled = true;
+    p.ch(4).failsafeUs = 1000;
+    final out = run(OutputPipeline(p));
+    expect(out.take(3), [1500, 1500, 1500]);
+    expect(out[3], 1000); // CH4 tắt
+    expect(OutputPipeline(p).failsafeUs()[3], 1000);
   });
 
   test('đổi % sang µs quanh Center, reverse đảo chiều', () {
     final p = profile();
     final pipe = OutputPipeline(p);
-    expect(pipe.run(input(steer: 100), gear: 3)[0], 1900); // CH1 Lái: 1100/1500/1900
-    expect(pipe.run(input(steer: -50), gear: 3)[0], 1300);
+    expect(run(pipe, steer: 100)[0], 1900); // CH1 Lái: 1100/1500/1900
+    expect(run(pipe, steer: -50)[0], 1300);
     p.steering.reverse = true;
-    expect(pipe.run(input(steer: 100), gear: 3)[0], 1100);
+    expect(run(pipe, steer: 100)[0], 1100);
   });
 
   test('trim + offset dời tâm, kết quả luôn kẹp trong [Min, Max]', () {
     final p = profile();
     p.steering.trimUs = 20;
     final pipe = OutputPipeline(p);
-    expect(pipe.run(input(steer: 0), gear: 3)[0], 1520);
-    expect(pipe.run(input(steer: 100), gear: 3)[0], 1900);
+    expect(run(pipe)[0], 1520);
+    expect(run(pipe, steer: 100)[0], 1900);
     p.throttle.offsetUs = 300;
     p.throttle.trimUs = 200; // tâm 2000 > Max → kẹp
-    expect(pipe.run(input(thr: 0), gear: 3)[1], 2000);
-    expect(pipe.run(input(thr: -100), gear: 3)[1], 1000);
+    expect(run(pipe)[1], 2000);
+    expect(run(pipe, thr: -100)[1], 1000);
   });
 
-  test('hộp số giới hạn kênh Ga, không đụng kênh khác', () {
+  test('hộp số giới hạn kênh Ga sau mixer, không đụng kênh khác', () {
     final pipe = OutputPipeline(profile()); // số 1 = 30%
-    final out = pipe.run(input(steer: 100, thr: 100), gear: 1);
+    final out = run(pipe, steer: 100, thr: 100, gear: 1);
     expect(out[1], 1650);
     expect(out[0], 1900);
-    expect(pipe.run(input(thr: -100), gear: 1)[1], 1350);
-    expect(pipe.run(input(thr: 100), gear: 9)[1], 2000); // số vượt gearCount → số cao nhất
+    expect(run(pipe, thr: -100, gear: 1)[1], 1350);
+    expect(run(pipe, thr: 100, gear: 9)[1], 2000); // số vượt gearCount → số cao nhất
   });
 
-  test('mix chạy sau hộp số, ghi vào kênh chưa gán', () {
+  test('luật mix: ga (trước hộp số) vào CH4; điều kiện có trễ vào CH3; reset trạng thái', () {
     final p = profile()
-      ..mixes = [
-        MixRule(id: 'a', type: MixType.threshold, sourceCh: 1, targetCh: 3),
-        MixRule(id: 'b', type: MixType.linear, sourceCh: 2, targetCh: 4),
-      ];
+      ..inputs.add(InputDef(id: 'k100', name: '100', type: InputType.constant, constPct: 100))
+      ..mixer.addAll([
+        MixRule(id: 'a', source: 'k100', destCh: 3,
+            condition: const ExprCmp(input: 'steer', op: CmpOp.ge, value: 80, hyst: 10)),
+        MixRule(id: 'b', source: 'throttle', destCh: 4),
+      ]);
+    p.ch(3).enabled = true;
+    p.ch(4).enabled = true;
     final pipe = OutputPipeline(p);
-    final out = pipe.run(input(steer: 90, thr: 100), gear: 1);
-    expect(out[2], 2000); // CH1 ≥ 80% → CH3 = 100%
-    expect(out[3], 1650); // CH4 = ga sau hộp số (30%)
-    expect(pipe.run(input(steer: 75), gear: 1)[2], 2000); // vùng giữ
+    final out = run(pipe, steer: 90, thr: 100, gear: 1);
+    expect(out[2], 2000); // steer ≥ 80 → CH3 = 100%
+    expect(out[3], 2000); // CH4 lấy ga trước hộp số
+    expect(out[1], 1650); // CH2 qua hộp số (30%)
+    expect(run(pipe, steer: 75, gear: 1)[2], 2000); // vùng giữ
     pipe.reset();
-    expect(pipe.run(input(steer: 75), gear: 1)[2], 1500); // reset hysteresis → TẮT
+    expect(run(pipe, steer: 75, gear: 1)[2], 1500); // reset hysteresis → không tác động → Center
   });
 
-  test('sửa hồ sơ có tác dụng ngay ở chu kỳ tiếp theo', () {
-    final p = profile();
+  test('sửa hồ sơ có tác dụng ngay ở chu kỳ tiếp theo, giữ vị trí Input', () {
+    final p = profile()..ch(3).enabled = true;
     final pipe = OutputPipeline(p);
-    expect(pipe.run(input(), gear: 1)[2], 1500);
-    final q = profile()..mixes = [MixRule(id: 'c', type: MixType.linear, sourceCh: 1, targetCh: 3, offsetPct: 50)];
+    expect(run(pipe, steer: 40)[2], 1500);
+    final q = profile()
+      ..ch(3).enabled = true
+      ..mixer.add(MixRule(id: 'c', source: 'steer', destCh: 3, offsetPct: 10));
     pipe.update(q);
-    expect(pipe.run(input(), gear: 1)[2], 1750);
+    expect(pipe.run(gear: 1)[2], 1750); // steer 40 giữ nguyên + 10 = 50%
+  });
+
+  test('vị trí nghỉ của Ga theo vị trí về đã cài (R2, H5-1)', () {
+    final p = profile();
+    final stick = p.activeLayout.itemForInput('throttle')!;
+    stick.returnCfg!.targetPct = -28;
+    final pipe = OutputPipeline(p);
+    expect(pipe.restPct(CarProfile.throttleCh, p.activeLayout), -28);
+    pipe.inputs.setPosition('throttle', -28);
+    expect(pipe.throttleAtRest(p.activeLayout), isTrue);
+    pipe.inputs.setPosition('throttle', 40);
+    expect(pipe.throttleAtRest(p.activeLayout), isFalse);
   });
 }

@@ -1,5 +1,5 @@
 // Màn Cấu hình: làm việc trên hồ sơ xe, luôn mở được kể cả khi chưa nối xe (E4).
-// Tab: Ga · Lái · Kênh · Mix · Chung.
+// Tab: Ga · Lái · Input · Mix · Kênh · Chung (Sprint 4 — U1).
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -9,14 +9,18 @@ import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
 import '../models/car_profile.dart';
 import '../models/channel_config.dart';
-import '../models/mix_rule.dart';
+import '../models/condition.dart';
+import '../models/input_def.dart';
+import '../models/mixer_rule.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/channel_tile.dart';
+import '../widgets/condition_builder.dart';
 import '../widgets/mix_rule_card.dart';
 import '../widgets/number_field.dart';
 import 'channel_detail_screen.dart';
+import 'input_screen.dart';
 import 'mix_rule_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -37,7 +41,9 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProviderStateMixin {
+  static const mixTab = 3;
+  late final _tabs = TabController(length: 6, vsync: this, initialIndex: widget.initialTab);
   late CarProfile draft;
   late String _savedJson;
   late String _savedKey;
@@ -71,6 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     for (final t in [_name, _ip, _port, _ssid, _mac, _devName]) {
       t.dispose();
     }
+    _tabs.dispose();
     super.dispose();
   }
 
@@ -130,8 +137,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _reset() async {
     final ok = await _confirm('Khôi phục mặc định?',
-        'Kênh, mix, hộp số và failsafe của hồ sơ về mặc định. Tên, kết nối và bố cục được giữ lại. '
-            'Chỉ ghi vào máy khi bấm Lưu.',
+        'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật Lái → CH1, Ga → CH2). '
+            'Tên, kết nối, Input và bố cục được giữ lại. Chỉ ghi vào máy khi bấm Lưu.',
         'Khôi phục');
     if (ok) setState(() => draft.resetConfig());
   }
@@ -161,9 +168,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _openChannel(int index) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => ChannelDetailScreen(profile: draft, index: index)),
+      MaterialPageRoute(
+        builder: (ctx) => ChannelDetailScreen(
+          profile: draft,
+          index: index,
+          onOpenMix: () {
+            Navigator.pop(ctx);
+            _tabs.animateTo(mixTab);
+          },
+        ),
+      ),
     );
-    setState(draft.syncLayouts);
+    setState(() {});
   }
 
   void _toggleChannel(ChannelConfig ch, bool on) {
@@ -171,41 +187,116 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack('Kênh Ga/Lái luôn bật');
       return;
     }
-    setState(() {
-      ch.enabled = on;
-      draft.syncLayouts();
-    });
-    if (on && draft.controlOf(ch.index) == null) {
-      _snack('${ch.label} chưa gán vào phần tử nào. Bấm vào kênh để chọn cần gạt / nút điều khiển.');
+    setState(() => ch.enabled = on);
+    if (on && draft.rulesTo(ch.index).isEmpty) {
+      _snack('${ch.label} chưa có luật mix nào. Gắn một Input vào kênh ở Sửa bố cục hoặc thêm luật ở tab Mix.');
     }
   }
 
-  // ---------------- Mix ----------------
-  Future<void> _editMix(int? index) async {
-    final isNew = index == null;
-    if (isNew && draft.mixes.length >= MixRule.maxRules) {
-      _snack('Tối đa ${MixRule.maxRules} luật mix');
+  /// Tóm tắt nguồn của kênh cho tab Kênh
+  String? _channelSource(int ch) {
+    final rules = draft.rulesTo(ch);
+    if (rules.isEmpty) return null;
+    final names = {for (final r in rules) draft.input(r.source)?.name ?? r.source};
+    return rules.length == 1 ? names.first : '${names.take(2).join(', ')} · ${rules.length} luật';
+  }
+
+  // ---------------- Input ----------------
+  Future<void> _editInput(InputDef? d) async {
+    final isNew = d == null;
+    if (isNew && draft.inputs.length >= InputDef.maxInputs) {
+      _snack('Tối đa ${InputDef.maxInputs} Input');
       return;
     }
-    final rule = isNew ? MixRule(id: MixRule.newId()) : draft.mixes[index].copy();
-    final others = [...draft.mixes]..removeWhere((m) => m.id == rule.id);
-    final res = await Navigator.push<MixRule>(
+    final src = d ?? InputDef(id: InputDef.uniqueId('input', draft.inputs.map((i) => i.id)), name: 'Input ${draft.inputs.length + 1}');
+    final used = isNew ? 0 : draft.rulesUsing(src.id).length;
+    final res = await Navigator.push<InputDef>(
       context,
-      MaterialPageRoute(builder: (_) => MixRuleScreen(rule: rule, others: others, channels: draft.channels)),
+      MaterialPageRoute(
+        builder: (_) => InputScreen(
+          input: src,
+          takenIds: {for (final i in draft.inputs) if (i.id != src.id) i.id},
+          idLocked: used > 0,
+          usedBy: used,
+        ),
+      ),
     );
     if (res == null) return;
     setState(() {
       if (isNew) {
-        draft.mixes.add(res);
-      } else {
-        draft.mixes[index] = res;
+        draft.inputs.add(res);
+        return;
+      }
+      if (res.id != src.id) draft.renameInput(src.id, res.id);
+      final i = draft.inputs.indexWhere((x) => x.id == res.id);
+      draft.inputs[i] = res;
+      // Kiểu mới không còn hợp với phần tử đang gắn → gỡ khỏi phần tử
+      for (final l in draft.layouts) {
+        for (final it in l.items) {
+          if (it.inputIds.contains(res.id) && !res.accepts(it.kind)) l.unbindInput(res.id);
+        }
       }
     });
   }
 
-  Future<void> _deleteMix(int index) async {
-    final ok = await _confirm('Xoá luật mix?', draft.mixes[index].describe(draft.channels), 'Xoá');
-    if (ok) setState(() => draft.mixes.removeAt(index));
+  Future<void> _deleteInput(InputDef d) async {
+    final rules = draft.rulesUsing(d.id);
+    final ok = await _confirm(
+      'Xoá Input "${d.name}"?',
+      rules.isEmpty
+          ? 'Input được gỡ khỏi mọi phần tử trên màn Lái.'
+          : 'Input được gỡ khỏi mọi phần tử trên màn Lái. ${rules.length} luật mix dùng Input này sẽ bị tắt:\n'
+              '${rules.map((r) => '• ${r.describe(draft.inputMap, chName: draft.chLabel)}').join('\n')}',
+      'Xoá',
+    );
+    if (ok) setState(() => draft.deleteInput(d.id));
+  }
+
+  // ---------------- Mix ----------------
+  Future<void> _editMix(MixRule? rule, {int? destCh}) async {
+    final isNew = rule == null;
+    if (isNew && draft.mixer.length >= MixRule.maxRules) {
+      _snack('Tối đa ${MixRule.maxRules} luật mix');
+      return;
+    }
+    final src = draft.inputs.where((i) => i.type != InputType.constant).firstOrNull ?? draft.inputs.firstOrNull;
+    if (isNew && src == null) {
+      _snack('Chưa có Input nào. Thêm Input ở tab Input trước.');
+      return;
+    }
+    final work = isNew
+        ? MixRule(id: InputDef.uniqueId(MixRule.newId(), draft.mixer.map((m) => m.id)), source: src!.id, destCh: destCh ?? 3)
+        : rule.copy();
+    final res = await Navigator.push<MixRule>(
+      context,
+      MaterialPageRoute(builder: (_) => MixRuleScreen(rule: work, profile: draft)),
+    );
+    setState(() {
+      if (res == null) return;
+      if (isNew) {
+        draft.mixer.add(res);
+      } else {
+        draft.mixer[draft.mixer.indexWhere((m) => m.id == res.id)] = res;
+      }
+    });
+  }
+
+  Future<void> _deleteMix(MixRule rule) async {
+    final ok = await _confirm('Xoá luật mix?', rule.describe(draft.inputMap, chName: draft.chLabel), 'Xoá');
+    if (ok) setState(() => draft.mixer.removeWhere((m) => m.id == rule.id));
+  }
+
+  /// Kéo đổi thứ tự trong nhóm kênh: hoán vị các vị trí của nhóm trong danh sách chung.
+  /// `to` đã tính sau khi bỏ phần tử ở `from` (onReorderItem).
+  void _reorderInGroup(List<MixRule> group, int from, int to) {
+    final slots = [for (final r in group) draft.mixer.indexOf(r)]..sort();
+    final moved = [...group];
+    moved.insert(to, moved.removeAt(from));
+    setState(() {
+      for (var i = 0; i < slots.length; i++) {
+        draft.mixer[slots[i]] = moved[i];
+      }
+    });
   }
 
   // ---------------- Giao diện ----------------
@@ -218,24 +309,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return PopScope(
           canPop: !_dirty,
           onPopInvokedWithResult: _onPop,
-          child: DefaultTabController(
-            length: 5,
-            initialIndex: widget.initialTab,
-            child: Scaffold(
+          child: Scaffold(
               appBar: AppBar(
                 title: Text(draft.name.trim().isEmpty ? 'Cấu hình' : draft.name),
-                bottom: const PreferredSize(
-                  preferredSize: Size.fromHeight(52),
+                bottom: PreferredSize(
+                  preferredSize: const Size.fromHeight(52),
                   child: Padding(
-                    padding: EdgeInsets.fromLTRB(Gap.m, 0, Gap.m, Gap.s),
+                    padding: const EdgeInsets.fromLTRB(Gap.m, 0, Gap.m, Gap.s),
                     child: TabBar(
+                      controller: _tabs,
                       isScrollable: true,
                       tabAlignment: TabAlignment.start,
-                      tabs: [
+                      tabs: const [
                         Tab(text: 'Ga'),
                         Tab(text: 'Lái'),
-                        Tab(text: 'Kênh'),
+                        Tab(text: 'Input'),
                         Tab(text: 'Mix'),
+                        Tab(text: 'Kênh'),
                         Tab(text: 'Chung'),
                       ],
                     ),
@@ -243,6 +333,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               body: TabBarView(
+                controller: _tabs,
                 children: [
                   _servoTab(
                     draft.throttle,
@@ -254,14 +345,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'Offset bù độ lệch cơ khí khi lắp servo (chỉnh một lần). Trim tinh chỉnh để xe chạy thẳng. '
                         'Min/Max giới hạn góc lái để servo không bị kẹt.',
                   ),
-                  _channelsTab(),
+                  _inputsTab(),
                   _mixTab(),
+                  _channelsTab(),
                   _generalTab(),
                 ],
               ),
               bottomNavigationBar: _bottomBar(errors),
             ),
-          ),
         );
       },
     );
@@ -371,16 +462,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListView(
       padding: const EdgeInsets.all(Gap.l),
       children: [
-        _hint('Tối đa 10 kênh. Bấm vào kênh để chỉnh chi tiết và gán vào một phần tử trên màn Lái '
-            '(cần gạt, nút, công tắc, núm). Phần tử được thêm và cấu hình riêng ở Sửa bố cục. '
+        _hint('Kênh đầu ra CH1–CH10 nhận giá trị từ luật mix. Bấm vào kênh để chỉnh Min/Center/Max, trim, '
+            'đảo chiều và failsafe. Kênh tắt luôn ra failsafe. '
             'Lưu ý: firmware xe hiện tại mới nhận CH1 (Lái) và CH2 (Ga); 10 kênh cần firmware giao thức v2.'),
         for (final ch in draft.channels)
           ChannelTile(
             channel: ch,
-            controlLabel: switch (draft.controlOf(ch.index)) {
-              null => null,
-              final it => controlSlotName(it, y: it.channelY == ch.index),
-            },
+            controlLabel: _channelSource(ch.index),
             onTap: () => _openChannel(ch.index),
             onEnabled: (v) => _toggleChannel(ch, v),
           ),
@@ -388,12 +476,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _inputsTab() {
+    final t = context.tokens;
+    final layout = draft.activeLayout;
+    return Column(children: [
+      Expanded(
+        child: ListView(
+          padding: const EdgeInsets.all(Gap.l),
+          children: [
+            _hint('Input là nguồn điều khiển: cần gạt, nút, công tắc, núm trên màn Lái, hoặc hằng số. '
+                'Gắn phần tử vào Input ở Sửa bố cục; luật mix quyết định Input đi vào kênh nào.'),
+            for (final d in draft.inputs)
+              Card(
+                child: ListTile(
+                  onTap: () => _editInput(d),
+                  title: Text(d.name, style: AppText.title.copyWith(fontSize: 16, color: t.text)),
+                  subtitle: Text(
+                    [
+                      d.id,
+                      d.type == InputType.axis ? '${d.type.label} ${d.range.label}' : d.type.label,
+                      if (d.type != InputType.constant)
+                        switch (layout.itemForInput(d.id)) {
+                          null => 'chưa có trên màn Lái',
+                          final it => it.kind.label.toLowerCase(),
+                        },
+                      '${draft.rulesUsing(d.id).length} luật',
+                    ].join(' · '),
+                    style: AppText.label.copyWith(color: t.textMuted, fontSize: 13),
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Xoá',
+                    onPressed: () => _deleteInput(d),
+                    icon: AppIcon(AppIcons.delete, color: t.textMuted),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(Gap.l, 0, Gap.l, Gap.m),
+        child: Row(children: [
+          Expanded(
+            child: Text('${draft.inputs.length}/${InputDef.maxInputs} Input',
+                style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
+          ),
+          FilledButton.icon(
+            onPressed: draft.inputs.length < InputDef.maxInputs ? () => _editInput(null) : null,
+            icon: const AppIcon(AppIcons.plus, mini: true),
+            label: const Text('Thêm Input'),
+          ),
+        ]),
+      ),
+    ]);
+  }
+
   Widget _mixTab() {
     final t = context.tokens;
+    final errs = <String, String>{};
+    final ids = draft.inputMap, condIds = {for (final c in draft.conditions) c.id};
+    for (final r in draft.mixer) {
+      final e = r.validate(ids, condIds);
+      if (e != null) errs[r.id] = e;
+    }
+    // Nhóm theo kênh đích, trong nhóm xếp theo priority rồi thứ tự danh sách (U3)
+    List<MixRule> group(int ch) {
+      final g = draft.mixer.where((r) => r.destCh == ch).toList();
+      final order = {for (var i = 0; i < draft.mixer.length; i++) draft.mixer[i].id: i};
+      g.sort((a, b) => a.priority != b.priority ? a.priority.compareTo(b.priority) : order[a.id]!.compareTo(order[b.id]!));
+      return g;
+    }
+
     return Column(
       children: [
         Expanded(
-          child: draft.mixes.isEmpty
+          child: draft.mixer.isEmpty
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(Gap.xl),
@@ -402,30 +559,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: Gap.m),
                       Text('Chưa có luật mix', style: AppText.title.copyWith(color: t.text)),
                       const SizedBox(height: Gap.xs),
-                      Text('Ví dụ: CH1 ≥ 80% thì CH3 = 100%, CH1 < 70% thì CH3 = 0%.',
+                      Text('Ví dụ: Nút A bật thì Slider X → CH1, tắt thì Slider X → CH8.',
                           textAlign: TextAlign.center, style: AppText.label.copyWith(color: t.textMuted)),
                     ]),
                   ),
                 )
-              : ReorderableListView.builder(
+              : ListView(
                   padding: const EdgeInsets.all(Gap.l),
-                  buildDefaultDragHandles: false,
-                  itemCount: draft.mixes.length,
-                  onReorderItem: (from, to) => setState(() {
-                    draft.mixes.insert(to, draft.mixes.removeAt(from));
-                  }),
-                  itemBuilder: (context, i) {
-                    final m = draft.mixes[i];
-                    return MixRuleCard(
-                      key: ValueKey(m.id),
-                      index: i,
-                      rule: m,
-                      channels: draft.channels,
-                      onEdit: () => _editMix(i),
-                      onDelete: () => _deleteMix(i),
-                      onEnabled: (v) => setState(() => m.enabled = v),
-                    );
-                  },
+                  children: [
+                    for (var ch = 1; ch <= 10; ch++)
+                      if (group(ch).isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(top: Gap.s, bottom: Gap.xs),
+                          child: Row(children: [
+                            Expanded(
+                              child: Text(draft.chLabel(ch).toUpperCase(),
+                                  style: AppText.caption.copyWith(color: draft.ch(ch).enabled ? t.textMuted : t.disabled)),
+                            ),
+                            TextButton(onPressed: () => _editMix(null, destCh: ch), child: const Text('+ Luật')),
+                          ]),
+                        ),
+                        Builder(builder: (context) {
+                          final g = group(ch);
+                          return ReorderableListView(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            buildDefaultDragHandles: false,
+                            onReorderItem: (from, to) => _reorderInGroup(g, from, to),
+                            children: [
+                              for (var i = 0; i < g.length; i++)
+                                MixRuleCard(
+                                  key: ValueKey(g[i].id),
+                                  index: i,
+                                  rule: g[i],
+                                  profile: draft,
+                                  error: errs[g[i].id],
+                                  onEdit: () => _editMix(g[i]),
+                                  onDelete: () => _deleteMix(g[i]),
+                                  onEnabled: (v) => setState(() => g[i].enabled = v),
+                                ),
+                            ],
+                          );
+                        }),
+                      ],
+                  ],
                 ),
         ),
         Padding(
@@ -433,12 +610,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Row(children: [
             Expanded(
               child: Text(
-                  '${draft.mixes.length}/${MixRule.maxRules} luật · '
-                  '${draft.mixes.where((m) => m.enabled).length} đang bật · chạy từ trên xuống',
+                  '${draft.mixer.length}/${MixRule.maxRules} luật · '
+                  '${draft.mixer.where((m) => m.enabled).length} đang bật · priority cao chạy sau',
                   style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
             ),
             FilledButton.icon(
-              onPressed: draft.mixes.length < MixRule.maxRules ? () => _editMix(null) : null,
+              onPressed: draft.mixer.length < MixRule.maxRules ? () => _editMix(null) : null,
               icon: const AppIcon(AppIcons.plus, mini: true),
               label: const Text('Thêm luật'),
             ),
@@ -535,6 +712,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
             step: 5,
             error: g['gear$i'],
             onChanged: (v) => setState(() => draft.gears.maxThrottle[i] = v),
+          ),
+        const Divider(height: 32),
+        Text('ARM', style: AppText.title.copyWith(color: context.tokens.text)),
+        _hint('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (ga phải ở vị trí nghỉ).'),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Tự ARM sau khi kết nối'),
+          subtitle: const Text('Tự ARM một lần khi đủ điều kiện; DISARM rồi thì phải bấm lại'),
+          value: draft.arm.autoArm,
+          onChanged: (v) => setState(() => draft.arm.autoArm = v),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Điều kiện ARM riêng'),
+          subtitle: const Text('Chỉ ARM được khi điều kiện đúng; điều kiện sai thì tự DISARM'),
+          value: draft.arm.armCondition != null,
+          onChanged: (v) => setState(() => draft.arm.armCondition = v ? const ExprTrue() : null),
+        ),
+        if (draft.arm.armCondition != null)
+          ConditionBuilder(
+            value: draft.arm.armCondition!,
+            inputs: draft.inputs,
+            named: draft.conditions,
+            onChanged: (e) => setState(() => draft.arm.armCondition = e),
           ),
       ],
     );

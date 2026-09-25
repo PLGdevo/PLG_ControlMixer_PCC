@@ -5,12 +5,20 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../models/car_profile.dart';
 import '../protocol/protocol.dart';
+import '../services/arm_controller.dart';
+import '../services/condition_engine.dart';
+import '../services/output_pipeline.dart';
 import '../transport/transport.dart';
 
 enum LinkState { disconnected, connecting, connected, lost }
 
-/// Quản lý kết nối, vòng gửi lệnh điều khiển, telemetry và cấu hình.
+/// Quản lý kết nối, vòng gửi lệnh điều khiển, telemetry, cấu hình và ARM.
+/// Mỗi chu kỳ: Input → Condition → Mixer (OutputPipeline); chỉ khi ARMED mới gửi kết quả mixer (R1).
 class CarController extends ChangeNotifier {
+  CarController() {
+    arm.addListener(_onArmChanged);
+  }
+
   static const controlPeriod = Duration(milliseconds: 25); // 40 Hz
   static const linkTimeout = Duration(milliseconds: 1000); // không có telemetry -> "mất tín hiệu"
   static const _ackKey = 0x2000;
@@ -25,15 +33,21 @@ class CarController extends ChangeNotifier {
   LinkState state = LinkState.disconnected;
   String? error;
 
-  /// Giá trị gốc 10 kênh, −1..1 (CH1 ở vị trí 0). Firmware hiện tại (giao thức v1)
-  /// chỉ nhận CH1 = lái, CH2 = ga; CH3–CH10 sẽ gửi khi có giao thức v2 (Sprint 4).
-  final List<double> values = List<double>.filled(10, 0);
+  /// Trạng thái ARM (R1–R3)
+  final ArmController arm = ArmController();
 
-  /// Vị trí nút bật/tắt (0/1) và công tắc 3 nấc (0/1/2) theo kênh — giữ nguyên khi thoát màn Lái
-  final Map<int, int> switchPos = {};
+  /// Chuỗi tính giá trị gửi đi của hồ sơ đang lái (null = chưa vào màn Lái)
+  OutputPipeline? pipeline;
+  CondNode? _armCond;
 
-  /// Khi true: gửi Center cho cần ga/lái (đang sửa bố cục — H5)
-  bool holdNeutral = false;
+  /// Màn Lái cung cấp điều kiện ARM (R2) để tick mỗi chu kỳ
+  ArmCheck Function()? armCheck;
+
+  /// Vị trí cần gạt / núm (−100…+100) theo mã Input
+  final Map<String, double> positions = {};
+
+  /// Vị trí nút bật/tắt (0/1) và công tắc 3 nấc (0/1/2) theo mã Input — giữ nguyên khi thoát màn Lái
+  final Map<String, int> switchPos = {};
 
   /// Số lượng số theo hồ sơ đang lái (null = theo cấu hình đọc từ xe)
   int? gearCountOverride;
@@ -46,10 +60,8 @@ class CarController extends ChangeNotifier {
   DateTime? lastTelemetryAt;
   CarConfig? config;
 
-  double get throttle => values[CarProfile.throttleCh - 1];
-  set throttle(double v) => values[CarProfile.throttleCh - 1] = v;
-  double get steering => values[CarProfile.steeringCh - 1];
-  set steering(double v) => values[CarProfile.steeringCh - 1] = v;
+  /// Kết quả mixer gần nhất (10 kênh %), null nếu chưa nạp hồ sơ
+  List<double>? get channelPct => pipeline?.lastPct;
 
   CarTransport? get transport => _transport;
   String? get transportName => _transport?.name;
@@ -71,8 +83,8 @@ class CarController extends ChangeNotifier {
       config = await _fetchConfig();
 
       gear = 1;
-      values.fillRange(0, values.length, 0);
       connectedKey = key;
+      arm.onConnected();
       lastTelemetryAt = DateTime.now();
       _controlTimer = Timer.periodic(controlPeriod, (_) => _sendControl());
       _watchdog = Timer.periodic(const Duration(milliseconds: 200), (_) => _checkLink());
@@ -86,8 +98,6 @@ class CarController extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
-    throttle = 0;
-    steering = 0;
     final t = _transport;
     if (t != null && isConnected) {
       // Gửi lệnh trung tính vài lần trước khi ngắt
@@ -127,29 +137,68 @@ class CarController extends ChangeNotifier {
     connectedKey = null;
     telemetry = null;
     _sending = false;
+    arm.onDisconnected();
     WakelockPlus.disable();
   }
 
+  void _onArmChanged() {
+    if (!arm.armed) pipeline?.reset(); // DISARM: hysteresis + khoá an toàn về ban đầu
+    notifyListeners();
+  }
+
+  // ---------------- Hồ sơ / Input ----------------
+  /// Nạp (hoặc nạp lại sau khi sửa) hồ sơ đang lái; vị trí Input được giữ nguyên
+  void loadProfile(CarProfile p) {
+    final pl = pipeline;
+    if (pl == null) {
+      pipeline = OutputPipeline(p);
+    } else {
+      pl.update(p);
+    }
+    arm.autoArm = p.arm.autoArm;
+    final a = p.arm.armCondition;
+    _armCond = a == null ? null : pipeline!.mixer.conditions.compile(a);
+    final im = pipeline!.inputs;
+    positions.forEach(im.setPosition);
+    switchPos.forEach(im.setSwitch);
+  }
+
+  /// Rời màn Lái: DISARM, bỏ hồ sơ khỏi vòng gửi
+  void unloadProfile() {
+    arm.disarm('Thoát màn Lái');
+    armCheck = null;
+    pipeline = null;
+    _armCond = null;
+  }
+
+  /// Điều kiện ARM riêng của hồ sơ (R2) đang đúng
+  bool get armConditionOk {
+    final n = _armCond, pl = pipeline;
+    if (n == null || pl == null) return true;
+    return pl.mixer.conditions.eval(n, pl.inputs.state);
+  }
+
+  /// Cần gạt / núm gắn Input `id`: vị trí −100…+100
+  void setPosition(String id, double pos, {bool notify = true}) {
+    final v = pos.clamp(-100.0, 100.0).toDouble();
+    positions[id] = v;
+    pipeline?.inputs.setPosition(id, v);
+    if (notify) notifyListeners();
+  }
+
+  /// Nút / công tắc gắn Input `id`: nấc 0/1 (bật/tắt) hoặc 0/1/2 (3 nấc)
+  void setSwitch(String id, int pos, {bool notify = true}) {
+    switchPos[id] = pos;
+    pipeline?.inputs.setSwitch(id, pos);
+    if (notify) notifyListeners();
+  }
+
+  double position(String id) => positions[id] ?? 0;
+  int switchOf(String id) => switchPos[id] ?? 0;
+
   // ---------------- Điều khiển ----------------
-  void setThrottle(double v) {
-    throttle = v.clamp(-1.0, 1.0).toDouble();
-    notifyListeners();
-  }
-
-  void setSteering(double v) {
-    steering = v.clamp(-1.0, 1.0).toDouble();
-    notifyListeners();
-  }
-
-  /// Báo giao diện vẽ lại sau khi sửa trực tiếp `values`
+  /// Báo giao diện vẽ lại sau khi sửa trực tiếp vị trí Input
   void refresh() => notifyListeners();
-
-  /// Đặt giá trị kênh `ch` (1..10), −1..1
-  void setChannel(int ch, double v) {
-    if (ch < 1 || ch > values.length) return;
-    values[ch - 1] = v.clamp(-1.0, 1.0).toDouble();
-    notifyListeners();
-  }
 
   void gearUp() {
     if (gear < gearCount) {
@@ -178,9 +227,28 @@ class CarController extends ChangeNotifier {
   void _sendControl() {
     final t = _transport;
     if (t == null || _sending) return; // bỏ gói nếu gói trước chưa gửi xong (tránh dồn trễ)
+    final pl = pipeline;
+    var thr = 0.0, steer = 0.0;
+    if (pl != null) {
+      final pct = pl.mixed();
+      final check = armCheck?.call();
+      if (check != null) {
+        arm.tick(ArmCheck(
+          profileValid: check.profileValid,
+          throttleAtRest: check.throttleAtRest,
+          editing: check.editing,
+          armConditionOk: armConditionOk,
+        ));
+      }
+      // Giao thức v1 (cầu nối Sprint 3): xe tự áp servo và hộp số, chỉ nhận CH1/CH2.
+      // Chưa ARM → gửi trung tính (giao thức v2 sẽ gửi failsafeUs — R1).
+      if (arm.armed) {
+        thr = pct[CarProfile.throttleCh - 1] / 100;
+        steer = pct[CarProfile.steeringCh - 1] / 100;
+      }
+    }
     _sending = true;
-    final neutral = holdNeutral;
-    t.send(_controlFrame(neutral ? 0 : throttle, neutral ? 0 : steering)).catchError((_) {}).whenComplete(() => _sending = false);
+    t.send(_controlFrame(thr, steer)).catchError((_) {}).whenComplete(() => _sending = false);
   }
 
   void _checkLink() {
@@ -188,6 +256,7 @@ class CarController extends ChangeNotifier {
     if (state == LinkState.connected &&
         last != null &&
         DateTime.now().difference(last) > linkTimeout) {
+      arm.disarm('Mất tín hiệu');
       _setState(LinkState.lost);
     }
   }
@@ -208,6 +277,7 @@ class CarController extends ChangeNotifier {
       if (t == null) return;
       telemetry = t;
       lastTelemetryAt = DateTime.now();
+      if (t.failsafe && arm.armed) arm.onCarFailsafe();
       if (state == LinkState.lost) state = LinkState.connected;
       notifyListeners();
     }
@@ -282,11 +352,21 @@ class CarController extends ChangeNotifier {
   /// App là nguồn đúng (0.5): đưa cấu hình hồ sơ xuống xe nếu khác cấu hình xe đang có.
   /// Firmware v1 tự áp servo/failsafe nên phải ghi cả CH1/CH2; khi có giao thức v2
   /// (Sprint 4) hàm này chỉ còn gửi FS_WRITE. Trả về true nếu đã ghi.
+  /// Kết quả được báo cho ArmController: đồng bộ được thì READY, lỗi thì không cho ARM (E6, R1).
   Future<bool> syncProfile(CarProfile p, {bool force = false}) async {
     final want = p.toCarConfig();
     final have = config;
-    if (!force && have != null && listEquals(have.toBytes(), want.toBytes())) return false;
-    await writeProfile(p, persist: true);
+    if (!force && have != null && listEquals(have.toBytes(), want.toBytes())) {
+      arm.onFailsafeSync(true);
+      return false;
+    }
+    try {
+      await writeProfile(p, persist: true);
+    } catch (_) {
+      arm.onFailsafeSync(false);
+      rethrow;
+    }
+    arm.onFailsafeSync(true);
     return true;
   }
 
@@ -309,6 +389,7 @@ class CarController extends ChangeNotifier {
 
   @override
   void dispose() {
+    arm.removeListener(_onArmChanged);
     _teardown();
     super.dispose();
   }

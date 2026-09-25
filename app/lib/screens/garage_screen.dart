@@ -47,6 +47,54 @@ class _GarageScreenState extends State<GarageScreen> {
 
   bool _isConnected(CarProfile p) => c.isConnected && c.connectedKey == p.connKey;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showMigrationReport());
+  }
+
+  /// Báo cáo một lần các hồ sơ vừa được tự chuyển sang mô hình Input → Mixer (Sprint 4 — J4)
+  Future<void> _showMigrationReport() async {
+    if (!mounted || repo.migrationReports.isEmpty) return;
+    final reports = Map.of(repo.migrationReports);
+    repo.migrationReports.clear();
+    final t = context.tokens;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Đã cập nhật hồ sơ xe'),
+        content: SizedBox(
+          width: 480,
+          child: ListView(shrinkWrap: true, children: [
+            Text(
+              'Cấu hình điều khiển được chuyển sang dạng Input → luật mix → kênh. '
+              'Mỗi kênh cũ thành một Input "chN" và một luật; luật mix cũ được giữ nguyên thứ tự. '
+              'Bản gốc được lưu cạnh hồ sơ (đuôi .bak).',
+              style: AppText.body.copyWith(color: t.textBody),
+            ),
+            for (final e in reports.entries) ...[
+              const SizedBox(height: Gap.m),
+              Text(repo.get(e.key)?.name ?? e.key, style: AppText.title.copyWith(color: t.text)),
+              if (e.value.isEmpty)
+                Text('Không có thay đổi hành vi.', style: AppText.label.copyWith(color: t.ok))
+              else
+                for (final w in e.value)
+                  Padding(
+                    padding: const EdgeInsets.only(top: Gap.xs),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      AppIcon(AppIcons.warning, color: t.warn, mini: true),
+                      const SizedBox(width: Gap.xs),
+                      Expanded(child: Text(w, style: AppText.label.copyWith(color: t.text))),
+                    ]),
+                  ),
+            ],
+          ]),
+        ),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đã hiểu'))],
+      ),
+    );
+  }
+
   Future<void> _create() async {
     await Navigator.push<CarProfile>(
       context,

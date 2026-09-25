@@ -24,14 +24,14 @@ enum CurveType {
   final String label;
 }
 
-class Curve {
+class MixCurve {
   static const xs = [-100.0, -50.0, 0.0, 50.0, 100.0];
 
   CurveType type;
   double expoPct; // −100…+100
   List<double> points; // 5 điểm tại −100, −50, 0, 50, 100
 
-  Curve({this.type = CurveType.linear, this.expoPct = 0, List<double>? points})
+  MixCurve({this.type = CurveType.linear, this.expoPct = 0, List<double>? points})
       : points = points ?? [-100, -50, 0, 50, 100];
 
   /// Áp đường cong; đầu vào được kẹp về −100…+100 trước
@@ -65,7 +65,7 @@ class Curve {
         if (type == CurveType.points) 'points': points,
       };
 
-  factory Curve.fromJson(Map<String, dynamic>? j) => Curve(
+  factory MixCurve.fromJson(Map<String, dynamic>? j) => MixCurve(
         type: CurveType.values.asNameMap()[j?['type']] ?? CurveType.linear,
         expoPct: (j?['expoPct'] as num?)?.toDouble() ?? 0,
         points: (j?['points'] as List?)?.map((e) => (e as num).toDouble()).toList(),
@@ -102,7 +102,7 @@ class MixRule {
   Expr condition;
   double weightPct; // −200…+200
   double offsetPct; // −100…+100
-  Curve curve;
+  MixCurve curve;
   double minPct, maxPct; // −100…+100
   int destCh; // 1..10
   Combine combine;
@@ -117,14 +117,14 @@ class MixRule {
     this.condition = const ExprTrue(),
     this.weightPct = 100,
     this.offsetPct = 0,
-    Curve? curve,
+    MixCurve? curve,
     this.minPct = -100,
     this.maxPct = 100,
     required this.destCh,
     this.combine = Combine.replace,
     this.priority = 0,
     SwitchSafety? safety,
-  })  : curve = curve ?? Curve(),
+  })  : curve = curve ?? MixCurve(),
         safety = safety ?? SwitchSafety();
 
   static String newId() {
@@ -208,7 +208,7 @@ class MixRule {
       condition: Expr.fromJson(j['condition']),
       weightPct: d('weightPct', 100),
       offsetPct: d('offsetPct', 0),
-      curve: Curve.fromJson(j['curve'] as Map<String, dynamic>?),
+      curve: MixCurve.fromJson(j['curve'] as Map<String, dynamic>?),
       minPct: d('minPct', -100),
       maxPct: d('maxPct', 100),
       destCh: j['destCh'] as int? ?? 1,

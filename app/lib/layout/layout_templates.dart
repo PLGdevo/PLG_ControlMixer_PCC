@@ -4,12 +4,12 @@ import 'layout_grid.dart';
 
 abstract final class LayoutTemplates {
   /// "Mặc định": ga dọc trái, lái ngang phải, đồng hồ ở giữa.
-  static ControlLayout standard({int steeringCh = 1, int throttleCh = 2}) {
-    ControlItem it(ItemKind k, int x, int y, int w, int h, {int? ch, String? gauge, ReturnConfig? ret}) =>
+  static ControlLayout standard({String steerInput = 'steer', String throttleInput = 'throttle'}) {
+    ControlItem it(ItemKind k, int x, int y, int w, int h, {String? input, String? gauge, ReturnConfig? ret}) =>
         ControlItem(
           id: ControlItem.newId(),
           kind: k,
-          channel: ch,
+          inputId: input,
           gaugeKey: gauge,
           x: x,
           y: y,
@@ -28,10 +28,10 @@ abstract final class LayoutTemplates {
       it(ItemKind.trim, 14, 6, 10, 2),
     ]);
 
-    // Ga (CH2) vào cần gạt dọc, Lái (CH1) vào cần gạt ngang; phần tử khác người dùng tự thêm rồi gán kênh
+    // Input Ga vào cần gạt dọc, Lái vào cần gạt ngang; phần tử khác người dùng tự thêm rồi gắn Input
     l.items
-      ..add(it(ItemKind.stickV, 0, 1, 4, 11, ch: throttleCh, ret: ReturnConfig()))
-      ..add(it(ItemKind.stickH, 14, 9, 10, 3, ch: steeringCh, ret: ReturnConfig()));
+      ..add(it(ItemKind.stickV, 0, 1, 4, 11, input: throttleInput, ret: ReturnConfig()))
+      ..add(it(ItemKind.stickH, 14, 9, 10, 3, input: steerInput, ret: ReturnConfig()));
     return l;
   }
 
@@ -47,11 +47,11 @@ abstract final class LayoutTemplates {
         ItemKind.gearBox || ItemKind.trim => (6, 2),
       };
 
-  /// Thêm một phần tử điều khiển (cần gạt, nút, ...) vào chỗ trống, gán sẵn kênh nếu có.
-  /// Kênh đang ở phần tử khác trên bố cục thì được chuyển sang phần tử mới (H7).
-  static ControlItem? addControl(ControlLayout l, ItemKind kind, {int? channel}) {
+  /// Thêm một phần tử điều khiển (cần gạt, nút, ...) vào chỗ trống, gắn sẵn Input nếu có.
+  /// Input đang ở phần tử khác trên bố cục thì được chuyển sang phần tử mới (I3).
+  static ControlItem? addControl(ControlLayout l, ItemKind kind, {String? inputId}) {
     final item = _place(l, kind);
-    if (item != null && channel != null) l.assignChannel(item, channel);
+    if (item != null && inputId != null) l.bindInput(item, inputId);
     return item;
   }
 

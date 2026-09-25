@@ -9,9 +9,9 @@ void main() {
   group('Lưới bố cục (H2)', () {
     test('bố cục mặc định hợp lệ, có Ga và Lái', () {
       final l = LayoutTemplates.standard();
-      expect(LayoutGrid.validate(l), isNull);
-      expect(l.itemForChannel(1)?.kind, ItemKind.stickH);
-      expect(l.itemForChannel(2)?.kind, ItemKind.stickV);
+      expect(LayoutGrid.validate(l, throttleInputs: {'throttle'}, steerInputs: {'steer'}), isNull);
+      expect(l.itemForInput('steer')?.kind, ItemKind.stickH);
+      expect(l.itemForInput('throttle')?.kind, ItemKind.stickV);
     });
 
     test('bám lưới', () {
@@ -22,7 +22,7 @@ void main() {
 
     test('chống chồng lấn và giữ trong lưới', () {
       final l = LayoutTemplates.standard();
-      final stick = l.itemForChannel(2)!; // 0,1 4x11
+      final stick = l.itemForInput('throttle')!; // 0,1 4x11
       expect(LayoutGrid.fits(l, 'new', const GridRect(1, 2, 2, 2)), isFalse);
       expect(LayoutGrid.fits(l, stick.id, GridRect.of(stick)), isTrue);
       expect(LayoutGrid.fits(l, 'new', const GridRect(22, 11, 3, 2)), isFalse); // tràn lưới
@@ -40,30 +40,44 @@ void main() {
       expect(lim.minH, 3);
     });
 
-    test('thiếu phần tử Ga thì không cho lưu', () {
+    test('thiếu phần tử cho Input điều khiển Ga thì không cho lưu', () {
       final l = LayoutTemplates.standard();
-      l.items.removeWhere((i) => i.channel == 2);
-      expect(LayoutGrid.validate(l), contains('Ga'));
+      l.items.removeWhere((i) => i.inputId == 'throttle');
+      expect(LayoutGrid.validate(l, throttleInputs: {'throttle'}, steerInputs: {'steer'}), contains('Ga'));
+      // Ga có hai nguồn: chỉ cần một trong hai có mặt
+      final k = LayoutTemplates.addControl(l, ItemKind.knob, inputId: 'thr2')!;
+      expect(LayoutGrid.validate(l, throttleInputs: {'throttle', 'thr2'}, steerInputs: {'steer'}), isNull);
+      expect(k.inputId, 'thr2');
     });
 
-    test('một kênh chỉ có một phần tử (H7): gán sang phần tử khác thì chuyển', () {
+    test('một Input chỉ có một phần tử (I3): gắn sang phần tử khác thì chuyển', () {
       final l = LayoutTemplates.standard();
-      final a = LayoutTemplates.addControl(l, ItemKind.toggle, channel: 3)!;
+      final a = LayoutTemplates.addControl(l, ItemKind.toggle, inputId: 'light')!;
       final b = LayoutTemplates.addControl(l, ItemKind.button)!;
-      expect(b.channel, isNull);
-      expect(l.assignChannel(b, 3)?.id, a.id);
-      expect(a.channel, isNull);
-      expect(l.itemForChannel(3)?.id, b.id);
+      expect(b.inputId, isNull);
+      expect(l.bindInput(b, 'light')?.id, a.id);
+      expect(a.inputId, isNull);
+      expect(l.itemForInput('light')?.id, b.id);
+      l.renameInput('light', 'lamp');
+      expect(b.inputId, 'lamp');
+      l.unbindInput('lamp');
+      expect(l.itemForInput('lamp'), isNull);
+    });
+
+    test('một Input trên hai phần tử thì không cho lưu', () {
+      final l = LayoutTemplates.standard();
+      l.items.add(ControlItem(id: 'dup', kind: ItemKind.knob, inputId: 'steer', x: 18, y: 0, w: 3, h: 3));
+      expect(LayoutGrid.validate(l), contains('nhiều hơn một phần tử'));
     });
 
     test('thêm nhiều cần gạt cùng loại, cấu hình riêng từng cái', () {
       final l = LayoutTemplates.standard();
-      final s1 = LayoutTemplates.addControl(l, ItemKind.stickH, channel: 5)!;
+      final s1 = LayoutTemplates.addControl(l, ItemKind.stickH, inputId: 'aux')!;
       final s2 = LayoutTemplates.addControl(l, ItemKind.stickH)!;
       s1.returnCfg!.mode = ReturnMode.hold;
       expect(l.items.where((i) => i.kind == ItemKind.stickH).length, 3);
       expect(s2.returnCfg!.mode, ReturnMode.spring);
-      expect(s2.channel, isNull);
+      expect(s2.inputId, isNull);
       expect(LayoutGrid.validate(l), isNull);
     });
 
@@ -133,18 +147,19 @@ void main() {
       expect(ReturnMotion.onExit(ReturnConfig(targetPct: -100), isThrottle: true), -100);
     });
 
-    test('vị trí nghỉ của ga theo vị trí về đã cài (H5)', () {
+    test('vị trí nghỉ của Input ga theo vị trí về đã cài (H5)', () {
       ControlLayout mk(ControlItem it) => ControlLayout(id: 'l', name: 'l', items: [it]);
-      final v = ControlItem(id: 'v', kind: ItemKind.stickV, channel: 2, x: 0, y: 0, w: 3, h: 8,
+      final v = ControlItem(id: 'v', kind: ItemKind.stickV, inputId: 'thr', x: 0, y: 0, w: 3, h: 8,
           returnCfg: ReturnConfig(targetPct: -28));
-      expect(ReturnMotion.restPct(mk(v), 2, isThrottle: true), -28);
+      expect(ReturnMotion.restPct(mk(v), 'thr', isThrottle: true), -28);
       v.returnCfg = ReturnConfig.holdPosition()..targetPct = 30;
-      expect(ReturnMotion.restPct(mk(v), 2, isThrottle: true), 0);
-      final xy = ControlItem(id: 'xy', kind: ItemKind.stick2D, channel: 1, channelY: 2, x: 0, y: 0, w: 6, h: 6,
+      expect(ReturnMotion.restPct(mk(v), 'thr', isThrottle: true), 0);
+      final xy = ControlItem(id: 'xy', kind: ItemKind.stick2D, inputId: 'x', inputIdY: 'thr', x: 0, y: 0, w: 6, h: 6,
           returnCfg: ReturnConfig(targetPct: 10), returnCfgY: ReturnConfig(targetPct: -50));
-      expect(ReturnMotion.restPct(mk(xy), 2, isThrottle: true), -50);
-      final k = ControlItem(id: 'k', kind: ItemKind.knob, channel: 2, x: 0, y: 0, w: 3, h: 3);
-      expect(ReturnMotion.restPct(mk(k), 2, isThrottle: true), 0);
+      expect(ReturnMotion.restPct(mk(xy), 'thr', isThrottle: true), -50);
+      expect(ReturnMotion.restPct(mk(xy), 'x', isThrottle: false), 10);
+      final k = ControlItem(id: 'k', kind: ItemKind.knob, inputId: 'thr', x: 0, y: 0, w: 3, h: 3);
+      expect(ReturnMotion.restPct(mk(k), 'thr', isThrottle: true), 0);
     });
 
     test('nhớ vị trí khi vào lại màn', () {
