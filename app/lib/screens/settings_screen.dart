@@ -22,6 +22,7 @@ import '../widgets/number_field.dart';
 import 'channel_detail_screen.dart';
 import 'input_screen.dart';
 import 'mix_rule_screen.dart';
+import 'network_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -162,6 +163,28 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     if (didPop) return;
     final leave = await _confirm('Bỏ thay đổi?', 'Các thay đổi chưa lưu sẽ bị mất.', 'Bỏ');
     if (leave && mounted) Navigator.pop(context);
+  }
+
+  // ---------------- Mạng của xe ----------------
+  /// Màn Mạng của xe sửa thẳng phần kết nối của hồ sơ đã lưu (IP, port, mã xe) → nạp lại vào bản nháp
+  Future<void> _openNetwork() async {
+    String wifiJson() => jsonEncode(widget.repo.get(widget.profileId)?.wifi?.toJson());
+    final before = wifiJson();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NetworkScreen(controller: c, repo: widget.repo, profileId: widget.profileId)),
+    );
+    final fresh = widget.repo.get(widget.profileId);
+    if (!mounted || fresh == null || wifiJson() == before) return;
+    final wasDirty = _dirty;
+    setState(() {
+      final w = draft.wifi = fresh.wifi ?? WifiConn();
+      _ip.text = w.ip;
+      _port.text = '${w.port}';
+      _ssid.text = w.ssid ?? '';
+      if (fresh.ble != null) draft.ble!.deviceName = _devName.text = fresh.ble!.deviceName;
+      if (!wasDirty) _markSaved();
+    });
   }
 
   // ---------------- Kênh ----------------
@@ -652,7 +675,11 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
           TextField(
             controller: _ip,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: 'Địa chỉ IP', errorText: g['ip']),
+            decoration: InputDecoration(
+              labelText: 'Địa chỉ IP',
+              errorText: g['ip'] ?? g['carId'],
+              helperText: draft.wifi!.carId == null ? null : 'IP đổi thì app tự tìm xe ${draft.wifi!.carId} trong mạng',
+            ),
             onChanged: (v) => setState(() => draft.wifi!.ip = v.trim()),
           ),
           const SizedBox(height: Gap.m),
@@ -681,6 +708,18 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
             onChanged: (v) => setState(() => draft.ble!.deviceName = v.trim()),
           ),
         ],
+        const SizedBox(height: Gap.m),
+        Card(
+          child: ListTile(
+            leading: const AppIcon(AppIcons.wifi),
+            title: const Text('Mạng của xe'),
+            subtitle: Text(_connectedHere
+                ? 'WiFi riêng / vào router, tên WiFi, mật khẩu, IP tĩnh/động, port'
+                : 'Cần kết nối xe: cấu hình mạng lưu trên xe'),
+            trailing: const AppIcon(AppIcons.chevronRight, mini: true),
+            onTap: _openNetwork,
+          ),
+        ),
         const Divider(height: 32),
         NumberField(
           label: 'Thời gian chờ failsafe',

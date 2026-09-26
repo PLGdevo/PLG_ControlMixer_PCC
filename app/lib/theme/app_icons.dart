@@ -47,6 +47,10 @@ abstract final class AppIcons {
   static const undo = HeroIcons.arrowUturnLeft;
   static const redo = HeroIcons.arrowUturnRight;
   static const addControl = HeroIcons.squaresPlus;
+  static const showSecret = HeroIcons.eye;
+  static const hideSecret = HeroIcons.eyeSlash;
+  static const refresh = HeroIcons.arrowPath;
+  static const chevronRight = HeroIcons.chevronRight;
 
   /// Icon cho nút/công tắc, chọn được trong bảng thuộc tính (H3)
   static const pickable = <String, HeroIcons>{

@@ -16,6 +16,15 @@ class PacketType {
   static const ping = 0x30;
   static const pong = 0x31;
   static const identify = 0x32;
+  // Cấu hình mạng của xe và dò xe — payload ở net_protocol.dart
+  static const netGet = 0x40;
+  static const netData = 0x41;
+  static const netSet = 0x42;
+  static const netApply = 0x43;
+  static const netSetup = 0x44;
+  static const netReset = 0x45;
+  static const discover = 0x46;
+  static const here = 0x47;
 }
 
 const int frameHeader = 0xAA;
@@ -86,6 +95,9 @@ class Telemetry {
   bool get failsafe => (flags & 0x01) != 0;
   bool get armed => (flags & 0x02) != 0;
   bool get viaBle => (flags & 0x04) != 0;
+
+  /// Xe đang ở chế độ cấu hình mạng (WiFi tạm), không nhận lệnh lái
+  bool get netSetup => (flags & 0x08) != 0;
   double get batteryV => batteryMv / 1000;
   double get currentA => currentMa / 1000;
   double get speedKmh => speedCms * 0.036;

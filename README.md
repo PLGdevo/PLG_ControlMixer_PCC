@@ -9,15 +9,18 @@ rc_car/
 │   └── src/
 │       ├── protocol.h        định nghĩa gói tin (khớp với protocol.dart)
 │       ├── servo_logic.h     trim / offset / endpoint / reverse / giới hạn số
-│       └── main.cpp          WiFi AP + UDP, BLE, PWM, failsafe, telemetry, NVS
+│       ├── net_config.h      cấu hình mạng của xe + gói NET_* (test được trên PC)
+│       ├── net_manager.*     WiFi 3 chế độ AP / Router / Cấu hình, dò xe, nút BOOT
+│       └── main.cpp          UDP, BLE, PWM, failsafe, telemetry, NVS
 └── app/                      Flutter
     ├── pubspec.yaml
     └── lib/
         ├── main.dart
-        ├── protocol/protocol.dart
+        ├── protocol/         protocol.dart, net_protocol.dart (mạng của xe, dò xe)
+        ├── services/car_discovery.dart   tìm xe trong mạng router
         ├── transport/        transport.dart, udp_transport.dart, ble_transport.dart
         ├── controller/car_controller.dart
-        ├── screens/          connect_screen, control_screen, settings_screen
+        ├── screens/          garage, control, settings, network (Mạng của xe), ...
         └── widgets/          spring_slider, status_badge, number_field
 ```
 
@@ -37,9 +40,9 @@ Servo lấy nguồn 5–6 V từ BEC của ESC hoặc BEC riêng, **không** l�
 
 **PlatformIO (khuyên dùng):** mở thư mục `firmware/` trong VS Code có cài PlatformIO, bấm Build rồi Upload. File `platformio.ini` đã trỏ tới nền tảng *pioarduino* để có Arduino core 3.x (bản PlatformIO chính thức vẫn ở core 2.x, không có hàm `ledcAttach`).
 
-**Arduino IDE:** cài *esp32 by Espressif* phiên bản 3.x, chọn board *ESP32S3 Dev Module*, bật *USB CDC On Boot*, rồi đặt 3 file trong `src/` chung một thư mục sketch (đổi `main.cpp` thành `rc_car.ino`).
+**Arduino IDE:** cài *esp32 by Espressif* phiên bản 3.x, chọn board *ESP32S3 Dev Module*, bật *USB CDC On Boot*, rồi đặt các file trong `src/` chung một thư mục sketch (đổi `main.cpp` thành `rc_car.ino`).
 
-Mở Serial Monitor 115200 baud. Khởi động đúng sẽ thấy dòng `AP RC-CAR IP 192.168.4.1 UDP 4210` và `RC car ready`.
+Mở Serial Monitor 115200 baud. Khởi động đúng sẽ thấy dòng `Mạng: AP  IP 192.168.4.1  UDP 4210  tên RC-CAR` và `RC car ready`. Gõ `net info` để xem lại trạng thái mạng.
 
 Firmware chạy **WiFi và BLE cùng lúc**. Nếu chỉ dùng một loại, đặt `ENABLE_WIFI` hoặc `ENABLE_BLE` thành 0 để giảm độ trễ và tiết kiệm RAM.
 
@@ -80,7 +83,24 @@ lập khi chưa có phần cứng, build APK, xử lý lỗi thường gặp —
 
 ### Lưu ý khi dùng WiFi
 
-WiFi của xe không có internet, nên một số máy Android sẽ tự chuyển sang dữ liệu di động và gói UDP không tới được xe. Khi Android hỏi "Mạng này không có internet, vẫn giữ kết nối?", hãy chọn **Giữ kết nối**. Nếu vẫn lỗi, tắt dữ liệu di động khi lái.
+WiFi của xe không có internet, nên một số máy Android sẽ tự chuyển sang dữ liệu di động và gói UDP không tới được xe. Khi Android hỏi "Mạng này không có internet, vẫn giữ kết nối?", hãy chọn **Giữ kết nối**. Nếu vẫn lỗi, tắt dữ liệu di động khi lái, hoặc cho xe vào router nhà (bên dưới).
+
+### WiFi 3 chế độ
+
+| Chế độ | Xe | Điện thoại |
+|---|---|---|
+| **WiFi riêng (AP)**, mặc định | Phát `RC-CAR` / `12345678`, IP `192.168.4.1` | Vào WiFi của xe |
+| **Router** | Vào WiFi nhà băng 2.4 GHz, IP động hoặc tĩnh | Vào cùng router (2.4 hay 5 GHz đều được), vẫn có internet |
+| **Cấu hình** | Phát WiFi tạm `RC-SETUP-xxxx` (mật khẩu như WiFi riêng), không nhận lệnh lái | Vào WiFi tạm để sửa |
+
+Chỉnh trong app: **Cấu hình → Chung → Mạng của xe** (cần đang nối xe qua WiFi hoặc Bluetooth). Chỉnh được chế độ khi bật nguồn, tên thiết bị, port UDP, tên / mật khẩu / kênh / IP của WiFi riêng, tên / mật khẩu router và IP động (DHCP) hoặc tĩnh (IP, gateway, subnet, DNS). Bấm **Lưu vào xe & khởi động lại**.
+
+- Ở chế độ Router, bấm **Kết nối** thì app tự tìm xe trong mạng theo mã xe, nên IP động đổi cũng không sao. Trình tạo xe có nút **Tìm xe**.
+- Xe không vào được router trong 15 giây thì tự phát lại WiFi riêng, màn Mạng của xe báo lý do (không thấy mạng, sai mật khẩu...).
+- Nút BOOT trên board: giữ 3 giây khi xe đang chạy → chế độ cấu hình; giữ 10 giây → mạng về mặc định. Không giữ nút lúc cắm điện.
+- Router bật "AP isolation" hoặc điện thoại dùng mạng khách (guest) thì điện thoại không thấy xe.
+
+Chi tiết: `dac_ta_wifi_3_che_do.md`.
 
 ## 4. Giao thức
 
@@ -95,7 +115,10 @@ Khung gói: `[0xAA][type][len][payload][crc8]`, little-endian, CRC-8 đa thức 
 | 0x12 | CONFIG_SET | App → Xe | CarConfig; áp dụng ngay, **chưa lưu** |
 | 0x13 | CONFIG_SAVE | App → Xe | không có; lưu vào flash |
 | 0x14 | CONFIG_RESET | App → Xe | không có; về mặc định, lưu, trả CONFIG_DATA |
-| 0x20 | ACK | Xe → App | type được xác nhận, status (1 = ok) |
+| 0x20 | ACK | Xe → App | type được xác nhận, status (1 = ok, 0 = lỗi, 2 = xe đang chạy) |
+| 0x30–0x32 | PING / PONG / IDENTIFY | | đo độ trễ, "Tìm xe" |
+| 0x40–0x45 | NET_GET / NET_DATA / NET_SET / NET_APPLY / NET_SETUP / NET_RESET | | cấu hình mạng của xe, xem `net_config.h` |
+| 0x46 / 0x47 | DISCOVER / HERE | App → broadcast cổng **4211** / Xe → App | tìm xe trong mạng |
 
 Gói mẫu để kiểm tra: CONTROL với throttle 500, steering −250, số 2, seq 7 là
 `aa 01 06 f4 01 06 ff 02 07 46`.
@@ -127,6 +150,6 @@ Các phần có thể thêm tiếp:
 
 - Đo dòng thật bằng INA219 (chỗ `TODO` trong `sendTelemetry`).
 - Tự kết nối lại BLE khi mất sóng.
-- Chế độ WiFi Station, để xe vào router nhà thay vì phát AP.
+- Quét QR trên xe ngay trong app để vào WiFi của xe (hiện dùng camera hệ thống với nhãn QR chuẩn `WIFI:S:...;T:WPA;P:...;;`).
 - Cập nhật firmware qua WiFi (OTA).
 - Ghi log telemetry ra file trên điện thoại.

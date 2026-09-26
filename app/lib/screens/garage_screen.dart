@@ -6,6 +6,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
 import '../models/car_profile.dart';
+import '../services/car_discovery.dart';
 import '../services/quick_ping.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
@@ -117,11 +118,34 @@ class _GarageScreenState extends State<GarageScreen> {
     );
   }
 
-  Future<void> _connect(CarProfile p) async {
+  /// Chế độ Router: IP do router cấp có thể đổi → dò xe theo mã xe, cập nhật hồ sơ nếu IP/port khác.
+  /// Trả về hồ sơ (có thể đã sửa) và cờ "có thấy xe trong mạng".
+  Future<(CarProfile, bool)> _locate(CarProfile p) async {
+    final id = p.wifi?.carId;
+    if (p.connType != ConnType.wifi || id == null) return (p, true);
+    final hit = (await CarDiscovery.scan(id: id, timeout: const Duration(milliseconds: 1200)))
+        .where((f) => f.id == id.toUpperCase())
+        .firstOrNull;
+    if (hit == null) return (p, false);
+    final w = p.wifi!;
+    if (hit.ip == w.ip && hit.port == w.port) return (p, true);
+    final fresh = repo.get(p.id) ?? p;
+    fresh.wifi!
+      ..ip = hit.ip
+      ..port = hit.port;
+    await repo.save(fresh, touch: false);
+    return (fresh, true);
+  }
+
+  Future<void> _connect(CarProfile profile) async {
+    setState(() => _connectingId = profile.id);
+    final (p, found) = await _locate(profile);
+    if (!mounted) return;
     final CarTransport t;
     if (p.connType == ConnType.ble) {
       final mac = p.ble?.mac ?? '';
       if (mac.isEmpty) {
+        setState(() => _connectingId = null);
         _snack('Hồ sơ chưa có MAC. Bấm Sửa để chọn xe BLE.');
         return;
       }
@@ -132,12 +156,14 @@ class _GarageScreenState extends State<GarageScreen> {
     } else {
       t = UdpTransport(p.wifi!.ip, p.wifi!.port);
     }
-    setState(() => _connectingId = p.id);
     await c.connect(t, key: p.connKey);
     if (!mounted) return;
     setState(() => _connectingId = null);
     if (c.error != null) {
-      _snack(c.error!);
+      _snack(found
+          ? c.error!
+          : '${c.error!}. Không thấy xe trong mạng: kiểm tra điện thoại và xe cùng router (không dùng mạng khách). '
+              'Xe không vào được router thì sau 15 giây tự phát WiFi riêng.');
       return;
     }
     final fresh = repo.get(p.id);
@@ -154,11 +180,12 @@ class _GarageScreenState extends State<GarageScreen> {
     if (mounted) await _drive(p);
   }
 
-  Future<void> _test(CarProfile p) async {
+  Future<void> _test(CarProfile profile) async {
     setState(() {
-      _pinging.add(p.id);
-      _ping.remove(p.id);
+      _pinging.add(profile.id);
+      _ping.remove(profile.id);
     });
+    final (p, _) = _isConnected(profile) ? (profile, true) : await _locate(profile);
     final r = await QuickPing.run(
       ble: p.connType == ConnType.ble,
       ip: p.wifi?.ip,
@@ -333,7 +360,7 @@ class _GarageScreenState extends State<GarageScreen> {
     final t = context.tokens;
     final connected = _isConnected(p);
     final connecting = _connectingId == p.id;
-    final busy = c.state == LinkState.connecting;
+    final busy = c.state == LinkState.connecting || _connectingId != null;
     final ping = _ping[p.id];
     final pinging = _pinging.contains(p.id);
     return Card(

@@ -484,7 +484,11 @@ class _ControlScreenState extends State<ControlScreen> {
                     const SizedBox(width: Gap.s),
                     Flexible(
                       child: Text(
-                        disconnected ? 'Chưa kết nối xe' : 'Failsafe: xe đang ở chế độ an toàn',
+                        disconnected
+                            ? 'Chưa kết nối xe'
+                            : (tel?.netSetup ?? false)
+                                ? 'Xe đang ở chế độ cấu hình mạng: không lái được'
+                                : 'Failsafe: xe đang ở chế độ an toàn',
                         overflow: TextOverflow.ellipsis,
                         style: AppText.label.copyWith(color: t.bad, fontWeight: FontWeight.w700),
                       ),

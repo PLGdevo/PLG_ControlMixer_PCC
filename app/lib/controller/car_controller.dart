@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../models/car_profile.dart';
+import '../protocol/net_protocol.dart';
 import '../protocol/protocol.dart';
 import '../services/arm_controller.dart';
 import '../services/condition_engine.dart';
@@ -22,6 +23,7 @@ class CarController extends ChangeNotifier {
   static const controlPeriod = Duration(milliseconds: 25); // 40 Hz
   static const linkTimeout = Duration(milliseconds: 1000); // không có telemetry -> "mất tín hiệu"
   static const _ackKey = 0x2000;
+  static const _netKey = 0x4100; // NET_DATA theo section
 
   CarTransport? _transport;
   StreamSubscription? _inSub, _lostSub;
@@ -266,9 +268,11 @@ class CarController extends ChangeNotifier {
     final f = decodeFrame(data);
     if (f == null) return;
 
-    final key = (f.type == PacketType.ack && f.payload.isNotEmpty)
-        ? (_ackKey | f.payload[0])
-        : f.type;
+    final key = switch (f.type) {
+      PacketType.ack when f.payload.isNotEmpty => _ackKey | f.payload[0],
+      PacketType.netData when f.payload.isNotEmpty => _netKey | f.payload[0],
+      _ => f.type,
+    };
     final w = _waiters.remove(key);
     if (w != null && !w.isCompleted) w.complete(f);
 
@@ -377,6 +381,58 @@ class CarController extends ChangeNotifier {
     final n = c.copy();
     n.steering.trimUs = (n.steering.trimUs + deltaUs).clamp(-200, 200).toInt();
     await applyConfig(n);
+  }
+
+  // ---------------- Mạng của xe (dac_ta_wifi_3_che_do.md) ----------------
+  /// Cấu hình mạng nằm trên xe (xe cần nó lúc khởi động), không nằm trong hồ sơ
+  Future<NetStatus> readNetStatus() async {
+    final s = NetStatus.parse(await _netGet(NetSection.status));
+    if (s == null) throw Exception('Dữ liệu trạng thái mạng không hợp lệ');
+    return s;
+  }
+
+  Future<NetConfig> readNetConfig() async {
+    final g = await _netGet(NetSection.general);
+    final a = await _netGet(NetSection.ap);
+    final s = await _netGet(NetSection.sta);
+    final c = NetConfig.parse(g, a, s);
+    if (c == null) throw Exception('Dữ liệu cấu hình mạng không hợp lệ (firmware cũ?)');
+    return c;
+  }
+
+  Future<Uint8List> _netGet(int section) async {
+    final f = await _request(encodeFrame(PacketType.netGet, [section]), _netKey | section);
+    return f.payload;
+  }
+
+  /// Ghi cả 3 phần vào bản chờ trên xe rồi lưu. Xe trả ACK rồi tự khởi động lại, app ngắt kết nối.
+  Future<void> applyNetConfig(NetConfig c) async {
+    final errors = c.validate();
+    if (errors.isNotEmpty) throw Exception(errors.values.first);
+    for (final s in NetConfig.sections) {
+      await _netCommand(PacketType.netSet, c.sectionBytes(s), 'Xe từ chối cấu hình mạng');
+    }
+    await _netCommand(PacketType.netApply, const [], 'Xe từ chối cấu hình mạng');
+    await disconnect();
+  }
+
+  /// Khởi động lại xe vào chế độ cấu hình (WiFi tạm)
+  Future<void> enterNetSetup() async {
+    await _netCommand(PacketType.netSetup, const [], 'Xe không vào được chế độ cấu hình');
+    await disconnect();
+  }
+
+  /// Mạng của xe về mặc định (WiFi riêng RC-CAR / 12345678, 192.168.4.1, UDP 4210)
+  Future<void> resetNetConfig() async {
+    await _netCommand(PacketType.netReset, const [], 'Xe không khôi phục được mạng');
+    await disconnect();
+  }
+
+  Future<void> _netCommand(int type, List<int> payload, String failMsg) async {
+    final f = await _request(encodeFrame(type, payload), _ackKey | type);
+    final status = f.payload.length < 2 ? NetAck.fail : f.payload[1];
+    if (status == NetAck.busy) throw Exception('Xe đang chạy: dừng xe (nhả ga) rồi thử lại');
+    if (status != NetAck.ok) throw Exception(failMsg);
   }
 
   // ---------------- Tiện ích ----------------

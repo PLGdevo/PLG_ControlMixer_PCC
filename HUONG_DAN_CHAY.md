@@ -213,6 +213,13 @@ Port giữ nguyên `4210`. Bấm **Kết nối**, badge phải chuyển sang xan
 Xe giả trả lời đủ `CONFIG_GET/SET/SAVE/RESET`, đẩy telemetry 10 Hz với pin, dòng, tốc độ mô phỏng
 theo ga, và tự vào failsafe khi ngừng nhận lệnh quá 400 ms.
 
+Xe giả chạy trên máy tính trong mạng LAN nên giống xe ở chế độ **Router**:
+
+- Trình tạo xe, bước 2, nút **Tìm xe** thấy xe giả (cổng `4211`), chọn là điền sẵn IP của máy tính.
+- **Cấu hình → Chung → Mạng của xe** đọc và sửa được cấu hình mạng giả. Bấm Lưu thì xe giả chỉ ghi
+  log (xe thật sẽ khởi động lại), không đổi port hay chế độ thật.
+- Firewall Windows phải cho Python nhận UDP cả cổng `4210` và `4211`.
+
 > Chỉ giả lập được **WiFi/UDP**. Nhánh BLE không giả bằng script được vì `flutter_blue_plus` nói
 > chuyện thẳng với Bluetooth stack của hệ điều hành chứ không qua socket.
 

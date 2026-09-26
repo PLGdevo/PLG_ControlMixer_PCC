@@ -17,18 +17,22 @@ import 'ping_config.dart';
 enum ConnType { wifi, ble }
 
 class WifiConn {
-  String ip;
+  String ip; // chế độ Router: IP lần cuối thấy xe
   int port;
   String? ssid;
 
-  WifiConn({this.ip = '192.168.4.1', this.port = 4210, this.ssid});
+  /// MAC gốc của xe (đọc từ xe). Có thì app tự dò xe trong mạng khi IP đổi.
+  String? carId;
 
-  Map<String, dynamic> toJson() => {'ip': ip, 'port': port, 'ssid': ssid};
+  WifiConn({this.ip = '192.168.4.1', this.port = 4210, this.ssid, this.carId});
+
+  Map<String, dynamic> toJson() => {'ip': ip, 'port': port, 'ssid': ssid, if (carId != null) 'carId': carId};
 
   factory WifiConn.fromJson(Map<String, dynamic> j) => WifiConn(
         ip: j['ip'] as String? ?? '192.168.4.1',
         port: j['port'] as int? ?? 4210,
         ssid: j['ssid'] as String?,
+        carId: j['carId'] as String?,
       );
 }
 
@@ -366,6 +370,8 @@ class CarProfile {
       final w = wifi;
       if (w == null || !isValidIpv4(w.ip)) e['ip'] = 'Địa chỉ IPv4 không hợp lệ';
       if (w == null || w.port < 1 || w.port > 65535) e['port'] = 'Port trong khoảng 1–65535';
+      final id = w?.carId;
+      if (id != null && !isValidMac(id)) e['carId'] = 'Mã xe dạng AA:BB:CC:DD:EE:FF';
     } else {
       final b = ble;
       if (b == null || (b.mac.trim().isEmpty && b.deviceName.trim().isEmpty)) {

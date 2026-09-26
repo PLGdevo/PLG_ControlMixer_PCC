@@ -7,6 +7,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
 import '../models/car_profile.dart';
+import '../services/car_discovery.dart';
 import '../services/quick_ping.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
@@ -46,6 +47,10 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
   QuickPingResult? pingResult;
   bool pinging = false;
   bool saving = false;
+
+  // WiFi: xe tìm thấy trong mạng đang nối (DISCOVER)
+  List<FoundCar> found = [];
+  bool finding = false;
 
   // BLE
   List<ScanResult> results = [];
@@ -121,6 +126,32 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
         ..deviceName = name;
       _mac.text = p.ble!.mac;
       _devName.text = name;
+      pingResult = null;
+    });
+  }
+
+  Future<void> _find() async {
+    setState(() {
+      finding = true;
+      found = [];
+    });
+    final r = await CarDiscovery.scan();
+    if (!mounted) return;
+    setState(() {
+      finding = false;
+      found = r;
+    });
+    if (r.isEmpty) _snack('Không thấy xe nào trong mạng điện thoại đang nối');
+  }
+
+  void _pickFound(FoundCar f) {
+    setState(() {
+      p.wifi!
+        ..ip = f.ip
+        ..port = f.port
+        ..carId = f.id;
+      _ip.text = f.ip;
+      _port.text = '${f.port}';
       pingResult = null;
     });
   }
@@ -288,8 +319,35 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
     final e = _errors;
     return [
       if (p.connType == ConnType.wifi) ...[
-        Text('Kết nối điện thoại vào WiFi của xe (mặc định "RC-CAR", mật khẩu 12345678).',
+        Text(
+            'Nối điện thoại vào WiFi riêng của xe (mặc định "RC-CAR", mật khẩu 12345678), '
+            'hoặc vào cùng router với xe nếu xe đã được cài vào router nhà. Bấm Tìm xe để điền tự động.',
             style: AppText.label.copyWith(color: t.textMuted)),
+        const SizedBox(height: Gap.m),
+        Row(children: [
+          Expanded(child: Text('Xe trong mạng', style: AppText.title.copyWith(color: t.text))),
+          OutlinedButton.icon(
+            onPressed: finding ? null : _find,
+            icon: finding
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const AppIcon(AppIcons.scan, mini: true),
+            label: Text(finding ? 'Đang tìm' : 'Tìm xe'),
+          ),
+        ]),
+        for (final f in found)
+          Card(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Radii.card),
+              side: BorderSide(color: p.wifi!.carId == f.id ? t.accent : t.line),
+            ),
+            child: ListTile(
+              onTap: () => _pickFound(f),
+              leading: const AppIcon(AppIcons.wifi),
+              title: Text(f.name, style: AppText.title.copyWith(fontSize: 16, color: t.text)),
+              subtitle: Text('${f.ip}:${f.port} · ${f.mode.label} · ${f.id}',
+                  style: AppText.label.copyWith(color: t.textMuted, fontSize: 13)),
+            ),
+          ),
         const SizedBox(height: Gap.m),
         TextField(
           controller: _ip,

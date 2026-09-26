@@ -9,9 +9,15 @@ Trong app điền IP:
   - Android emulator : 10.0.2.2   (10.0.2.2 = máy tính chủ, nhìn từ trong emulator)
   - Điện thoại thật  : IP LAN của máy tính, cùng WiFi
   Port giữ nguyên 4210.
+
+Xe giả chạy trên máy tính trong mạng LAN nên giống xe ở chế độ Router:
+  - trả lời DISCOVER ở cổng 4211 → nút "Tìm xe" trong app thấy xe giả;
+  - màn "Mạng của xe" đọc/sửa được cấu hình mạng giả (NET_*), lệnh lưu chỉ ghi log,
+    xe giả không đổi port hay chế độ thật.
 """
 
 import math
+import re
 import socket
 import struct
 import sys
@@ -31,6 +37,15 @@ CONTROL, TELEMETRY = 0x01, 0x02
 CONFIG_GET, CONFIG_DATA, CONFIG_SET, CONFIG_SAVE, CONFIG_RESET = 0x10, 0x11, 0x12, 0x13, 0x14
 ACK = 0x20
 PING, PONG = 0x30, 0x31  # ping (F1): PING seq:u16 t_send:u32 -> PONG seq:u16 t_send:u32 uptime:u32
+# Cấu hình mạng + dò xe — bố cục payload giống firmware/src/net_config.h
+NET_GET, NET_DATA, NET_SET, NET_APPLY, NET_SETUP, NET_RESET = 0x40, 0x41, 0x42, 0x43, 0x44, 0x45
+DISCOVER, HERE = 0x46, 0x47
+DISCOVERY_PORT = 4211
+SEC_STATUS, SEC_GENERAL, SEC_AP, SEC_STA = 0, 1, 2, 3
+MODE_AP, MODE_STA = 0, 1
+ACK_FAIL, ACK_OK, ACK_BUSY = 0, 1, 2
+PASS_HIDDEN = 0xFF
+FAKE_ID = bytes([0x02, 0x00, 0x00, 0x00, 0xCA, 0xFE])  # MAC giả (bit "locally administered")
 
 FLAG_FAILSAFE, FLAG_ARMED = 0x01, 0x02
 FAILSAFE_AFTER = 0.4  # giây không nhận lệnh thì vào failsafe, khớp failsafeTimeoutMs mặc định
@@ -131,6 +146,104 @@ def describe_config(c: dict) -> str:
             f" | {c['gear_count']} số {c['gear_limit'][:c['gear_count']]}")
 
 
+def default_net() -> dict:
+    """Giống net::setDefaults() trong firmware."""
+    return {
+        "boot_mode": MODE_AP, "udp_port": PORT, "name": "RC-CAR",
+        "ap_ssid": "RC-CAR", "ap_pass": "12345678", "ap_channel": 1, "ap_ip": "192.168.4.1",
+        "sta_ssid": "", "sta_pass": "", "sta_dhcp": 1,
+        "sta_ip": "0.0.0.0", "sta_gw": "0.0.0.0", "sta_mask": "255.255.255.0", "sta_dns": "0.0.0.0",
+    }
+
+
+def ip_bytes(s: str) -> bytes:
+    return bytes(int(x) for x in s.split("."))
+
+
+def pstr(s: str) -> bytes:
+    b = s.encode("utf-8")
+    return bytes([len(b)]) + b
+
+
+def encode_section(sec: int, n: dict, status: bytes) -> bytes | None:
+    if sec == SEC_STATUS:
+        return bytes([sec]) + status
+    if sec == SEC_GENERAL:
+        return bytes([sec, n["boot_mode"]]) + struct.pack("<H", n["udp_port"]) + pstr(n["name"])
+    if sec == SEC_AP:  # mật khẩu không bao giờ gửi ra
+        return (bytes([sec, n["ap_channel"]]) + ip_bytes(n["ap_ip"]) + pstr(n["ap_ssid"])
+                + bytes([PASS_HIDDEN]))
+    if sec == SEC_STA:
+        ips = b"".join(ip_bytes(n[k]) for k in ("sta_ip", "sta_gw", "sta_mask", "sta_dns"))
+        return (bytes([sec, n["sta_dhcp"]]) + ips + pstr(n["sta_ssid"])
+                + bytes([PASS_HIDDEN if n["sta_pass"] else 0]))
+    return None
+
+
+def decode_section(p: bytes, pending: dict, saved: dict) -> bool:
+    """Ghi NET_SET vào bản chờ; 0xFF ở mật khẩu = giữ mật khẩu đã lưu. False nếu khuôn dạng hỏng."""
+    pos = 0
+
+    def take(k):
+        nonlocal pos
+        if pos + k > len(p):
+            raise ValueError("thiếu byte")
+        out = p[pos:pos + k]
+        pos += k
+        return out
+
+    def text(keep=None):
+        ln = take(1)[0]
+        if ln == PASS_HIDDEN and keep is not None:
+            return keep
+        return take(ln).decode("utf-8")
+
+    def ip():
+        return ".".join(str(b) for b in take(4))
+
+    try:
+        t = dict(pending)
+        sec = take(1)[0]
+        if sec == SEC_GENERAL:
+            t["boot_mode"] = take(1)[0]
+            t["udp_port"] = struct.unpack("<H", take(2))[0]
+            t["name"] = text()
+        elif sec == SEC_AP:
+            t["ap_channel"] = take(1)[0]
+            t["ap_ip"] = ip()
+            t["ap_ssid"] = text()
+            t["ap_pass"] = text(keep=saved["ap_pass"])
+        elif sec == SEC_STA:
+            t["sta_dhcp"] = take(1)[0]
+            t["sta_ip"], t["sta_gw"], t["sta_mask"], t["sta_dns"] = ip(), ip(), ip(), ip()
+            t["sta_ssid"] = text()
+            t["sta_pass"] = text(keep=saved["sta_pass"])
+        else:
+            return False
+        if pos != len(p):
+            return False
+    except (ValueError, UnicodeDecodeError):
+        return False
+    pending.clear()
+    pending.update(t)
+    return True
+
+
+def valid_net(n: dict) -> bool:
+    """Rút gọn từ net::validConfig() — app đã kiểm tra kỹ trước khi gửi."""
+    def pw_ok(s, allow_empty):
+        return (allow_empty and s == "") or (8 <= len(s) <= 63 and all(0x20 <= ord(c) <= 0x7E for c in s))
+    if n["boot_mode"] not in (MODE_AP, MODE_STA) or n["udp_port"] in (0, DISCOVERY_PORT):
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,18}[A-Za-z0-9])?", n["name"]):
+        return False
+    if not (1 <= len(n["ap_ssid"].encode()) <= 32 and pw_ok(n["ap_pass"], False) and 1 <= n["ap_channel"] <= 13):
+        return False
+    if n["boot_mode"] == MODE_STA and not n["sta_ssid"]:
+        return False
+    return pw_ok(n["sta_pass"], True)
+
+
 def valid_channel(ch) -> bool:
     mn, ce, mx, tr, of, rv, fs = ch
     return (800 <= mn and mx <= 2200 and mn < ce < mx
@@ -163,9 +276,15 @@ class FakeCar:
         self.client = None
         self.started = time.monotonic()
         self.lock = threading.Lock()
+        self.net = default_net()
+        self.net_pending = dict(self.net)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((HOST, PORT))
+        self.disc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.disc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.disc.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.disc.bind((HOST, DISCOVERY_PORT))
 
     # ---------- hiển thị ----------
     def log(self, msg: str, style: str = ""):
@@ -216,7 +335,7 @@ class FakeCar:
         return Panel(table, title=f"Xe giả — {state}", border_style=border)
 
     def banner(self):
-        self.console.print(f"[bold]Xe giả đang nghe UDP {HOST}:{PORT}[/]")
+        self.console.print(f"[bold]Xe giả đang nghe UDP {HOST}:{PORT}[/] (tìm xe: {DISCOVERY_PORT})")
         self.console.print("  Emulator  -> điền IP 10.0.2.2")
         ips = lan_ips()
         if ips:
@@ -228,10 +347,39 @@ class FakeCar:
         self.console.print("  Ctrl+C để dừng")
         self.console.print("  cấu hình: " + describe_config(self.cfg) + "\n")
 
+    # ---------- mạng ----------
+    def net_status(self) -> bytes:
+        """STATUS: xe giả đang "ở trong router" với IP LAN của máy này."""
+        ips = lan_ips()
+        ip = ip_bytes(ips[0]) if ips else bytes(4)
+        return bytes([MODE_STA, 0, 2, (-50) & 0xFF]) + ip + FAKE_ID + struct.pack("<HB", 0, 0)
+
+    def car_idle(self) -> bool:
+        return time.monotonic() - self.last_cmd_at > FAILSAFE_AFTER or abs(self.throttle) < 50
+
+    def serve_discovery(self):
+        """DISCOVER (broadcast, cổng 4211) -> HERE trả thẳng về máy hỏi."""
+        while True:
+            try:
+                data, addr = self.disc.recvfrom(512)
+            except ConnectionResetError:  # Windows: gói trước tới cổng đã đóng
+                continue
+            frame = decode(data)
+            if frame is None or frame[0] != DISCOVER or len(frame[1]) != 2:
+                continue
+            status = self.net_status()
+            here = (frame[1] + FAKE_ID + status[4:8] + struct.pack("<HB", PORT, MODE_STA)
+                    + pstr(self.net["name"]))
+            self.disc.sendto(encode(HERE, here), addr)
+            self.log(f"-> {addr[0]} đang tìm xe, đã trả lời", style="cyan")
+
     # ---------- nhận ----------
     def serve(self):
         while True:
-            data, addr = self.sock.recvfrom(512)
+            try:
+                data, addr = self.sock.recvfrom(512)
+            except ConnectionResetError:  # Windows: telemetry tới cổng app vừa đóng (app ngắt kết nối)
+                continue
             frame = decode(data)
             if frame is None:
                 self.log(f"  khung hỏng từ {addr}: {data.hex()}", style="red")
@@ -289,6 +437,35 @@ class FakeCar:
             self.sock.sendto(encode(CONFIG_DATA, pack_config(self.cfg)), addr)
             self.log("-> khôi phục mặc định")
             self.log("   " + describe_config(self.cfg))
+
+        elif ptype == NET_GET and len(payload) == 1:
+            out = encode_section(payload[0], self.net, self.net_status())
+            if out is not None:
+                self.sock.sendto(encode(NET_DATA, out), addr)
+
+        elif ptype == NET_SET:
+            st = ACK_BUSY if not self.car_idle() else (
+                ACK_OK if decode_section(payload, self.net_pending, self.net) else ACK_FAIL)
+            self.sock.sendto(encode(ACK, bytes([NET_SET, st])), addr)
+
+        elif ptype == NET_APPLY:
+            st = ACK_BUSY if not self.car_idle() else (ACK_OK if valid_net(self.net_pending) else ACK_FAIL)
+            if st == ACK_OK:
+                self.net = dict(self.net_pending)
+                n = self.net
+                mode = f"router \"{n['sta_ssid']}\"" if n["boot_mode"] == MODE_STA else f"AP \"{n['ap_ssid']}\""
+                self.log(f"-> lưu mạng: {mode}, tên {n['name']}, UDP {n['udp_port']} "
+                         "(xe thật sẽ khởi động lại; xe giả giữ nguyên port)", style="green")
+            self.sock.sendto(encode(ACK, bytes([NET_APPLY, st])), addr)
+
+        elif ptype in (NET_SETUP, NET_RESET):
+            st = ACK_OK if self.car_idle() else ACK_BUSY
+            if st == ACK_OK and ptype == NET_RESET:
+                self.net = default_net()
+                self.net_pending = dict(self.net)
+            self.sock.sendto(encode(ACK, bytes([ptype, st])), addr)
+            self.log(f"-> {'vào chế độ cấu hình' if ptype == NET_SETUP else 'mạng về mặc định'} "
+                     "(xe giả chỉ ghi log)", style="yellow")
 
     # ---------- gửi telemetry 10 Hz ----------
     def telemetry_loop(self):
@@ -349,6 +526,7 @@ def main():
     with Live(car.render_status(), console=console, refresh_per_second=12, transient=False) as live:
         car.live = live
         threading.Thread(target=car.telemetry_loop, daemon=True).start()
+        threading.Thread(target=car.serve_discovery, daemon=True).start()
         try:
             car.serve()
         except KeyboardInterrupt:

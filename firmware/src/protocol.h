@@ -12,9 +12,10 @@
 
 namespace proto {
 
-constexpr uint8_t HEADER      = 0xAA;
-constexpr size_t  MAX_PAYLOAD = 64;
-constexpr size_t  MAX_FRAME   = MAX_PAYLOAD + 4;
+constexpr uint8_t  HEADER         = 0xAA;
+constexpr size_t   MAX_PAYLOAD    = 128;  // đủ cho phần STA của NET_SET (tối đa 115 byte); BLE MTU 185
+constexpr size_t   MAX_FRAME      = MAX_PAYLOAD + 4;
+constexpr uint16_t DISCOVERY_PORT = 4211; // cổng cố định cho DISCOVER/HERE, không đổi theo cấu hình
 
 enum Type : uint8_t {
   CONTROL      = 0x01,  // app -> xe : ControlPayload, gửi 30-50 Hz (cũng là heartbeat)
@@ -24,18 +25,28 @@ enum Type : uint8_t {
   CONFIG_SET   = 0x12,  // app -> xe : CarConfig, áp dụng ngay (CHƯA lưu flash)
   CONFIG_SAVE  = 0x13,  // app -> xe : lưu cấu hình hiện tại vào flash
   CONFIG_RESET = 0x14,  // app -> xe : về mặc định + lưu, trả lời CONFIG_DATA
-  ACK          = 0x20,  // xe -> app : [type được xác nhận][status: 1=ok, 0=lỗi]
+  ACK          = 0x20,  // xe -> app : [type được xác nhận][status: 1=ok, 0=lỗi, 2=xe đang chạy]
   // Ping (F1/F2). Đặc tả v2 đặt PING ở 0x10 nhưng khung v1 đã dùng 0x10–0x14,
   // nên tới khi có giao thức v2 ping dùng 0x30–0x32.
   PING         = 0x30,  // app -> xe : PingPayload, trả PONG ngay trong vòng nhận
   PONG         = 0x31,  // xe -> app : PongPayload
   IDENTIFY     = 0x32,  // app -> xe : uint16 duration_ms ("Tìm xe", F8 — Sprint 4)
+  // Cấu hình mạng của xe (dac_ta_wifi_3_che_do.md, nhóm N). Bố cục payload ở net_config.h
+  NET_GET      = 0x40,  // app -> xe : section:u8, trả NET_DATA
+  NET_DATA     = 0x41,  // xe -> app : section:u8 · dữ liệu
+  NET_SET      = 0x42,  // app -> xe : section:u8 · dữ liệu, ghi vào bản chờ, trả ACK
+  NET_APPLY    = 0x43,  // app -> xe : kiểm tra bản chờ, lưu NVS, ACK rồi khởi động lại
+  NET_SETUP    = 0x44,  // app -> xe : ACK rồi khởi động lại vào chế độ cấu hình (AP tạm)
+  NET_RESET    = 0x45,  // app -> xe : mạng về mặc định, ACK rồi khởi động lại
+  DISCOVER     = 0x46,  // app -> broadcast:DISCOVERY_PORT : nonce:u16
+  HERE         = 0x47,  // xe -> app : trả lời DISCOVER (net::encodeHere)
 };
 
 enum TelemetryFlags : uint8_t {
-  FLAG_FAILSAFE = 1 << 0,
-  FLAG_ARMED    = 1 << 1,
-  FLAG_VIA_BLE  = 1 << 2,
+  FLAG_FAILSAFE  = 1 << 0,
+  FLAG_ARMED     = 1 << 1,
+  FLAG_VIA_BLE   = 1 << 2,
+  FLAG_NET_SETUP = 1 << 3,  // xe đang ở chế độ cấu hình mạng, không nhận CONTROL
 };
 
 #pragma pack(push, 1)

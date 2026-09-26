@@ -1,10 +1,11 @@
 // ============================================================================
 //  RC Car firmware — ESP32-S3 (Arduino core 3.x)
-//  - WiFi Access Point + UDP  và  BLE (GATT kiểu Nordic UART) chạy song song
+//  - WiFi 3 chế độ (AP / Router / Cấu hình, xem net_manager.h) + UDP  và
+//    BLE (GATT kiểu Nordic UART) chạy song song
 //  - PWM servo lái + ESC ga, trim/offset/endpoint/reverse, giới hạn ga theo số
 //  - Failsafe theo timeout + arming (phải nhả ga về 0 mới cho chạy lại)
 //  - Telemetry: điện áp pin, tốc độ (cảm biến hall), RSSI
-//  - Cấu hình lưu trong flash (NVS)
+//  - Cấu hình servo và cấu hình mạng lưu trong flash (NVS)
 // ============================================================================
 #include <Arduino.h>
 #include <WiFi.h>
@@ -13,8 +14,8 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
-#include <esp_wifi.h>
 
+#include "net_manager.h"
 #include "protocol.h"
 #include "servo_logic.h"
 
@@ -25,6 +26,7 @@ constexpr int   PIN_STEERING   = 4;
 constexpr int   PIN_THROTTLE   = 5;
 constexpr int   PIN_BATTERY    = 1;      // ADC1, qua cầu chia áp
 constexpr int   PIN_HALL       = 6;      // cảm biến tốc độ (tùy chọn)
+constexpr int   PIN_NET_BUTTON = 0;      // nút BOOT của DevKitC: giữ 3 s = chế độ cấu hình, 10 s = mạng mặc định; -1 = không dùng
 constexpr float BATT_DIVIDER   = 11.0f;  // R1=100k, R2=10k -> (100+10)/10
 constexpr float WHEEL_CIRC_CM  = 20.4f;  // chu vi bánh xe (cm)
 constexpr int   PULSES_PER_REV = 1;      // số xung hall mỗi vòng bánh
@@ -37,11 +39,8 @@ constexpr uint32_t PWM_PERIOD_US = 1000000UL / PWM_FREQ;
 #define ENABLE_WIFI 1
 #define ENABLE_BLE  1
 
-const char*        AP_SSID  = "RC-CAR";
-const char*        AP_PASS  = "12345678";  // tối thiểu 8 ký tự
-constexpr uint16_t UDP_PORT = 4210;        // IP mặc định của AP: 192.168.4.1
-
-#define BLE_NAME     "RC-CAR"
+// Tên WiFi, mật khẩu, IP, port UDP, tên BLE: chỉnh trong app (Cấu hình → Chung → Mạng của xe),
+// mặc định ở net::setDefaults() — AP "RC-CAR" / 12345678, 192.168.4.1, UDP 4210.
 #define SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // app ghi vào
 #define TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // xe notify ra
@@ -109,10 +108,13 @@ void sendFrame(Source dst, uint8_t type, const void* payload, uint8_t len) {
   }
 }
 
-void sendAck(Source dst, uint8_t type, bool ok) {
-  uint8_t p[2] = {type, (uint8_t)(ok ? 1 : 0)};
+void sendAck(Source dst, uint8_t type, uint8_t status) {  // status: net::AckStatus (1 = ok)
+  uint8_t p[2] = {type, status};
   sendFrame(dst, ACK, p, 2);
 }
+
+// Xe đứng yên: chỉ khi đó mới cho đổi cấu hình mạng (xe sẽ khởi động lại)
+bool carIdle() { return failsafe || abs(lastControl.throttle) < 50; }
 
 // ---------------- Xử lý gói nhận ----------------
 void handleFrame(const uint8_t* buf, size_t n, Source src) {
@@ -123,6 +125,10 @@ void handleFrame(const uint8_t* buf, size_t n, Source src) {
   switch (type) {
     case CONTROL:
       if (len != sizeof(ControlPayload)) return;
+      if (!netm::allowControl()) {  // chế độ cấu hình: không lái, vẫn gửi telemetry (cờ NET_SETUP) cho app
+        activeSrc = src;
+        return;
+      }
       memcpy(&lastControl, p, sizeof(ControlPayload));
       lastControlMs = millis();
       activeSrc = src;
@@ -154,6 +160,39 @@ void handleFrame(const uint8_t* buf, size_t n, Source src) {
       servo::setDefaults(cfg);
       saveConfig();
       sendFrame(src, CONFIG_DATA, &cfg, sizeof(cfg));
+      break;
+
+    // ---- Cấu hình mạng (net_config.h) ----
+    case NET_GET: {
+      if (len != 1) return;
+      uint8_t out[MAX_PAYLOAD];
+      size_t on = net::encodeSection(p[0], netm::config(), netm::status(), out, sizeof(out));
+      if (on) sendFrame(src, NET_DATA, out, (uint8_t)on);
+      break;
+    }
+
+    case NET_SET: {
+      uint8_t st = net::ACK_BUSY;
+      if (carIdle()) st = net::decodeSection(p, len, netm::pending(), netm::config()) ? net::ACK_OK : net::ACK_FAIL;
+      sendAck(src, NET_SET, st);
+      break;
+    }
+
+    case NET_APPLY: {
+      uint8_t st = net::ACK_BUSY;
+      if (carIdle()) st = netm::applyPending() ? net::ACK_OK : net::ACK_FAIL;
+      sendAck(src, NET_APPLY, st);
+      break;
+    }
+
+    case NET_SETUP:
+    case NET_RESET:
+      if (!carIdle()) {
+        sendAck(src, type, net::ACK_BUSY);
+        break;
+      }
+      sendAck(src, type, net::ACK_OK);
+      if (type == NET_SETUP) netm::restartIntoSetup(); else netm::resetToDefaults();
       break;
   }
 }
@@ -191,7 +230,7 @@ class RxCB : public BLECharacteristicCallbacks {
 
 void setupBle() {
   bleQueue = xQueueCreate(16, sizeof(RxFrame));
-  BLEDevice::init(BLE_NAME);
+  BLEDevice::init(netm::config().name);
   BLEDevice::setMTU(185);  // gói cấu hình 38 byte > MTU mặc định 23
   bleServer = BLEDevice::createServer();
   bleServer->setCallbacks(new ServerCB());
@@ -212,12 +251,8 @@ void setupBle() {
 
 // ---------------- WiFi / UDP ----------------
 void setupWifi() {
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASS);
-  WiFi.setSleep(false);  // giảm độ trễ
-  udp.begin(UDP_PORT);
-  Serial.printf("AP %s  IP %s  UDP %u\n", AP_SSID,
-                WiFi.softAPIP().toString().c_str(), UDP_PORT);
+  netm::begin(PIN_NET_BUTTON);  // chọn AP / Router / Cấu hình theo NVS
+  udp.begin(netm::config().udpPort);
 }
 
 void handleUdp() {
@@ -236,16 +271,14 @@ void handleUdp() {
       udp.endPacket();
       continue;
     }
+    // Đang có một điện thoại lái qua WiFi thì máy khác trong cùng mạng không chen vào được,
+    // tới khi xe vào failsafe (quan trọng ở chế độ Router: ai cùng mạng LAN cũng gửi UDP tới xe được)
+    bool otherSender = udp.remoteIP() != udpRemoteIp || udp.remotePort() != udpRemotePort;
+    if (activeSrc == SRC_WIFI && !failsafe && otherSender) continue;
     udpRemoteIp = udp.remoteIP();
     udpRemotePort = udp.remotePort();
     handleFrame(buf, r, SRC_WIFI);
   }
-}
-
-int8_t wifiRssi() {
-  wifi_sta_list_t list;
-  if (esp_wifi_ap_get_sta_list(&list) == ESP_OK && list.num > 0) return list.sta[0].rssi;
-  return 0;
 }
 
 // ---------------- Xuất PWM ----------------
@@ -296,9 +329,10 @@ void sendTelemetry() {
   t.batteryMv = (uint16_t)(analogReadMilliVolts(PIN_BATTERY) * BATT_DIVIDER);
   t.currentMa = 0;  // TODO: đọc INA219 / ACS712 nếu có
   t.speedCms  = (uint16_t)(pulses * WHEEL_CIRC_CM * 1000.0f / (PULSES_PER_REV * dt));
-  t.rssi      = (activeSrc == SRC_WIFI) ? wifiRssi() : 0;
+  t.rssi      = (activeSrc == SRC_WIFI) ? netm::rssi() : 0;
   t.flags     = (failsafe ? FLAG_FAILSAFE : 0) | (armed ? FLAG_ARMED : 0) |
-                (activeSrc == SRC_BLE ? FLAG_VIA_BLE : 0);
+                (activeSrc == SRC_BLE ? FLAG_VIA_BLE : 0) |
+                (netm::allowControl() ? 0 : FLAG_NET_SETUP);
   t.gear      = lastControl.gear;
   t.lastSeq   = lastControl.seq;
   sendFrame(activeSrc, TELEMETRY, &t, sizeof(t));
@@ -318,6 +352,8 @@ void setup() {
 
 #if ENABLE_WIFI
   setupWifi();
+#else
+  netm::load();  // vẫn cần tên BLE, và vẫn đổi được cấu hình mạng qua BLE
 #endif
 #if ENABLE_BLE
   setupBle();
@@ -327,6 +363,7 @@ void setup() {
 
 void loop() {
 #if ENABLE_WIFI
+  netm::loop();
   handleUdp();
 #endif
 #if ENABLE_BLE
