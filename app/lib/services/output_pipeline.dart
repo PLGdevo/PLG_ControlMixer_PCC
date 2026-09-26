@@ -51,10 +51,14 @@ class OutputPipeline {
   List<int> toUsList(List<double> pct, {required int gear}) => List<int>.generate(10, (i) {
         final ch = profile.channels[i];
         if (!ch.enabled) return ch.failsafeUs;
-        var p = pct[i];
-        if (i == CarProfile.throttleCh - 1) p = p * gearLimitPct(gear) / 100;
-        return toUs(ch, p);
+        return toUs(ch, gearedPct(pct, i + 1, gear: gear));
       });
+
+  /// % của kênh `ch` sau hộp số: chỉ kênh Ga đã chọn bị giới hạn, hồ sơ không có kênh Ga thì giữ nguyên
+  double gearedPct(List<double> pct, int ch, {required int gear}) {
+    final p = pct[ch - 1];
+    return ch == profile.throttleCh ? p * gearLimitPct(gear) / 100 : p;
+  }
 
   /// Failsafe của 10 kênh (READY gửi giá trị này — R1)
   List<int> failsafeUs() => [for (final c in profile.channels) c.failsafeUs];
@@ -89,8 +93,11 @@ class OutputPipeline {
     return _restMixer.run()[ch - 1];
   }
 
-  /// Kênh Ga đang ở vị trí nghỉ (sai số ±5%). Tính lại mixer với Input hiện tại (tính lặp với
-  /// cùng đầu vào không đổi trạng thái trễ / khoá an toàn).
-  bool throttleAtRest(ControlLayout layout) =>
-      (mixed()[CarProfile.throttleCh - 1] - restPct(CarProfile.throttleCh, layout)).abs() <= 5;
+  /// Kênh Ga đang ở vị trí nghỉ (sai số ±5%); hồ sơ không có kênh Ga thì luôn đúng. Tính lại mixer
+  /// với Input hiện tại (tính lặp với cùng đầu vào không đổi trạng thái trễ / khoá an toàn).
+  bool throttleAtRest(ControlLayout layout) {
+    final ch = profile.throttleCh;
+    if (ch == null) return true;
+    return (mixed()[ch - 1] - restPct(ch, layout)).abs() <= 5;
+  }
 }

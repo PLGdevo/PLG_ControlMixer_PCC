@@ -242,11 +242,12 @@ class CarController extends ChangeNotifier {
           armConditionOk: armConditionOk,
         ));
       }
-      // Giao thức v1 (cầu nối Sprint 3): xe tự áp servo và hộp số, chỉ nhận CH1/CH2.
+      // Giao thức v1 (cầu nối Sprint 3): xe tự áp servo, chỉ nhận CH1 (chân lái) và CH2 (chân ga).
+      // Hộp số app đã áp lên kênh Ga người dùng chọn; xe giữ giới hạn 100% (toCarConfig).
       // Chưa ARM → gửi trung tính (giao thức v2 sẽ gửi failsafeUs — R1).
       if (arm.armed) {
-        thr = pct[CarProfile.throttleCh - 1] / 100;
-        steer = pct[CarProfile.steeringCh - 1] / 100;
+        steer = pl.gearedPct(pct, 1, gear: gear) / 100;
+        thr = pl.gearedPct(pct, 2, gear: gear) / 100;
       }
     }
     _sending = true;

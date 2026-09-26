@@ -28,7 +28,8 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
   double _preview = 0;
 
   ChannelConfig get ch => widget.profile.ch(widget.index);
-  bool get isMain => ch.index == CarProfile.steeringCh || ch.index == CarProfile.throttleCh;
+  /// CH1/CH2: firmware v1 luôn xuất (chân lái / ga của xe)
+  bool get isMain => ch.alwaysOn;
 
   @override
   void dispose() {
@@ -80,7 +81,7 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Bật kênh'),
-            subtitle: Text(isMain ? 'Kênh Ga/Lái luôn bật' : 'Kênh tắt luôn ra failsafe, luật mix ghi vào bị bỏ qua'),
+            subtitle: Text(isMain ? 'CH1/CH2 luôn bật: firmware xe hiện tại luôn xuất hai kênh này' : 'Kênh tắt luôn ra failsafe, luật mix ghi vào bị bỏ qua'),
             value: ch.enabled,
             onChanged: isMain ? null : (v) => setState(() => ch.enabled = v),
           ),
@@ -111,7 +112,7 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
                 AppIcon(AppIcons.warning, color: t.warn, mini: true),
                 const SizedBox(width: Gap.s),
                 Expanded(
-                  child: Text('Firmware xe hiện tại chỉ nhận 800–2200 µs cho Ga/Lái.',
+                  child: Text('Firmware xe hiện tại chỉ nhận 800–2200 µs cho CH1/CH2.',
                       style: AppText.label.copyWith(color: t.warn)),
                 ),
               ]),

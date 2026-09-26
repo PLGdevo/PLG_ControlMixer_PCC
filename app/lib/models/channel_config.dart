@@ -26,15 +26,24 @@ class ChannelConfig {
     this.enabled = false,
   });
 
-  /// CH1 = Lái, CH2 = Ga, CH3–CH10 tắt
-  factory ChannelConfig.defaults(int index) => switch (index) {
-        1 => ChannelConfig(index: 1, name: 'Lái', enabled: true, minUs: 1100, maxUs: 1900),
-        2 => ChannelConfig(index: 2, name: 'Ga', enabled: true),
-        _ => ChannelConfig(index: index, name: 'Kênh $index'),
-      };
+  /// Kênh chưa gán vai trò. CH1/CH2 bật sẵn vì firmware v1 luôn xuất hai kênh này, CH3–CH10 tắt.
+  factory ChannelConfig.defaults(int index) => ChannelConfig(index: index, name: 'Kênh $index', enabled: index <= 2);
 
-  static List<ChannelConfig> defaultList() =>
-      List.generate(10, (i) => ChannelConfig.defaults(i + 1));
+  /// Kênh Lái / Ga kiểu servo lái và ESC (mẫu "Xe cơ bản", hồ sơ cũ)
+  factory ChannelConfig.steering(int index) =>
+      ChannelConfig(index: index, name: 'Lái', enabled: true, minUs: 1100, maxUs: 1900);
+  factory ChannelConfig.throttle(int index) => ChannelConfig(index: index, name: 'Ga', enabled: true);
+
+  /// 10 kênh mặc định; kênh `steeringCh` / `throttleCh` (nếu có) dựng theo kiểu Lái / Ga
+  static List<ChannelConfig> defaultList({int? steeringCh, int? throttleCh}) => List.generate(10, (i) {
+        final n = i + 1;
+        if (n == steeringCh) return ChannelConfig.steering(n);
+        if (n == throttleCh) return ChannelConfig.throttle(n);
+        return ChannelConfig.defaults(n);
+      });
+
+  /// Firmware v1 luôn xuất CH1/CH2 (chân lái / ga của xe) nên hai kênh này không tắt được
+  bool get alwaysOn => index <= 2;
 
   String get label => 'CH$index';
 

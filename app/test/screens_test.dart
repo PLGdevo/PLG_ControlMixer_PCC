@@ -77,6 +77,39 @@ void setSize(WidgetTester tester, Size s) {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets('Cấu hình: chọn kênh Ga khác, bỏ kênh Lái, vẫn lưu được', (tester) async {
+    setSize(tester, const Size(420, 900));
+    final repo = await repoWith(tester, sample());
+    await tester.pumpWidget(app(SettingsScreen(controller: CarController(), repo: repo, profileId: 'p1')));
+    Future<void> pick(String item) async {
+      await tester.tap(find.byType(DropdownButtonFormField<int>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(item).last);
+      await tester.pumpAndSettle();
+    }
+
+    await pick('CH5');
+    expect(find.text('Chưa có luật mix nào điều khiển kênh Ga (CH5)'), findsOneWidget);
+    await tester.tap(find.widgetWithText(Tab, 'Lái'));
+    await tester.pumpAndSettle();
+    await pick('Không có');
+    expect(find.text('Min'), findsNothing);
+    final save = find.ancestor(of: find.text('Lưu'), matching: find.byWidgetPredicate((w) => w is FilledButton));
+    expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+    await tester.tap(save);
+    for (var i = 0; i < 10; i++) {
+      // Lưu ghi file thật: cho vòng lặp thật chạy vài nhịp
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(find.text('Đã lưu vào máy'), findsOneWidget);
+    final p = repo.get('p1')!;
+    expect([p.throttleCh, p.steeringCh], [5, null]);
+    expect(p.ch(5).enabled, isTrue);
+    expect(p.ch(5).name, 'Ga');
+  });
+
   testWidgets('Cấu hình: dựng đủ 6 tab, hồ sơ mẫu hợp lệ', (tester) async {
     setSize(tester, const Size(420, 900));
     final p = sample();

@@ -31,18 +31,18 @@ void main() {
     final pipe = OutputPipeline(p);
     expect(run(pipe, steer: 100)[0], 1900); // CH1 Lái: 1100/1500/1900
     expect(run(pipe, steer: -50)[0], 1300);
-    p.steering.reverse = true;
+    p.ch(1).reverse = true;
     expect(run(pipe, steer: 100)[0], 1100);
   });
 
   test('trim + offset dời tâm, kết quả luôn kẹp trong [Min, Max]', () {
     final p = profile();
-    p.steering.trimUs = 20;
+    p.ch(1).trimUs = 20;
     final pipe = OutputPipeline(p);
     expect(run(pipe)[0], 1520);
     expect(run(pipe, steer: 100)[0], 1900);
-    p.throttle.offsetUs = 300;
-    p.throttle.trimUs = 200; // tâm 2000 > Max → kẹp
+    p.ch(2).offsetUs = 300;
+    p.ch(2).trimUs = 200; // tâm 2000 > Max → kẹp
     expect(run(pipe)[1], 2000);
     expect(run(pipe, thr: -100)[1], 1000);
   });
@@ -54,6 +54,23 @@ void main() {
     expect(out[0], 1900);
     expect(run(pipe, thr: -100, gear: 1)[1], 1350);
     expect(run(pipe, thr: 100, gear: 9)[1], 2000); // số vượt gearCount → số cao nhất
+  });
+
+  test('hộp số đi theo kênh Ga người dùng chọn; không có kênh Ga thì không giới hạn', () {
+    final p = profile()
+      ..throttleCh = 3
+      ..mixer.add(MixRule(id: 'r3', source: 'throttle', destCh: 3));
+    p.ch(3).enabled = true;
+    final pipe = OutputPipeline(p);
+    final out = run(pipe, thr: 100, gear: 1);
+    expect(out[2], 1650); // CH3 là Ga: 30%
+    expect(out[1], 2000); // CH2 không còn là Ga
+    expect(pipe.gearedPct(pipe.mixed(), 2, gear: 1), 100);
+
+    p.throttleCh = null;
+    expect(run(pipe, thr: 100, gear: 1)[2], 2000);
+    pipe.inputs.setPosition('throttle', 80);
+    expect(pipe.throttleAtRest(p.activeLayout), isTrue); // không có kênh Ga để kiểm tra
   });
 
   test('luật mix: ga (trước hộp số) vào CH4; điều kiện có trễ vào CH3; reset trạng thái', () {
@@ -92,7 +109,7 @@ void main() {
     final stick = p.activeLayout.itemForInput('throttle')!;
     stick.returnCfg!.targetPct = -28;
     final pipe = OutputPipeline(p);
-    expect(pipe.restPct(CarProfile.throttleCh, p.activeLayout), -28);
+    expect(pipe.restPct(p.throttleCh!, p.activeLayout), -28);
     pipe.inputs.setPosition('throttle', -28);
     expect(pipe.throttleAtRest(p.activeLayout), isTrue);
     pipe.inputs.setPosition('throttle', 40);

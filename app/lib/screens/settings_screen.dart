@@ -1,5 +1,5 @@
 // Màn Cấu hình: làm việc trên hồ sơ xe, luôn mở được kể cả khi chưa nối xe (E4).
-// Tab: Ga · Lái · Input · Mix · Kênh · Chung (Sprint 4 — U1).
+// Tab: Ga · Lái · Input · Mix · Kênh · Chung (Sprint 4 — U1). Kênh Ga / Lái do người dùng chọn, có thể không có.
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -138,8 +138,8 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
 
   Future<void> _reset() async {
     final ok = await _confirm('Khôi phục mặc định?',
-        'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật Lái → CH1, Ga → CH2). '
-            'Tên, kết nối, Input và bố cục được giữ lại. Chỉ ghi vào máy khi bấm Lưu.',
+        'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). '
+            'Tên, kết nối, Input, bố cục và việc chọn kênh Ga/Lái được giữ lại. Chỉ ghi vào máy khi bấm Lưu.',
         'Khôi phục');
     if (ok) setState(() => draft.resetConfig());
   }
@@ -206,8 +206,8 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   }
 
   void _toggleChannel(ChannelConfig ch, bool on) {
-    if (!on && (ch.index == CarProfile.steeringCh || ch.index == CarProfile.throttleCh)) {
-      _snack('Kênh Ga/Lái luôn bật');
+    if (!on && ch.alwaysOn) {
+      _snack('CH1/CH2 luôn bật: firmware xe hiện tại luôn xuất hai kênh này');
       return;
     }
     setState(() => ch.enabled = on);
@@ -358,16 +358,8 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
               body: TabBarView(
                 controller: _tabs,
                 children: [
-                  _servoTab(
-                    draft.throttle,
-                    'Center là điểm trung tính của ESC (xe đứng yên). Failsafe thường đặt bằng Center, '
-                        'hoặc thấp hơn một chút nếu muốn xe phanh khi mất sóng. Hộp số áp lên kênh này.',
-                  ),
-                  _servoTab(
-                    draft.steering,
-                    'Offset bù độ lệch cơ khí khi lắp servo (chỉnh một lần). Trim tinh chỉnh để xe chạy thẳng. '
-                        'Min/Max giới hạn góc lái để servo không bị kẹt.',
-                  ),
+                  _roleTab(throttle: true),
+                  _roleTab(throttle: false),
                   _inputsTab(),
                   _mixTab(),
                   _channelsTab(),
@@ -446,39 +438,101 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
         child: Text(s, style: AppText.label.copyWith(color: context.tokens.textMuted, fontSize: 13)),
       );
 
-  // Tab Ga / Lái: giữ giao diện cũ, đọc/ghi channels[1] / channels[0] (B5)
-  Widget _servoTab(ChannelConfig ch, String hint) {
-    final err = ch.validate();
-    void upd(VoidCallback f) => setState(f);
+  /// Tab Ga / Lái: chọn kênh làm Ga / Lái (hoặc không có), rồi chỉnh servo của kênh đó
+  Widget _roleTab({required bool throttle}) {
+    final t = context.tokens;
+    final label = throttle ? 'Ga' : 'Lái';
+    final current = throttle ? draft.throttleCh : draft.steeringCh;
+    final other = throttle ? draft.steeringCh : draft.throttleCh;
+    final warn = draft.roleWarning(throttle: throttle);
+    void pick(int? n) => setState(() {
+          if (throttle) {
+            draft.throttleCh = n;
+          } else {
+            draft.steeringCh = n;
+          }
+          if (n == null) return;
+          final c = draft.ch(n)..enabled = true;
+          if (c.name == 'Kênh $n') c.name = label;
+        });
     return ListView(
       padding: const EdgeInsets.all(Gap.l),
       children: [
-        _hint(hint),
-        NumberField(label: 'Min', unit: ' µs', value: ch.minUs, min: 500, max: 2500, step: 10,
-            error: err['min'], onChanged: (v) => upd(() => ch.minUs = v)),
-        NumberField(label: 'Center', unit: ' µs', value: ch.centerUs, min: 500, max: 2500, step: 5,
-            error: err['center'], onChanged: (v) => upd(() => ch.centerUs = v)),
-        NumberField(label: 'Max', unit: ' µs', value: ch.maxUs, min: 500, max: 2500, step: 10,
-            error: err['max'], onChanged: (v) => upd(() => ch.maxUs = v)),
-        const Divider(),
-        NumberField(label: 'Trim', unit: ' µs', value: ch.trimUs, min: -200, max: 200,
-            error: err['trim'], onChanged: (v) => upd(() => ch.trimUs = v)),
-        NumberField(label: 'Offset', unit: ' µs', value: ch.offsetUs, min: -300, max: 300,
-            error: err['offset'], onChanged: (v) => upd(() => ch.offsetUs = v)),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Đảo chiều (Reverse)'),
-          value: ch.reverse,
-          onChanged: (v) => upd(() => ch.reverse = v),
+        _hint(throttle
+            ? 'Kênh Ga chịu giới hạn của hộp số; muốn ARM hay sửa bố cục phải thả cần ga về vị trí nghỉ. '
+                'Chọn "Không có" nếu xe không có kênh ga.'
+            : 'Kênh Lái là kênh ô Trim trên màn Lái chỉnh. Chọn "Không có" nếu không cần trim nhanh.'),
+        // 0 = không có (DropdownButton coi giá trị null là chưa chọn)
+        DropdownButtonFormField<int>(
+          initialValue: current ?? 0,
+          isExpanded: true,
+          decoration: InputDecoration(labelText: 'Kênh $label'),
+          items: [
+            const DropdownMenuItem(value: 0, child: Text('Không có')),
+            for (var n = 1; n <= 10; n++)
+              DropdownMenuItem(
+                value: n,
+                enabled: n != other,
+                child: Text(
+                  n == other ? '${draft.chLabel(n)} (đang là kênh ${throttle ? 'Lái' : 'Ga'})' : draft.chLabel(n),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: (v) => pick(v == null || v == 0 ? null : v),
         ),
-        const Divider(),
-        NumberField(label: 'Failsafe', unit: ' µs', value: ch.failsafeUs, min: 500, max: 2500, step: 10,
-            error: err['failsafe'], onChanged: (v) => upd(() => ch.failsafeUs = v)),
+        if (warn != null)
+          Padding(
+            padding: const EdgeInsets.only(top: Gap.s),
+            child: Row(children: [
+              AppIcon(AppIcons.warning, color: t.warn, mini: true),
+              const SizedBox(width: Gap.s),
+              Expanded(child: Text(warn, style: AppText.label.copyWith(color: t.warn))),
+            ]),
+          ),
         const SizedBox(height: Gap.m),
-        _hint('Tâm thực tế = Center + Trim + Offset = ${ch.effectiveCenter} µs\n'
-            'Giữ lâu nút −/+ để đổi nhanh gấp 10 lần.'),
+        if (current != null)
+          ..._servoFields(
+            draft.ch(current),
+            throttle
+                ? 'Center là điểm trung tính của ESC (xe đứng yên). Failsafe thường đặt bằng Center, '
+                    'hoặc thấp hơn một chút nếu muốn xe phanh khi mất sóng.'
+                : 'Offset bù độ lệch cơ khí khi lắp servo (chỉnh một lần). Trim tinh chỉnh để xe chạy thẳng. '
+                    'Min/Max giới hạn góc lái để servo không bị kẹt.',
+          ),
       ],
     );
+  }
+
+  List<Widget> _servoFields(ChannelConfig ch, String hint) {
+    final err = ch.validate();
+    void upd(VoidCallback f) => setState(f);
+    return [
+      _hint(hint),
+      NumberField(label: 'Min', unit: ' µs', value: ch.minUs, min: 500, max: 2500, step: 10,
+          error: err['min'], onChanged: (v) => upd(() => ch.minUs = v)),
+      NumberField(label: 'Center', unit: ' µs', value: ch.centerUs, min: 500, max: 2500, step: 5,
+          error: err['center'], onChanged: (v) => upd(() => ch.centerUs = v)),
+      NumberField(label: 'Max', unit: ' µs', value: ch.maxUs, min: 500, max: 2500, step: 10,
+          error: err['max'], onChanged: (v) => upd(() => ch.maxUs = v)),
+      const Divider(),
+      NumberField(label: 'Trim', unit: ' µs', value: ch.trimUs, min: -200, max: 200,
+          error: err['trim'], onChanged: (v) => upd(() => ch.trimUs = v)),
+      NumberField(label: 'Offset', unit: ' µs', value: ch.offsetUs, min: -300, max: 300,
+          error: err['offset'], onChanged: (v) => upd(() => ch.offsetUs = v)),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Đảo chiều (Reverse)'),
+        value: ch.reverse,
+        onChanged: (v) => upd(() => ch.reverse = v),
+      ),
+      const Divider(),
+      NumberField(label: 'Failsafe', unit: ' µs', value: ch.failsafeUs, min: 500, max: 2500, step: 10,
+          error: err['failsafe'], onChanged: (v) => upd(() => ch.failsafeUs = v)),
+      const SizedBox(height: Gap.m),
+      _hint('Tâm thực tế = Center + Trim + Offset = ${ch.effectiveCenter} µs\n'
+          'Giữ lâu nút −/+ để đổi nhanh gấp 10 lần.'),
+    ];
   }
 
   Widget _channelsTab() {
@@ -487,7 +541,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
       children: [
         _hint('Kênh đầu ra CH1–CH10 nhận giá trị từ luật mix. Bấm vào kênh để chỉnh Min/Center/Max, trim, '
             'đảo chiều và failsafe. Kênh tắt luôn ra failsafe. '
-            'Lưu ý: firmware xe hiện tại mới nhận CH1 (Lái) và CH2 (Ga); 10 kênh cần firmware giao thức v2.'),
+            'Lưu ý: firmware xe hiện tại mới nhận CH1 (chân lái) và CH2 (chân ga); 10 kênh cần firmware giao thức v2.'),
         for (final ch in draft.channels)
           ChannelTile(
             channel: ch,
@@ -752,9 +806,12 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
             error: g['gear$i'],
             onChanged: (v) => setState(() => draft.gears.maxThrottle[i] = v),
           ),
+        _hint(draft.throttleCh == null
+            ? 'Chưa chọn kênh Ga (tab Ga) nên hộp số chưa có tác dụng.'
+            : 'Hộp số giới hạn kênh Ga (${draft.chLabel(draft.throttleCh!)}).'),
         const Divider(height: 32),
         Text('ARM', style: AppText.title.copyWith(color: context.tokens.text)),
-        _hint('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (ga phải ở vị trí nghỉ).'),
+        _hint('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (có kênh Ga thì cần ga phải ở vị trí nghỉ).'),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: const Text('Tự ARM sau khi kết nối'),

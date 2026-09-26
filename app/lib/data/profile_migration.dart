@@ -44,7 +44,7 @@ abstract final class ProfileMigration {
   /// { name, ip, port, config: { throttle: {...}|[...], steering: ..., failsafeTimeoutMs, gearCount, gearLimit } }
   static Map<String, dynamic> _v0ToV1(Map<String, dynamic> old) {
     final cfg = (old['config'] ?? old['servo'] ?? old) as Map<String, dynamic>;
-    final channels = ChannelConfig.defaultList();
+    final channels = ChannelConfig.defaultList(steeringCh: 1, throttleCh: 2);
 
     void load(ChannelConfig c, Object? raw) {
       if (raw is List && raw.length >= 7) {
@@ -97,11 +97,11 @@ abstract final class ProfileMigration {
     final j = jsonDecode(jsonEncode(v1)) as Map<String, dynamic>;
     final warnings = <String>[];
 
-    // Kênh: đủ 10, bỏ offValuePct (chuyển sang mức của Input)
+    // Kênh: đủ 10, bỏ offValuePct (chuyển sang mức của Input). Sprint 3: CH1 là Lái, CH2 là Ga.
     final chList = (j['channels'] as List? ?? const []).cast<Map<String, dynamic>>();
+    final defaults = ChannelConfig.defaultList(steeringCh: 1, throttleCh: 2);
     final ch = <int, Map<String, dynamic>>{
-      for (var n = 1; n <= 10; n++)
-        n: chList.where((c) => c['index'] == n).firstOrNull ?? ChannelConfig.defaults(n).toJson(),
+      for (var n = 1; n <= 10; n++) n: chList.where((c) => c['index'] == n).firstOrNull ?? defaults[n - 1].toJson(),
     };
     double offPct(int n) => (ch[n]!['offValuePct'] as num?)?.toDouble() ?? -100;
     String chName(int n) => ch[n]!['name'] as String? ?? 'Kênh $n';
@@ -192,7 +192,7 @@ abstract final class ProfileMigration {
     }
 
     // 3. Luật mix Sprint 3 → luật mới, priority 1, giữ thứ tự
-    const thr = CarProfile.throttleCh;
+    const thr = 2; // Sprint 3: Ga luôn là CH2
     final written = <int>{};
     final mixes = (j['mixes'] as List? ?? const []).cast<Map<String, dynamic>>();
     for (var i = 0; i < mixes.length; i++) {
@@ -303,6 +303,8 @@ abstract final class ProfileMigration {
     j
       ..['schemaVersion'] = 2
       ..['channels'] = [for (var n = 1; n <= 10; n++) ch[n]]
+      ..['throttleCh'] = thr
+      ..['steeringCh'] = 1
       ..['inputs'] = [
         for (var n = 1; n <= 10; n++)
           if (primary[n] != null) inputs[primary[n]]!.toJson(),

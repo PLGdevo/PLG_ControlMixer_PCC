@@ -47,6 +47,38 @@ void main() {
     expect(p.validateAll(), isEmpty);
   });
 
+  test('mẫu "Trống": không Input, không luật, không kênh Ga/Lái, bố cục không có cần gạt', () {
+    final p = CarProfile(id: 'b', name: 'b', connType: ConnType.wifi, wifi: WifiConn());
+    ProfileTemplate.blank.applyTo(p);
+    expect(p.inputs, isEmpty);
+    expect(p.mixer, isEmpty);
+    expect(p.throttleCh, isNull);
+    expect(p.steeringCh, isNull);
+    expect(p.activeLayout.items.where((i) => i.kind.isControl), isEmpty);
+    expect(p.channels.map((c) => c.name).take(2), ['Kênh 1', 'Kênh 2']);
+    expect(p.channels.map((c) => c.enabled).take(3), [true, true, false]); // firmware v1 luôn xuất CH1/CH2
+    expect(p.validateAll(), isEmpty);
+    expect(p.validateMixerPart().warnings, isEmpty);
+    final back = CarProfile.fromJson(ProfileMigration.migrate(jsonDecode(jsonEncode(p.toJson())) as Map<String, dynamic>));
+    expect(back.throttleCh, isNull);
+    expect(back.steeringCh, isNull);
+  });
+
+  test('hồ sơ lưu trước khi chọn được kênh Ga/Lái: Lái CH1, Ga CH2', () {
+    final j = sample().toJson()
+      ..remove('throttleCh')
+      ..remove('steeringCh');
+    final p = CarProfile.fromJson(ProfileMigration.migrate(j));
+    expect(p.steeringCh, 1);
+    expect(p.throttleCh, 2);
+  });
+
+  test('xe (firmware v1) nhận CH1/CH2 và giới hạn hộp số 100%: app tự áp hộp số', () {
+    final cfg = sample().toCarConfig();
+    expect(cfg.gearLimit, [100, 100, 100, 100, 100]);
+    expect(cfg.steering.minUs, 1100);
+  });
+
   test('hồ sơ định dạng cũ chuyển sang hệ kênh, CH1/CH2 giữ giá trị cũ (B5)', () {
     final old = {
       'name': 'Xe cũ',
@@ -62,11 +94,11 @@ void main() {
     };
     final p = CarProfile.fromJson(ProfileMigration.migrate(old));
     expect(p.inputs, isEmpty); // định dạng cũ không có bố cục: phải gắn Input lại
-    expect(p.throttle.centerUs, 1520);
-    expect(p.steering.centerUs, 1480);
-    expect(p.steering.trimUs, 12);
-    expect(p.steering.offsetUs, -30);
-    expect(p.steering.reverse, isTrue);
+    expect(p.ch(2).centerUs, 1520);
+    expect(p.ch(1).centerUs, 1480);
+    expect(p.ch(1).trimUs, 12);
+    expect(p.ch(1).offsetUs, -30);
+    expect(p.ch(1).reverse, isTrue);
     expect(p.failsafeTimeoutMs, 500);
     expect(p.gears.gearCount, 2);
     expect(p.gears.maxThrottle.take(2), [40, 80]);
@@ -78,12 +110,12 @@ void main() {
 
   test('đổi qua lại CarConfig của firmware v1', () {
     final p = sample();
-    p.steering.trimUs = 25;
+    p.ch(1).trimUs = 25;
     final cfg = CarConfig.parse(p.toCarConfig().toBytes())!;
     expect(cfg.steering.trimUs, 25);
     final q = CarProfile(id: 'q', name: 'q', connType: ConnType.wifi)..applyCarConfig(cfg);
-    expect(q.steering.trimUs, 25);
-    expect(q.throttle.centerUs, p.throttle.centerUs);
+    expect(q.ch(1).trimUs, 25);
+    expect(q.ch(2).centerUs, p.ch(2).centerUs);
   });
 
   group('Kiểm tra dữ liệu (E7)', () {
@@ -115,13 +147,23 @@ void main() {
       expect(c.validate()['failsafe'], isNotNull);
     });
 
-    test('thiếu luật hoặc phần tử cho Ga/Lái thì không cho lưu (V)', () {
+    test('kênh Ga/Lái đã chọn mà thiếu luật hoặc phần tử: chỉ cảnh báo, vẫn lưu được (V)', () {
       final p = sample();
-      expect(p.validateAll(), isEmpty);
+      expect(p.validateMixerPart().warnings, isEmpty);
       p.activeLayout.unbindInput('throttle');
-      expect(p.validateAll().join(), contains('Ga'));
+      expect(p.roleWarning(throttle: true), contains('Ga (CH2)'));
+      expect(p.validateAll(), isEmpty);
       final q = sample()..mixer.removeWhere((r) => r.destCh == 1);
-      expect(q.validateAll().join(), contains('Lái (CH1)'));
+      expect(q.roleWarning(throttle: false), contains('Lái (CH1)'));
+      expect(q.validateMixerPart().warnings.join(), contains('Lái (CH1)'));
+      expect(q.validateAll(), isEmpty);
+      q.steeringCh = null;
+      expect(q.roleWarning(throttle: false), isNull);
+    });
+
+    test('kênh Ga và Lái không được trùng nhau', () {
+      final p = sample()..steeringCh = 2;
+      expect(p.validateAll().join(), contains('trùng'));
     });
 
     test('phần tử gắn Input sai kiểu hoặc Input không tồn tại', () {
@@ -251,8 +293,8 @@ void main() {
     final p = CarProfile(id: 'h', name: 'h', connType: ConnType.wifi);
     final h0 = p.failsafeHash();
     expect(p.failsafeBytes().length, 22);
-    p.steering.trimUs = 30;
-    p.throttle.maxUs = 1900;
+    p.ch(1).trimUs = 30;
+    p.ch(2).maxUs = 1900;
     p.gears.gearCount = 2;
     p.mixer.add(MixRule(id: 'm', source: 'steer', destCh: 5));
     expect(p.failsafeHash(), h0);

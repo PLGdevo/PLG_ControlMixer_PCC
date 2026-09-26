@@ -374,13 +374,14 @@ const CHS = Array.from({ length: 10 }, (_, i) => i + 1);
 function mkCh(index, name, enabled, o = {}) {
   return { index, name, enabled, min: 1000, center: 1500, max: 2000, trim: 0, offset: 0, reverse: false, failsafe: 1500, ...o };
 }
-/** CH1 = Lái, CH2 = Ga, CH3–CH10 tắt */
-function chDefaults(i) {
-  if (i === 1) return mkCh(1, 'Lái', true, { min: 1100, max: 1900 });
-  if (i === 2) return mkCh(2, 'Ga', true);
-  return mkCh(i, `Kênh ${i}`, false);
-}
-const defaultChannels = () => CHS.map(chDefaults);
+/** Kênh chưa gán vai trò: CH1/CH2 bật sẵn vì firmware v1 luôn xuất hai kênh này, CH3–CH10 tắt */
+const chDefaults = (i) => mkCh(i, `Kênh ${i}`, i <= 2);
+/** Kênh Lái / Ga kiểu servo lái và ESC (mẫu "Xe cơ bản") */
+const chSteering = (i) => mkCh(i, 'Lái', true, { min: 1100, max: 1900 });
+const chThrottle = (i) => mkCh(i, 'Ga', true);
+/** 10 kênh mặc định; kênh `steerCh` / `thrCh` (nếu có) dựng theo kiểu Lái / Ga */
+const defaultChannels = (steerCh = null, thrCh = null) =>
+  CHS.map((i) => i === steerCh ? chSteering(i) : i === thrCh ? chThrottle(i) : chDefaults(i));
 const chLabel = (c) => `CH${c.index}`;
 const effCenter = (c) => clamp(c.center + c.trim + c.offset, c.min, c.max);
 /** ChannelConfig.validate (E7) */
@@ -794,8 +795,12 @@ class OutputPipeline {
   mixed() { return this.mixer.run(); }
   /** % sau mixer → µs (O2): hộp số áp lên kênh Ga sau mixer; kênh tắt ra failsafe */
   toUsList(pct, gear) {
-    const g = this.profile.gears, lim = g.max[clamp(gear, 1, g.count) - 1];
-    return this.profile.channels.map((c, i) => !c.enabled ? c.failsafe : toUs(c, i === 1 ? pct[i] * lim / 100 : pct[i]));
+    return this.profile.channels.map((c, i) => !c.enabled ? c.failsafe : toUs(c, this.gearedPct(pct, i + 1, gear)));
+  }
+  /** % của kênh `ch` sau hộp số: chỉ kênh Ga đã chọn bị giới hạn, hồ sơ không có kênh Ga thì giữ nguyên */
+  gearedPct(pct, ch, gear) {
+    const g = this.profile.gears;
+    return ch === this.profile.throttleCh ? pct[ch - 1] * g.max[clamp(gear, 1, g.count) - 1] / 100 : pct[ch - 1];
   }
   /** % của kênh `ch` khi mọi cần gạt ở vị trí nghỉ; nút/công tắc giữ trạng thái, nút nhấn giữ coi như đã thả (R2, H5) */
   restPct(ch, layout) {
@@ -809,8 +814,11 @@ class OutputPipeline {
     this.restMixer.reset();
     return this.restMixer.run()[ch - 1];
   }
-  /** Kênh Ga đang ở vị trí nghỉ (sai số ±5%) */
-  throttleAtRest(layout) { return Math.abs(this.mixed()[1] - this.restPct(2, layout)) <= 5; }
+  /** Kênh Ga đang ở vị trí nghỉ (sai số ±5%); hồ sơ không có kênh Ga thì luôn đúng */
+  throttleAtRest(layout) {
+    const ch = this.profile.throttleCh;
+    return ch == null || Math.abs(this.mixed()[ch - 1] - this.restPct(ch, layout)) <= 5;
+  }
 }
 
 // ============================================================================
@@ -952,16 +960,20 @@ function addControl(layout, kind, inputId = null) {
   if (it && inputId != null) bindInput(layout, it, inputId);
   return it;
 }
+/** Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, hộp số, trim người dùng tự thêm */
+function blankLayout() {
+  return { id: newId('lay'), name: 'Mặc định', locked: true, items: [
+    mkItem('statusBadge', 5, 0, 6, 2),
+    mkItem('gauge', 5, 2, 4, 2, { gauge: 'battery' }), mkItem('gauge', 9, 2, 4, 2, { gauge: 'current' }),
+    mkItem('gauge', 5, 4, 4, 2, { gauge: 'speed' }), mkItem('gauge', 9, 4, 4, 2, { gauge: 'ping' }),
+  ] };
+}
 /** "Mặc định": Input Ga vào cần gạt dọc trái, Lái vào cần gạt ngang phải, đồng hồ ở giữa */
 function standardLayout(steer = 'steer', thr = 'throttle') {
-  const it = (kind, x, y, w, h, extra = {}) => mkItem(kind, x, y, w, h, extra);
-  return { id: newId('lay'), name: 'Mặc định', locked: true, items: [
-    it('statusBadge', 5, 0, 6, 2),
-    it('gauge', 5, 2, 4, 2, { gauge: 'battery' }), it('gauge', 9, 2, 4, 2, { gauge: 'current' }),
-    it('gauge', 5, 4, 4, 2, { gauge: 'speed' }), it('gauge', 9, 4, 4, 2, { gauge: 'ping' }),
-    it('gearBox', 5, 9, 8, 3), it('trim', 14, 6, 10, 2),
-    it('stickV', 0, 1, 4, 11, { input: thr }), it('stickH', 14, 9, 10, 3, { input: steer }),
-  ] };
+  const l = blankLayout();
+  l.items.push(mkItem('gearBox', 5, 9, 8, 3), mkItem('trim', 14, 6, 10, 2),
+    mkItem('stickV', 0, 1, 4, 11, { input: thr }), mkItem('stickH', 14, 9, 10, 3, { input: steer }));
+  return l;
 }
 /** ControlLayout.bindInput — một Input chỉ có một phần tử trên bố cục (I3); id = null để bỏ gắn. Trả về phần tử bị gỡ Input. */
 function bindInput(l, item, id, y = false) {
@@ -1039,6 +1051,7 @@ function validateGeneral(p, others = []) {
     else if (b.mac.trim() && !isMac(b.mac.trim())) e.ble = 'MAC dạng AA:BB:CC:DD:EE:FF';
   }
   if (p.failsafeMs < 100 || p.failsafeMs > 3000) e.failsafeTimeout = 'Thời gian failsafe trong khoảng 100–3000 ms';
+  if (p.throttleCh != null && p.throttleCh === p.steeringCh) e.steeringCh = 'Kênh Lái trùng kênh Ga';
   if (p.gears.count < 1 || p.gears.count > 5) e.gearCount = 'Số lượng số 1–5';
   for (let i = 0; i < p.gears.count; i++) { const g = p.gears.max[i]; if (g < 1 || g > 100) e['gear' + i] = `Ga tối đa số ${i + 1} phải 1–100%`; }
   return e;
@@ -1052,8 +1065,11 @@ const rulesTo = (p, ch) => p.mixer.filter((r) => r.enabled && r.destCh === ch);
 const rulesUsing = (p, id) => p.mixer.filter((r) => r.source === id || exprInputs(r.condition).has(id));
 /** Input (không phải hằng số) đang là nguồn của luật bật ghi vào kênh `ch` */
 const driversOf = (p, ch) => new Set(rulesTo(p, ch).filter((r) => findInput(p, r.source)?.type !== 'constant').map((r) => r.source));
+/** Input đang điều khiển kênh Ga / Lái đã chọn (rỗng nếu hồ sơ không chọn kênh đó) */
+const throttleInputs = (p) => p.throttleCh == null ? new Set() : driversOf(p, p.throttleCh);
+const steeringInputs = (p) => p.steeringCh == null ? new Set() : driversOf(p, p.steeringCh);
 /** Input điều khiển kênh Ga (cảnh báo tự về, "ga Giữ vị trí về Center" — H3b) */
-const isThrottleInput = (p, id) => id != null && driversOf(p, 2).has(id);
+const isThrottleInput = (p, id) => id != null && throttleInputs(p).has(id);
 /** Luật "gắn nhanh" (U5): không điều kiện, weight 100, offset 0, tuyến tính, thay thế, priority 0 */
 const isPlain = (r) => r.condition.op === 'true' && r.weightPct === 100 && r.offsetPct === 0 && r.curve.type === 'linear' &&
   r.minPct === -100 && r.maxPct === 100 && r.combine === 'replace' && r.priority === 0;
@@ -1097,45 +1113,49 @@ function renameInput(p, from, to) {
   if (p.arm.armCondition) p.arm.armCondition = renameInExpr(p.arm.armCondition, from, to);
 }
 const defaultGears = () => ({ count: 3, max: [30, 60, 100, 100, 100] });
-/** CarProfile.resetConfig: kênh, mix, hộp số, failsafe, ARM về mặc định; chỉ giữ luật Lái → CH1, Ga → CH2 */
+/** CarProfile.resetConfig: kênh, mix, hộp số, failsafe, ARM về mặc định; giữ kênh Ga/Lái đã chọn và luật
+ *  tối thiểu Input đang điều khiển kênh Lái / Ga → kênh đó */
 function resetConfig(p) {
-  const steer = [...driversOf(p, 1)][0], thr = [...driversOf(p, 2)][0];
-  p.channels = defaultChannels();
+  const steer = [...steeringInputs(p)][0], thr = [...throttleInputs(p)][0];
+  p.channels = defaultChannels(p.steeringCh, p.throttleCh);
   p.conditions = [];
   p.mixer = [
-    ...(steer != null ? [newRule({ id: 'r_steer', source: steer, destCh: 1 })] : []),
-    ...(thr != null ? [newRule({ id: 'r_throttle', source: thr, destCh: 2 })] : []),
+    ...(steer != null ? [newRule({ id: 'r_steer', source: steer, destCh: p.steeringCh })] : []),
+    ...(thr != null ? [newRule({ id: 'r_throttle', source: thr, destCh: p.throttleCh })] : []),
   ];
   p.gears = defaultGears(); p.failsafeMs = 400; p.arm = { autoArm: false, armCondition: null };
 }
-/** CarProfile.missingMainControl: kênh Ga / Lái thiếu luật, hoặc bố cục thiếu phần tử cho Input điều khiển chúng */
-function missingMainControl(p) {
-  for (const [ch, label] of [[1, 'Lái'], [2, 'Ga']]) {
-    if (!rulesTo(p, ch).length) return `Chưa có luật mix nào điều khiển kênh ${label} (CH${ch})`;
-    const drivers = driversOf(p, ch);
-    if (!drivers.size) continue; // chỉ có luật hằng số: không cần phần tử
-    if (![...drivers].some((d) => itemForInput(p.layout, d))) return `Bố cục "${p.layout.name}" chưa có phần tử cho kênh ${label} (CH${ch})`;
-  }
+/** CarProfile.roleWarning: kênh Ga / Lái đã chọn nhưng chưa có luật, hoặc bố cục thiếu phần tử cho Input điều khiển nó.
+ *  Chỉ cảnh báo, không chặn Lưu: hồ sơ không bắt buộc có kênh Ga/Lái, có thể chọn kênh trước rồi mới dựng luật / bố cục. */
+function roleWarning(p, throttle) {
+  const ch = throttle ? p.throttleCh : p.steeringCh, label = throttle ? 'Ga' : 'Lái';
+  if (ch == null) return null;
+  if (!rulesTo(p, ch).length) return `Chưa có luật mix nào điều khiển kênh ${label} (CH${ch})`;
+  const drivers = driversOf(p, ch);
+  if (!drivers.size) return null; // chỉ có luật hằng số: không cần phần tử
+  if (![...drivers].some((d) => itemForInput(p.layout, d))) return `Bố cục "${p.layout.name}" chưa có phần tử cho kênh ${label} (CH${ch})`;
   return null;
 }
 function validateAll(p, others = []) {
   const errs = Object.values(validateGeneral(p, others));
   for (const c of p.channels) { const e = Object.values(chErrors(c)); if (e.length) errs.push(`${chLabel(c)}: ${e[0]}`); }
   errs.push(...validateMixer(p).errors);
-  const miss = missingMainControl(p);
-  if (miss) errs.push(miss);
   return errs;
 }
-/** Mẫu khởi đầu (E3), dựng bằng Input + luật mặc định (U5) */
+/** Mẫu khởi đầu (E3), dựng bằng Input + luật mặc định (U5). Mẫu "Trống": không Input, luật, kênh Ga/Lái. */
 function makeProfile(name, conn, tpl, o = {}) {
+  const blank = tpl === 'blank';
   const p = {
     // wifi.ip: chế độ Router là IP lần cuối thấy xe · wifi.carId: MAC gốc của xe (đọc từ xe), có thì app tự dò xe khi IP đổi
     id: newId('p'), name, conn, wifi: { ip: o.ip ?? '192.168.4.1', port: o.port ?? 4210, ssid: o.ssid ?? '', ...(o.carId ? { carId: o.carId } : {}) },
-    ble: { mac: o.mac ?? '', deviceName: o.devName ?? '' }, channels: defaultChannels(),
-    inputs: [newInput('steer', 'Lái'), newInput('throttle', 'Ga')], conditions: [],
-    mixer: [newRule({ id: 'r_steer', source: 'steer', destCh: 1 }), newRule({ id: 'r_throttle', source: 'throttle', destCh: 2 })],
+    ble: { mac: o.mac ?? '', deviceName: o.devName ?? '' },
+    // Kênh Ga / Lái do người dùng chọn, null = không có (hộp số + thả ga khi ARM / ô Trim)
+    steeringCh: blank ? null : 1, throttleCh: blank ? null : 2,
+    channels: blank ? defaultChannels() : defaultChannels(1, 2),
+    inputs: blank ? [] : [newInput('steer', 'Lái'), newInput('throttle', 'Ga')], conditions: [],
+    mixer: blank ? [] : [newRule({ id: 'r_steer', source: 'steer', destCh: 1 }), newRule({ id: 'r_throttle', source: 'throttle', destCh: 2 })],
     arm: { autoArm: false, armCondition: null }, gears: defaultGears(), failsafeMs: 400,
-    lastConnectedAt: o.last ?? null, layout: standardLayout(),
+    lastConnectedAt: o.last ?? null, layout: blank ? blankLayout() : standardLayout(),
   };
   if (tpl === 'lightsHorn') {
     Object.assign(p.channels[2], { name: 'Đèn', failsafe: 1000 });
@@ -1149,6 +1169,7 @@ function makeProfile(name, conn, tpl, o = {}) {
   return p;
 }
 const TEMPLATES = [
+  ['blank', 'Trống', 'Chưa có Input, luật mix hay kênh Ga/Lái. Tự thêm phần tử và gắn vào kênh bạn muốn'],
   ['basic', 'Xe cơ bản 2 kênh', 'Lái (CH1) và Ga (CH2)'],
   ['lightsHorn', 'Xe có đèn/còi', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)'],
   ['copy', 'Sao chép từ xe khác', 'Lấy Input, mix, kênh, hộp số và bố cục của một xe có sẵn'],
@@ -1161,10 +1182,11 @@ function uniqueName(base) {
   while (names.has(n.toLowerCase())) { const suf = ` ${i++}`; n = base.slice(0, 32 - suf.length) + suf; }
   return n;
 }
-/** Cấu hình firmware v1 (chỉ CH1/CH2 + hộp số + failsafe) — mô phỏng phần đang lưu trên xe */
+/** Cấu hình firmware v1 (CH1 → chân lái, CH2 → chân ga + failsafe) — mô phỏng phần đang lưu trên xe.
+ *  Hộp số do app áp lên kênh Ga đã chọn nên xe nhận giới hạn 100% mọi số. */
 const SERVO_KEYS = ['min', 'center', 'max', 'trim', 'offset', 'reverse', 'failsafe'];
 const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
-const carConfigOf = (p) => clone({ steer: pick(p.channels[0], SERVO_KEYS), thr: pick(p.channels[1], SERVO_KEYS), failsafeMs: p.failsafeMs, gears: p.gears });
+const carConfigOf = (p) => clone({ steer: pick(p.channels[0], SERVO_KEYS), thr: pick(p.channels[1], SERVO_KEYS), failsafeMs: p.failsafeMs, gears: { count: p.gears.count, max: [100, 100, 100, 100, 100] } });
 /** CarController.syncProfile: app là nguồn đúng (0.5) — ghi cấu hình xuống xe nếu khác cấu hình xe đang có.
  *  Firmware v1 vẫn nhận CH1/CH2 (cầu nối Sprint 3); giao thức v2 chỉ còn FS_WRITE. Đồng bộ xong thì READY (E6, R1). */
 function syncProfile(p, force = false) {
@@ -1562,7 +1584,7 @@ function garageCard(p) {
 // ============================================================================
 function openWizard() {
   S.wizard = { step: 0, p: { name: uniqueName('Xe mới'), conn: 'wifi', wifi: { ip: '192.168.4.1', port: 4210, ssid: '' }, ble: { mac: '', deviceName: '' }, failsafeMs: 400, gears: defaultGears() },
-    portTxt: '4210', tpl: 'basic', copyFrom: null, scanning: false, results: [], found: [], finding: false, ping: null, pinging: false };
+    portTxt: '4210', tpl: 'blank', copyFrom: null, scanning: false, results: [], found: [], finding: false, ping: null, pinging: false };
   go('wizard');
 }
 function renderWizard() {
@@ -1636,7 +1658,7 @@ function finishWizard() {
       { ip: q.wifi.ip, port: q.wifi.port, ssid: q.wifi.ssid, carId: q.wifi.carId, mac: q.ble.mac, devName: q.ble.deviceName });
     if (w.tpl === 'copy') {
       const s = clone(prof(w.copyFrom));
-      Object.assign(p, { channels: s.channels, inputs: s.inputs, conditions: s.conditions, mixer: s.mixer, arm: s.arm, gears: s.gears, failsafeMs: s.failsafeMs, layout: s.layout });
+      Object.assign(p, { channels: s.channels, steeringCh: s.steeringCh, throttleCh: s.throttleCh, inputs: s.inputs, conditions: s.conditions, mixer: s.mixer, arm: s.arm, gears: s.gears, failsafeMs: s.failsafeMs, layout: s.layout });
     }
     S.profiles.push(p);
     S.history = []; S.screen = 'garage';
@@ -1649,7 +1671,7 @@ function finishWizard() {
 }
 
 // ============================================================================
-//  Cấu hình — 6 tab: Ga · Lái · Input · Mix · Kênh · Chung (settings_screen.dart)
+//  Cấu hình — 6 tab: Ga · Lái · Input · Mix · Kênh · Chung (settings_screen.dart). Kênh Ga / Lái do người dùng chọn, có thể không có.
 // ============================================================================
 const draftJson = (d) => JSON.stringify(d);
 const SET_TABS = ['Ga', 'Lái', 'Input', 'Mix', 'Kênh', 'Chung'];
@@ -1676,9 +1698,33 @@ function servoTab(c, text) {
     numField('Failsafe', c.failsafe, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.failsafe }, (v) => { c.failsafe = v; }) +
     '<div style="height:12px"></div>' + hint(`Tâm thực tế = Center + Trim + Offset = ${effCenter(c)} µs\nGiữ lâu nút −/+ để đổi nhanh gấp 10 lần.`);
 }
+/** Tab Ga / Lái: chọn kênh làm Ga / Lái (hoặc không có), rồi chỉnh servo của kênh đó */
+function roleTab(d, throttle) {
+  const label = throttle ? 'Ga' : 'Lái', key = throttle ? 'throttleCh' : 'steeringCh';
+  const cur = d[key], other = throttle ? d.steeringCh : d.throttleCh, warn = roleWarning(d, throttle);
+  const pickCh = (v) => {
+    const n = +v || null;
+    d[key] = n;
+    if (n == null) return;
+    const c = d.channels[n - 1];
+    c.enabled = true;
+    if (c.name === `Kênh ${n}`) c.name = label;
+  };
+  const opts = [['0', 'Không có'], ...CHS.filter((n) => n !== other).map((n) => [String(n), profChLabel(d, n)])];
+  return hint(throttle
+      ? 'Kênh Ga chịu giới hạn của hộp số; muốn ARM hay sửa bố cục phải thả cần ga về vị trí nghỉ. Chọn "Không có" nếu xe không có kênh ga.'
+      : 'Kênh Lái là kênh ô Trim trên màn Lái chỉnh. Chọn "Không có" nếu không cần trim nhanh.') +
+    selectField(`Kênh ${label}`, String(cur ?? 0), opts, pickCh) +
+    (other != null ? `<div class="lbl muted" style="margin-top:4px">${esc(profChLabel(d, other))} đang là kênh ${throttle ? 'Lái' : 'Ga'}.</div>` : '') +
+    (warn ? `<div style="display:flex;gap:8px;align-items:center;color:var(--warn);font-size:14px;font-weight:500;margin-top:8px">${ic('warning', { mini: true })}${esc(warn)}</div>` : '') +
+    '<div style="height:16px"></div>' +
+    (cur == null ? '' : servoTab(d.channels[cur - 1], throttle
+      ? 'Center là điểm trung tính của ESC (xe đứng yên). Failsafe thường đặt bằng Center, hoặc thấp hơn một chút nếu muốn xe phanh khi mất sóng.'
+      : 'Offset bù độ lệch cơ khí khi lắp servo (chỉnh một lần). Trim tinh chỉnh để xe chạy thẳng. Min/Max giới hạn góc lái để servo không bị kẹt.'));
+}
 function toggleChannel(d, c) {
   const on = !c.enabled;
-  if (!on && c.index <= 2) { snack('Kênh Ga/Lái luôn bật'); return; }
+  if (!on && c.index <= 2) { snack('CH1/CH2 luôn bật: firmware xe hiện tại luôn xuất hai kênh này'); return; }
   c.enabled = on;
   if (on && !rulesTo(d, c.index).length) snack(`${chLabel(c)} chưa có luật mix nào. Gắn một Input vào kênh ở Sửa bố cục hoặc thêm luật ở tab Mix.`);
 }
@@ -1690,7 +1736,7 @@ function channelSource(d, ch) {
   return rules.length === 1 ? names[0] : `${names.slice(0, 2).join(', ')} · ${rules.length} luật`;
 }
 function channelsTab(d) {
-  return hint('Kênh đầu ra CH1–CH10 nhận giá trị từ luật mix. Bấm vào kênh để chỉnh Min/Center/Max, trim, đảo chiều và failsafe. Kênh tắt luôn ra failsafe. Lưu ý: firmware xe hiện tại mới nhận CH1 (Lái) và CH2 (Ga); 10 kênh cần firmware giao thức v2.') +
+  return hint('Kênh đầu ra CH1–CH10 nhận giá trị từ luật mix. Bấm vào kênh để chỉnh Min/Center/Max, trim, đảo chiều và failsafe. Kênh tắt luôn ra failsafe. Lưu ý: firmware xe hiện tại mới nhận CH1 (chân lái) và CH2 (chân ga); 10 kênh cần firmware giao thức v2.') +
     d.channels.map((c) => `<div class="card" style="display:flex;align-items:center;gap:12px;padding:8px 12px;cursor:pointer" data-act="${A(() => openChannel(c.index))}">
       <div style="width:48px;text-align:center;padding:4px 0;border-radius:999px;font-size:14px;font-weight:700;background:${c.enabled ? 'var(--accentContainer)' : 'var(--surface2)'};color:${c.enabled ? 'var(--onAccentContainer)' : 'var(--textMuted)'}">${chLabel(c)}</div>
       <div style="flex:1;min-width:0"><div style="font-size:16px;font-weight:600;color:${c.enabled ? 'var(--text)' : 'var(--disabled)'}">${esc(c.name)}</div>
@@ -1782,8 +1828,9 @@ function generalTab(d) {
     '<div class="divider" style="margin:16px 0"></div>' +
     numField('Số lượng số', d.gears.count, { min: 1, max: 5, err: g.gearCount }, (v) => { d.gears.count = v; }) +
     Array.from({ length: d.gears.count }, (_, i) => numField(`Ga tối đa số ${i + 1}`, d.gears.max[i], { min: 1, max: 100, step: 5, unit: '%', err: g['gear' + i] }, (v) => { d.gears.max[i] = v; })).join('') +
+    hint(d.throttleCh == null ? 'Chưa chọn kênh Ga (tab Ga) nên hộp số chưa có tác dụng.' : `Hộp số giới hạn kênh Ga (${profChLabel(d, d.throttleCh)}).`) +
     '<div class="divider" style="margin:16px 0"></div><div class="h-title" style="margin-bottom:8px">ARM</div>' +
-    hint('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (ga phải ở vị trí nghỉ).') +
+    hint('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (có kênh Ga thì cần ga phải ở vị trí nghỉ).') +
     switchRow('Tự ARM sau khi kết nối', d.arm.autoArm, () => { d.arm.autoArm = !d.arm.autoArm; }, { sub: 'Tự ARM một lần khi đủ điều kiện; DISARM rồi thì phải bấm lại' }) +
     switchRow('Điều kiện ARM riêng', d.arm.armCondition != null, () => { d.arm.armCondition = d.arm.armCondition ? null : TRUE(); }, { sub: 'Chỉ ARM được khi điều kiện đúng; điều kiện sai thì tự DISARM' }) +
     (d.arm.armCondition ? condBuilder('arm', d.arm.armCondition, d, (e) => { d.arm.armCondition = e; }) : '') + '<div style="height:16px"></div>';
@@ -1794,8 +1841,7 @@ function renderSettings() {
   const errors = validateAll(d, namesExcept(d.id));
   const valid = !errors.length;
   const content = [
-    () => servoTab(d.channels[1], 'Center là điểm trung tính của ESC (xe đứng yên). Failsafe thường đặt bằng Center, hoặc thấp hơn một chút nếu muốn xe phanh khi mất sóng. Hộp số áp lên kênh này.'),
-    () => servoTab(d.channels[0], 'Offset bù độ lệch cơ khí khi lắp servo (chỉnh một lần). Trim tinh chỉnh để xe chạy thẳng. Min/Max giới hạn góc lái để servo không bị kẹt.'),
+    () => roleTab(d, true), () => roleTab(d, false),
     () => inputsTab(d), () => mixTab(d), () => channelsTab(d), () => generalTab(d),
   ][st.tab]();
   const save = () => {
@@ -1808,7 +1854,7 @@ function renderSettings() {
     else snack(syncProfile(d) ? 'Đã lưu và đồng bộ failsafe với xe' : 'Đã lưu, có tác dụng ngay');
   };
   const syncFs = () => { syncProfile(prof(st.pid), true); snack('Đã đồng bộ failsafe với xe'); };
-  const reset = () => confirmDlg('Khôi phục mặc định?', 'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật Lái → CH1, Ga → CH2). Tên, kết nối, Input và bố cục được giữ lại. Chỉ ghi vào máy khi bấm Lưu.', 'Khôi phục', () => resetConfig(d));
+  const reset = () => confirmDlg('Khôi phục mặc định?', 'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). Tên, kết nối, Input, bố cục và việc chọn kênh Ga/Lái được giữ lại. Chỉ ghi vào máy khi bấm Lưu.', 'Khôi phục', () => resetConfig(d));
   return `<div class="appbar" style="border-bottom:0"><button class="iconbtn" data-act="${A(settingsBack)}">${ic('back')}</button><div class="title">${esc(d.name.trim() || 'Cấu hình')}</div></div>
     <div class="tabs">${SET_TABS.map((t, i) => `<button class="${st.tab === i ? 'on' : ''}" data-act="${A(() => { st.tab = i; })}">${t}</button>`).join('')}</div>
     <div class="body" data-scroll="set${st.tab}">${content}</div>${tabFoot(d, st.tab)}
@@ -2077,7 +2123,7 @@ function chMetrics(c, pv, ok) {
 }
 function renderChannel() {
   const d = S.settings.draft, ce = S.chEdit, c = d.channels[ce.index - 1], e = chErrors(c);
-  const isMain = c.index <= 2, ok = !Object.keys(e).length;
+  const isMain = c.index <= 2 /* firmware v1 luôn xuất CH1/CH2 */, ok = !Object.keys(e).length;
   const upd = (k) => (v) => { c[k] = v; };
   const rules = d.mixer.filter((r) => r.destCh === c.index);
   const toMix = () => { back(); S.settings.tab = MIX_TAB; };
@@ -2086,7 +2132,7 @@ function renderChannel() {
       ${rules.length ? rules.map((r) => `<div style="color:${r.enabled ? 'var(--text)' : 'var(--disabled)'};margin-top:4px">• ${esc(describeRule(r, d, false))}${r.enabled ? '' : ' (đang tắt)'}</div>`).join('')
         : '<div class="muted" style="margin-top:4px">Chưa có luật nào — kênh ra Center (hoặc failsafe nếu tắt).</div>'}
       <button class="btn text small" style="margin-left:-12px" data-act="${A(toMix)}">Sửa ở tab Mix</button></div>` +
-    switchRow('Bật kênh', c.enabled, () => { c.enabled = !c.enabled; }, { disabled: isMain, sub: isMain ? 'Kênh Ga/Lái luôn bật' : 'Kênh tắt luôn ra failsafe, luật mix ghi vào bị bỏ qua' }) +
+    switchRow('Bật kênh', c.enabled, () => { c.enabled = !c.enabled; }, { disabled: isMain, sub: isMain ? 'CH1/CH2 luôn bật: firmware xe hiện tại luôn xuất hai kênh này' : 'Kênh tắt luôn ra failsafe, luật mix ghi vào bị bỏ qua' }) +
     '<div class="divider"></div>' +
     numField('Min', c.min, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.min }, upd('min')) +
     numField('Center', c.center, { min: 500, max: 2500, step: 5, unit: ' µs', err: e.center }, upd('center')) +
@@ -2095,7 +2141,7 @@ function renderChannel() {
     numField('Offset', c.offset, { min: -300, max: 300, unit: ' µs', err: e.offset }, upd('offset')) +
     switchRow('Đảo chiều (Reverse)', c.reverse, () => { c.reverse = !c.reverse; }) +
     numField('Failsafe', c.failsafe, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.failsafe }, upd('failsafe'));
-  if (isMain && (c.min < 800 || c.max > 2200)) h += `<div style="display:flex;gap:8px;align-items:center;color:var(--warn);font-size:14px;font-weight:500;margin-top:8px">${ic('warning', { mini: true })}Firmware xe hiện tại chỉ nhận 800–2200 µs cho Ga/Lái.</div>`;
+  if (isMain && (c.min < 800 || c.max > 2200)) h += `<div style="display:flex;gap:8px;align-items:center;color:var(--warn);font-size:14px;font-weight:500;margin-top:8px">${ic('warning', { mini: true })}Firmware xe hiện tại chỉ nhận 800–2200 µs cho CH1/CH2.</div>`;
   h += `<div class="divider"></div><div class="h-title">Xem trước</div><div class="lbl muted" style="margin-top:4px">Kéo thử để thấy giá trị xe sẽ xuất ra.</div>` +
     slider({ min: -100, max: 100, value: ce.preview, disabled: !ok,
       set: (v) => { ce.preview = v; }, after: () => { const el = document.getElementById('chm'); if (el) el.innerHTML = chMetrics(c, ce.preview, ok); } }) +
@@ -2542,7 +2588,13 @@ function renderItem(p, it) {
         <button class="iconbtn outlined" ${S.gear < p.gears.count ? '' : 'disabled'} data-act="${A(() => { S.gear++; })}">${ic('plus')}</button></div>`, 'padding:4px');
     }
     case 'trim': {
-      const s = p.channels[0];
+      // Trim nhanh cho kênh Lái đã chọn trong hồ sơ
+      if (p.steeringCh == null) {
+        return frame(lbl, null, `<div class="rowctl"><button class="btn outlined small" disabled>◀</button>
+          <div class="mid muted" style="font-size:14px;font-weight:500;white-space:nowrap">Chưa chọn kênh Lái</div>
+          <button class="btn outlined small" disabled>▶</button></div>`, 'padding:4px');
+      }
+      const s = p.channels[p.steeringCh - 1];
       const trim = (d) => {
         const nv = clamp(s.trim + d, -200, 200);
         if (nv === s.trim) return;
@@ -2619,7 +2671,7 @@ function cancelEdit() {
 }
 function saveEdit() {
   const p = ctlProfile(), d = S.ctl.draft;
-  const err = layoutValidate(d, driversOf(p, 2), driversOf(p, 1));
+  const err = layoutValidate(d, throttleInputs(p), steeringInputs(p));
   if (err) { snack(err); return; }
   const commit = () => { p.layout = S.ctl.draft; endEdit(); snack('Đã lưu bố cục'); };
   // Cảnh báo cần ga "Giữ vị trí" hoặc về chậm > 500 ms (H3b)
@@ -3199,9 +3251,9 @@ setInterval(() => {
   if (S.connectedId !== p.id || S.link !== 'connected') { if (S.connectedId !== p.id) S.tel = null; updateGauges(); return; }
   if (failsafe && S.arm.armed) S.arm.onCarFailsafe();
   const wasFail = !!S.tel?.failsafe;
-  const lim = p.gears.max[clamp(S.gear, 1, p.gears.count) - 1] / 100;
-  // Giao thức v1: chỉ khi ARMED mới gửi CH2 sau mixer; hộp số áp sau mixer
-  const thr = failsafe || !S.arm.armed || !S.ctl.pipe ? 0 : S.ctl.pipe.lastPct[1] / 100 * lim;
+  // Giao thức v1: chỉ khi ARMED mới gửi CH1/CH2 sau mixer; xe chạy theo CH2 (chân ga).
+  // Hộp số app đã áp lên kênh Ga người dùng chọn (không có kênh Ga thì không giới hạn).
+  const thr = failsafe || !S.arm.armed || !S.ctl.pipe ? 0 : S.ctl.pipe.gearedPct(S.ctl.pipe.lastPct, 2, S.gear) / 100;
   battery = Math.max(6.4, battery - 0.0004 - Math.abs(thr) * 0.002);
   S.tel = { failsafe, netSetup, v: battery - Math.abs(thr) * 0.35, a: 0.4 + Math.abs(thr) * 18 + Math.random() * 0.3, kmh: Math.abs(thr) * 42 + (thr ? Math.random() : 0), rssi: -55 - Math.round(Math.random() * 6) };
   if (wasFail !== failsafe) render(); else updateGauges();

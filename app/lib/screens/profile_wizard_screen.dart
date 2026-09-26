@@ -1,4 +1,4 @@
-// Tạo xe mới: 3 bước (E3). Trả về CarProfile đã lưu qua Navigator.pop.
+// Tạo xe mới: 3 bước (E3). Trả về CarProfile đã lưu qua Navigator.pop. Mẫu mặc định "Trống": chưa gán Ga/Lái vào kênh nào.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -41,7 +41,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
   final _mac = TextEditingController();
   final _devName = TextEditingController();
 
-  ProfileTemplate template = ProfileTemplate.basic;
+  ProfileTemplate template = ProfileTemplate.blank;
   String? copyFromId;
 
   QuickPingResult? pingResult;

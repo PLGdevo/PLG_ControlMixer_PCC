@@ -101,8 +101,6 @@ class OutputConfig {
 
 class CarProfile {
   static const schemaVersion = 2;
-  static const steeringCh = 1; // channels[0]
-  static const throttleCh = 2; // channels[1]
 
   String id;
   String name;
@@ -113,6 +111,12 @@ class CarProfile {
   GearConfig gears;
   int failsafeTimeoutMs;
   List<ChannelConfig> channels; // đúng 10 phần tử
+
+  /// Kênh Ga do người dùng chọn (null = không có): hộp số, kiểm tra thả ga khi ARM, cảnh báo cần ga
+  int? throttleCh;
+
+  /// Kênh Lái do người dùng chọn (null = không có): ô trim nhanh trên màn Lái
+  int? steeringCh;
   List<InputDef> inputs;
   List<ConditionDef> conditions;
   List<MixRule> mixer;
@@ -126,7 +130,8 @@ class CarProfile {
   String? lastSyncedHash;
   DateTime? lastConnectedAt;
 
-  /// Hồ sơ mới (không truyền `inputs` / `layouts`) được dựng sẵn Lái + Ga như mẫu "Xe cơ bản" (U5)
+  /// Hồ sơ mới (không truyền `inputs` / `layouts` / `mixer`) được dựng như mẫu "Xe cơ bản" (U5).
+  /// Màn tạo xe luôn áp mẫu người dùng chọn lên hồ sơ, mặc định là mẫu "Trống".
   CarProfile({
     required this.id,
     required this.name,
@@ -137,6 +142,8 @@ class CarProfile {
     GearConfig? gears,
     this.failsafeTimeoutMs = 400,
     List<ChannelConfig>? channels,
+    this.throttleCh,
+    this.steeringCh,
     List<InputDef>? inputs,
     List<ConditionDef>? conditions,
     List<MixRule>? mixer,
@@ -174,8 +181,8 @@ class CarProfile {
   }
 
   ChannelConfig ch(int index) => channels[index - 1];
-  ChannelConfig get steering => ch(steeringCh);
-  ChannelConfig get throttle => ch(throttleCh);
+  ChannelConfig? get throttle => throttleCh == null ? null : ch(throttleCh!);
+  ChannelConfig? get steering => steeringCh == null ? null : ch(steeringCh!);
 
   ControlLayout get activeLayout =>
       layouts.firstWhere((l) => l.id == activeLayoutId, orElse: () => layouts.first);
@@ -214,8 +221,12 @@ class CarProfile {
           if (input(r.source)?.type != InputType.constant) r.source,
       };
 
+  /// Input đang điều khiển kênh Ga / Lái đã chọn (rỗng nếu hồ sơ không chọn kênh đó)
+  Set<String> get throttleInputs => throttleCh == null ? const {} : driversOf(throttleCh!);
+  Set<String> get steeringInputs => steeringCh == null ? const {} : driversOf(steeringCh!);
+
   /// Input điều khiển kênh Ga (dùng cho cảnh báo tự về và "ga Giữ vị trí về Center" — H3b)
-  bool isThrottleInput(String? id) => id != null && driversOf(throttleCh).contains(id);
+  bool isThrottleInput(String? id) => id != null && throttleInputs.contains(id);
 
   /// Luật "gắn nhanh" của Input (U5): không điều kiện, weight 100, offset 0, tuyến tính, replace, priority 0
   static bool isPlain(MixRule r) =>
@@ -302,15 +313,15 @@ class CarProfile {
     if (a != null) arm.armCondition = a.renameInput(from, to);
   }
 
-  /// Đưa cấu hình (kênh, mix, hộp số, failsafe) về mặc định; giữ tên, kết nối, Input và bố cục.
-  /// Luật mix về dạng tối thiểu: Input đang điều khiển Lái → CH1, Ga → CH2.
+  /// Đưa cấu hình (kênh, mix, hộp số, failsafe) về mặc định; giữ tên, kết nối, Input, bố cục và
+  /// kênh Ga/Lái đã chọn. Luật mix về dạng tối thiểu: Input đang điều khiển kênh Lái / Ga → kênh đó.
   void resetConfig() {
-    final steer = driversOf(steeringCh).firstOrNull, thr = driversOf(throttleCh).firstOrNull;
-    channels = ChannelConfig.defaultList();
+    final steer = steeringInputs.firstOrNull, thr = throttleInputs.firstOrNull;
+    channels = ChannelConfig.defaultList(steeringCh: steeringCh, throttleCh: throttleCh);
     conditions = [];
     mixer = [
-      if (steer != null) MixRule(id: 'r_steer', source: steer, destCh: steeringCh),
-      if (thr != null) MixRule(id: 'r_throttle', source: thr, destCh: throttleCh),
+      if (steer != null) MixRule(id: 'r_steer', source: steer, destCh: steeringCh!),
+      if (thr != null) MixRule(id: 'r_throttle', source: thr, destCh: throttleCh!),
     ];
     gears = GearConfig();
     failsafeTimeoutMs = 400;
@@ -339,21 +350,21 @@ class CarProfile {
       ..failsafeUs = s.failsafeUs;
   }
 
-  /// Gói cấu hình firmware hiện tại (2 kênh): CH1 → lái, CH2 → ga
+  /// Gói cấu hình firmware v1 (2 kênh): CH1 → chân lái, CH2 → chân ga của xe, bất kể kênh Ga/Lái
+  /// chọn trong hồ sơ. Hộp số do app áp lên kênh Ga đã chọn nên xe nhận giới hạn 100% mọi số.
   CarConfig toCarConfig() => CarConfig(
-        throttle: _servo(throttle),
-        steering: _servo(steering),
+        throttle: _servo(ch(2)),
+        steering: _servo(ch(1)),
         failsafeTimeoutMs: failsafeTimeoutMs,
         gearCount: gears.gearCount,
-        gearLimit: List<int>.from(gears.maxThrottle),
+        gearLimit: List<int>.filled(GearConfig.maxGears, 100),
       );
 
-  /// Nạp cấu hình kiểu cũ (đọc từ xe) vào CH1/CH2
+  /// Nạp cấu hình kiểu cũ (đọc từ xe) vào CH1/CH2. Hộp số không nạp: xe chỉ giữ giới hạn 100%.
   void applyCarConfig(CarConfig c) {
-    _fromServo(steering, c.steering);
-    _fromServo(throttle, c.throttle);
+    _fromServo(ch(1), c.steering);
+    _fromServo(ch(2), c.throttle);
     failsafeTimeoutMs = c.failsafeTimeoutMs;
-    gears = GearConfig(gearCount: c.gearCount, maxThrottle: List<int>.from(c.gearLimit));
   }
 
   // ---------------- Kiểm tra (E7, V) ----------------
@@ -383,6 +394,10 @@ class CarProfile {
     if (failsafeTimeoutMs < 100 || failsafeTimeoutMs > 3000) {
       e['failsafeTimeout'] = 'Thời gian failsafe trong khoảng 100–3000 ms';
     }
+    for (final (c, k) in [(throttleCh, 'throttleCh'), (steeringCh, 'steeringCh')]) {
+      if (c != null && (c < 1 || c > 10)) e[k] = 'Kênh phải trong CH1–CH10';
+    }
+    if (throttleCh != null && throttleCh == steeringCh) e['steeringCh'] = 'Kênh Lái trùng kênh Ga';
     if (gears.gearCount < 1 || gears.gearCount > GearConfig.maxGears) e['gearCount'] = 'Số lượng số 1–5';
     for (var i = 0; i < gears.gearCount; i++) {
       final g = gears.maxThrottle[i];
@@ -391,17 +406,19 @@ class CarProfile {
     return e;
   }
 
-  /// Kênh Ga / Lái thiếu luật, hoặc bố cục thiếu phần tử cho Input điều khiển chúng (V, thay H5).
-  /// Trả về câu lỗi hoặc null.
-  String? missingMainControl() {
-    for (final (ch, label) in [(steeringCh, 'Lái'), (throttleCh, 'Ga')]) {
-      if (rulesTo(ch).isEmpty) return 'Chưa có luật mix nào điều khiển kênh $label (CH$ch)';
-      final drivers = driversOf(ch);
-      if (drivers.isEmpty) continue; // chỉ có luật hằng số: không cần phần tử
-      for (final l in layouts) {
-        if (!drivers.any((d) => l.itemForInput(d) != null)) {
-          return 'Bố cục "${l.name}" chưa có phần tử cho kênh $label (CH$ch)';
-        }
+  /// Kênh Ga / Lái đã chọn nhưng chưa có luật, hoặc bố cục thiếu phần tử cho Input điều khiển nó (V).
+  /// Chỉ là cảnh báo: hồ sơ không bắt buộc có kênh Ga/Lái, và người dùng có thể chọn kênh trước
+  /// rồi mới dựng luật / bố cục. Trả về câu cảnh báo hoặc null.
+  String? roleWarning({required bool throttle}) {
+    final ch = throttle ? throttleCh : steeringCh;
+    if (ch == null) return null;
+    final label = throttle ? 'Ga' : 'Lái';
+    if (rulesTo(ch).isEmpty) return 'Chưa có luật mix nào điều khiển kênh $label (CH$ch)';
+    final drivers = driversOf(ch);
+    if (drivers.isEmpty) return null; // chỉ có luật hằng số: không cần phần tử
+    for (final l in layouts) {
+      if (!drivers.any((d) => l.itemForInput(d) != null)) {
+        return 'Bố cục "${l.name}" chưa có phần tử cho kênh $label (CH$ch)';
       }
     }
     return null;
@@ -442,6 +459,10 @@ class CarProfile {
         r.warnings.add('Input "${d.name}" được luật mix dùng nhưng chưa có phần tử trên bố cục "${activeLayout.name}"');
       }
     }
+    for (final throttle in [true, false]) {
+      final w = roleWarning(throttle: throttle);
+      if (w != null) r.warnings.add(w);
+    }
     return r;
   }
 
@@ -453,8 +474,6 @@ class CarProfile {
       if (e.isNotEmpty) errs.add('${c.label}: ${e.values.first}');
     }
     errs.addAll(validateMixerPart().errors);
-    final miss = missingMainControl();
-    if (miss != null) errs.add(miss);
     return errs;
   }
 
@@ -503,6 +522,8 @@ class CarProfile {
         'gears': gears.toJson(),
         'failsafeTimeoutMs': failsafeTimeoutMs,
         'channels': channels.map((c) => c.toJson()).toList(),
+        'throttleCh': throttleCh,
+        'steeringCh': steeringCh,
         'inputs': inputs.map((i) => i.toJson()).toList(),
         'conditions': conditions.map((c) => c.toJson()).toList(),
         'mixer': mixer.map((m) => m.toJson()).toList(),
@@ -537,6 +558,9 @@ class CarProfile {
       gears: GearConfig.fromJson(j['gears'] as Map<String, dynamic>?),
       failsafeTimeoutMs: j['failsafeTimeoutMs'] as int? ?? 400,
       channels: channels,
+      // Hồ sơ lưu trước khi chọn được kênh Ga/Lái (không có khoá): Lái CH1, Ga CH2 như cũ
+      throttleCh: j.containsKey('throttleCh') ? j['throttleCh'] as int? : 2,
+      steeringCh: j.containsKey('steeringCh') ? j['steeringCh'] as int? : 1,
       inputs: list('inputs', InputDef.fromJson),
       conditions: list('conditions', ConditionDef.fromJson),
       mixer: list('mixer', MixRule.fromJson),
@@ -557,6 +581,7 @@ class CarProfile {
 
 /// Mẫu khởi đầu ở bước 3 tạo xe (E3), dựng bằng Input + luật mặc định (U5)
 enum ProfileTemplate {
+  blank('Trống', 'Chưa có Input, luật mix hay kênh Ga/Lái. Tự thêm phần tử và gắn vào kênh bạn muốn'),
   basic('Xe cơ bản 2 kênh', 'Lái (CH1) và Ga (CH2)'),
   lightsHorn('Xe có đèn/còi', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)'),
   copy('Sao chép từ xe khác', 'Lấy Input, mix, kênh, hộp số và bố cục của một xe có sẵn');
@@ -572,6 +597,8 @@ enum ProfileTemplate {
       final c = s.copy();
       p
         ..channels = c.channels
+        ..throttleCh = c.throttleCh
+        ..steeringCh = c.steeringCh
         ..inputs = c.inputs
         ..conditions = c.conditions
         ..mixer = c.mixer
@@ -584,16 +611,30 @@ enum ProfileTemplate {
         ..activeLayoutId = c.activeLayoutId;
       return;
     }
+    if (this == ProfileTemplate.blank) {
+      p
+        ..channels = ChannelConfig.defaultList()
+        ..throttleCh = null
+        ..steeringCh = null
+        ..inputs = []
+        ..conditions = []
+        ..mixer = []
+        ..layouts = [LayoutTemplates.blank()];
+      p.activeLayoutId = p.layouts.first.id;
+      return;
+    }
     p
-      ..channels = ChannelConfig.defaultList()
+      ..channels = ChannelConfig.defaultList(steeringCh: 1, throttleCh: 2)
+      ..steeringCh = 1
+      ..throttleCh = 2
       ..inputs = [
         InputDef(id: 'steer', name: 'Lái'),
         InputDef(id: 'throttle', name: 'Ga'),
       ]
       ..conditions = []
       ..mixer = [
-        MixRule(id: 'r_steer', source: 'steer', destCh: CarProfile.steeringCh),
-        MixRule(id: 'r_throttle', source: 'throttle', destCh: CarProfile.throttleCh),
+        MixRule(id: 'r_steer', source: 'steer', destCh: 1),
+        MixRule(id: 'r_throttle', source: 'throttle', destCh: 2),
       ]
       ..layouts = [LayoutTemplates.standard()];
     p.activeLayoutId = p.layouts.first.id;

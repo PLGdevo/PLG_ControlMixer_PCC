@@ -178,8 +178,10 @@ class _ControlScreenState extends State<ControlScreen> {
     });
   }
 
+  /// Trim nhanh cho kênh Lái đã chọn trong hồ sơ
   Future<void> _trim(int delta) async {
     final s = profile.steering;
+    if (s == null) return;
     final nv = (s.trimUs + delta).clamp(-200, 200).toInt();
     if (nv == s.trimUs) return;
     setState(() => s.trimUs = nv);
@@ -236,8 +238,8 @@ class _ControlScreenState extends State<ControlScreen> {
     final d = draft!;
     final err = LayoutGrid.validate(
       d,
-      throttleInputs: profile.driversOf(CarProfile.throttleCh),
-      steerInputs: profile.driversOf(CarProfile.steeringCh),
+      throttleInputs: profile.throttleInputs,
+      steerInputs: profile.steeringInputs,
     );
     if (err != null) {
       _snack(err);
@@ -885,19 +887,22 @@ class _ControlScreenState extends State<ControlScreen> {
 
   Widget _trimBox(String? label) {
     final t = context.tokens;
+    final s = profile.steering;
     return ItemFrame(
       label: label,
       padding: const EdgeInsets.symmetric(horizontal: Gap.xs, vertical: Gap.xs),
       child: Row(
         children: [
-          OutlinedButton(onPressed: () => _trim(-5), child: const Text('◀')),
+          OutlinedButton(onPressed: s == null ? null : () => _trim(-5), child: const Text('◀')),
           Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
-              child: Text('Trim ${profile.steering.trimUs} µs', style: AppText.metric.copyWith(color: t.text)),
+              child: s == null
+                  ? Text('Chưa chọn kênh Lái', style: AppText.label.copyWith(color: t.textMuted))
+                  : Text('Trim ${s.trimUs} µs', style: AppText.metric.copyWith(color: t.text)),
             ),
           ),
-          OutlinedButton(onPressed: () => _trim(5), child: const Text('▶')),
+          OutlinedButton(onPressed: s == null ? null : () => _trim(5), child: const Text('▶')),
         ],
       ),
     );

@@ -3,36 +3,38 @@ import '../models/control_layout.dart';
 import 'layout_grid.dart';
 
 abstract final class LayoutTemplates {
+  static ControlItem _it(ItemKind k, int x, int y, int w, int h, {String? input, String? gauge, ReturnConfig? ret}) =>
+      ControlItem(
+        id: ControlItem.newId(),
+        kind: k,
+        inputId: input,
+        gaugeKey: gauge,
+        x: x,
+        y: y,
+        w: w,
+        h: h,
+        returnCfg: ret,
+      );
+
+  /// Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, hộp số, trim người dùng tự thêm.
+  static ControlLayout blank() => ControlLayout(id: ControlLayout.newId(), name: 'Mặc định', items: [
+        _it(ItemKind.statusBadge, 5, 0, 6, 2),
+        _it(ItemKind.gauge, 5, 2, 4, 2, gauge: GaugeKey.battery.name),
+        _it(ItemKind.gauge, 9, 2, 4, 2, gauge: GaugeKey.current.name),
+        _it(ItemKind.gauge, 5, 4, 4, 2, gauge: GaugeKey.speed.name),
+        _it(ItemKind.gauge, 9, 4, 4, 2, gauge: GaugeKey.ping.name),
+      ]);
+
   /// "Mặc định": ga dọc trái, lái ngang phải, đồng hồ ở giữa.
   static ControlLayout standard({String steerInput = 'steer', String throttleInput = 'throttle'}) {
-    ControlItem it(ItemKind k, int x, int y, int w, int h, {String? input, String? gauge, ReturnConfig? ret}) =>
-        ControlItem(
-          id: ControlItem.newId(),
-          kind: k,
-          inputId: input,
-          gaugeKey: gauge,
-          x: x,
-          y: y,
-          w: w,
-          h: h,
-          returnCfg: ret,
-        );
-
-    final l = ControlLayout(id: ControlLayout.newId(), name: 'Mặc định', items: [
-      it(ItemKind.statusBadge, 5, 0, 6, 2),
-      it(ItemKind.gauge, 5, 2, 4, 2, gauge: GaugeKey.battery.name),
-      it(ItemKind.gauge, 9, 2, 4, 2, gauge: GaugeKey.current.name),
-      it(ItemKind.gauge, 5, 4, 4, 2, gauge: GaugeKey.speed.name),
-      it(ItemKind.gauge, 9, 4, 4, 2, gauge: GaugeKey.ping.name),
-      it(ItemKind.gearBox, 5, 9, 8, 3),
-      it(ItemKind.trim, 14, 6, 10, 2),
-    ]);
-
     // Input Ga vào cần gạt dọc, Lái vào cần gạt ngang; phần tử khác người dùng tự thêm rồi gắn Input
-    l.items
-      ..add(it(ItemKind.stickV, 0, 1, 4, 11, input: throttleInput, ret: ReturnConfig()))
-      ..add(it(ItemKind.stickH, 14, 9, 10, 3, input: steerInput, ret: ReturnConfig()));
-    return l;
+    return blank()
+      ..items.addAll([
+        _it(ItemKind.gearBox, 5, 9, 8, 3),
+        _it(ItemKind.trim, 14, 6, 10, 2),
+        _it(ItemKind.stickV, 0, 1, 4, 11, input: throttleInput, ret: ReturnConfig()),
+        _it(ItemKind.stickH, 14, 9, 10, 3, input: steerInput, ret: ReturnConfig()),
+      ]);
   }
 
   /// Kích thước mặc định khi thêm một loại phần tử
