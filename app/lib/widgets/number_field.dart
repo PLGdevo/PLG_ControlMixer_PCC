@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
+import 'hold_repeat.dart';
 
-/// Hàng chỉnh số: nhấn −/+ để đổi theo bước, giữ lâu để đổi gấp 10 lần. Lỗi hiện ngay dưới hàng.
+/// Hàng chỉnh số: nhấn −/+ để đổi theo bước, nhấn giữ để đổi liên tục (giữ lâu thì mỗi lần 5 bước).
+/// Lỗi hiện ngay dưới hàng.
 class NumberField extends StatelessWidget {
   const NumberField({
     super.key,
@@ -31,6 +33,7 @@ class NumberField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final canDown = enabled && value > min, canUp = enabled && value < max;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Gap.xs),
       child: Column(
@@ -39,10 +42,11 @@ class NumberField extends StatelessWidget {
           Row(
             children: [
               Expanded(child: Text(label, style: AppText.body.copyWith(color: enabled ? t.text : t.disabled))),
-              GestureDetector(
-                onLongPress: enabled ? () => _set(value - step * 10) : null,
+              HoldRepeat(
+                onStep: canDown ? (n) => _set(value - step * n) : null,
+                fastTimes: 5,
                 child: IconButton.outlined(
-                  onPressed: enabled && value > min ? () => _set(value - step) : null,
+                  onPressed: canDown ? () => _set(value - step) : null,
                   icon: const AppIcon(AppIcons.minus, mini: true),
                 ),
               ),
@@ -54,10 +58,11 @@ class NumberField extends StatelessWidget {
                   style: AppText.metric.copyWith(fontSize: 16, color: error != null ? t.bad : t.text),
                 ),
               ),
-              GestureDetector(
-                onLongPress: enabled ? () => _set(value + step * 10) : null,
+              HoldRepeat(
+                onStep: canUp ? (n) => _set(value + step * n) : null,
+                fastTimes: 5,
                 child: IconButton.outlined(
-                  onPressed: enabled && value < max ? () => _set(value + step) : null,
+                  onPressed: canUp ? () => _set(value + step) : null,
                   icon: const AppIcon(AppIcons.plus, mini: true),
                 ),
               ),

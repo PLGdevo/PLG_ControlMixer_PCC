@@ -2,6 +2,7 @@
 // toàn bộ luật của hồ sơ (luật đang sửa thay bản cũ) và hiện mọi kênh bị ảnh hưởng.
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/input_def.dart';
 import '../models/mixer_rule.dart';
@@ -90,7 +91,7 @@ class _MixPreviewState extends State<MixPreview> {
         Icon(Icons.circle, size: 10, color: pending ? t.warn : (active ? t.accent : t.disabled)),
         const SizedBox(width: Gap.xs),
         Text(
-          !r.enabled ? 'Luật đang tắt' : (pending ? 'Chờ về giữa' : (active ? 'Luật đang tác động' : 'Điều kiện chưa đúng')),
+          !r.enabled ? tr('Luật đang tắt', 'Rule is off') : (pending ? tr('Chờ về giữa', 'Waiting for center') : (active ? tr('Luật đang tác động', 'Rule is active') : tr('Điều kiện chưa đúng', 'Condition not met'))),
           style: AppText.label.copyWith(color: t.text),
         ),
       ]),

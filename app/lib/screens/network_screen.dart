@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../protocol/net_protocol.dart';
 import '../theme/app_icons.dart';
@@ -139,7 +140,7 @@ class _NetworkScreenState extends State<NetworkScreen> {
         title: Text(title),
         content: Text(body),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Huỷ')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Huỷ', 'Cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(action)),
         ],
       ),
@@ -152,24 +153,31 @@ class _NetworkScreenState extends State<NetworkScreen> {
         builder: (ctx) => AlertDialog(
           title: Text(title),
           content: Text(body),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đã hiểu'))],
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Đã hiểu', 'Got it')))],
         ),
       );
 
   /// Hướng dẫn nối lại sau khi xe khởi động lại với cấu hình `cf`
   String _nextSteps(NetConfig cf) {
     if (cf.bootMode == NetMode.ap) {
-      return 'Xe phát WiFi "${cf.apSsid}". Nối điện thoại vào WiFi này rồi bấm Kết nối '
-          '(IP ${cf.apIp}, port ${cf.udpPort}).';
+      return tr(
+          'Xe phát WiFi "${cf.apSsid}". Nối điện thoại vào WiFi này rồi bấm Kết nối '
+              '(IP ${cf.apIp}, port ${cf.udpPort}).',
+          'The car broadcasts WiFi "${cf.apSsid}". Join this WiFi on the phone, then tap Connect '
+              '(IP ${cf.apIp}, port ${cf.udpPort}).');
     }
-    return 'Xe vào router "${cf.staSsid}". Nối điện thoại vào cùng router (băng 2.4 hay 5 GHz đều được) '
-        'rồi bấm Kết nối, app tự tìm xe trong mạng${cf.staDhcp ? '' : ' (IP ${cf.staIp})'}.\n\n'
-        'Nếu 15 giây không vào được router, xe tự phát lại WiFi "${cf.apSsid}" để bạn sửa.';
+    return tr(
+        'Xe vào router "${cf.staSsid}". Nối điện thoại vào cùng router (băng 2.4 hay 5 GHz đều được) '
+            'rồi bấm Kết nối, app tự tìm xe trong mạng${cf.staDhcp ? '' : ' (IP ${cf.staIp})'}.\n\n'
+            'Nếu 15 giây không vào được router, xe tự phát lại WiFi "${cf.apSsid}" để bạn sửa.',
+        'The car joins router "${cf.staSsid}". Connect the phone to the same router (2.4 or 5 GHz both work) '
+            'and tap Connect; the app finds the car on the network${cf.staDhcp ? '' : ' (IP ${cf.staIp})'}.\n\n'
+            'If it cannot join the router within 15 seconds, the car brings back WiFi "${cf.apSsid}" so you can fix it.');
   }
 
   Future<bool> _guard() async {
     if (c.arm.armed) {
-      _snack('DISARM trước khi đổi mạng của xe');
+      _snack(tr('DISARM trước khi đổi mạng của xe', 'DISARM before changing the car network'));
       return false;
     }
     return true;
@@ -184,9 +192,9 @@ class _NetworkScreenState extends State<NetworkScreen> {
     }
     if (!await _guard()) return;
     final ok = await _confirm(
-      'Lưu vào xe và khởi động lại?',
-      'Xe khởi động lại (khoảng 3 giây) và ngắt kết nối với app.\n\n${_nextSteps(cf)}',
-      'Lưu & khởi động lại',
+      tr('Lưu vào xe và khởi động lại?', 'Save to the car and restart?'),
+      tr('Xe khởi động lại (khoảng 3 giây) và ngắt kết nối với app.\n\n${_nextSteps(cf)}', 'The car restarts (about 3 seconds) and disconnects from the app.\n\n${_nextSteps(cf)}'),
+      tr('Lưu & khởi động lại', 'Save & restart'),
     );
     if (!ok || !mounted) return;
     setState(() => busy = true);
@@ -213,7 +221,7 @@ class _NetworkScreenState extends State<NetworkScreen> {
       if (b != null && b.deviceName == old.name) b.deviceName = cf.name;
     });
     if (!mounted) return;
-    await _info('Đã lưu cấu hình mạng', _nextSteps(cf));
+    await _info(tr('Đã lưu cấu hình mạng', 'Network settings saved'), _nextSteps(cf));
     if (mounted) Navigator.pop(context);
   }
 
@@ -221,11 +229,15 @@ class _NetworkScreenState extends State<NetworkScreen> {
     final cf = saved!, st = status!;
     if (!await _guard()) return;
     final ok = await _confirm(
-      'Vào chế độ cấu hình?',
-      'Xe khởi động lại và phát WiFi tạm "${st.setupSsid}" (mật khẩu giống WiFi riêng của xe), '
-          'IP ${cf.apIp}. Ở chế độ này xe không nhận lệnh lái.\n\n'
-          'Tự thoát sau 5 phút không có điện thoại nối. Cũng vào được bằng cách giữ nút BOOT trên xe 3 giây.',
-      'Khởi động lại',
+      tr('Vào chế độ cấu hình?', 'Enter setup mode?'),
+      tr(
+          'Xe khởi động lại và phát WiFi tạm "${st.setupSsid}" (mật khẩu giống WiFi riêng của xe), '
+              'IP ${cf.apIp}. Ở chế độ này xe không nhận lệnh lái.\n\n'
+              'Tự thoát sau 5 phút không có điện thoại nối. Cũng vào được bằng cách giữ nút BOOT trên xe 3 giây.',
+          'The car restarts and broadcasts a temporary WiFi "${st.setupSsid}" (same password as the car WiFi), '
+              'IP ${cf.apIp}. In this mode the car ignores drive commands.\n\n'
+              'It exits after 5 minutes with no phone connected. You can also enter it by holding the BOOT button on the car for 3 seconds.'),
+      tr('Khởi động lại', 'Restart'),
     );
     if (!ok || !mounted) return;
     setState(() => busy = true);
@@ -241,8 +253,8 @@ class _NetworkScreenState extends State<NetworkScreen> {
       ..ip = cf.apIp
       ..port = cf.udpPort);
     if (!mounted) return;
-    await _info('Xe đang vào chế độ cấu hình',
-        'Nối điện thoại vào WiFi "${st.setupSsid}", rồi ở màn Xe của tôi bấm Kết nối và mở lại Mạng của xe.');
+    await _info(tr('Xe đang vào chế độ cấu hình', 'The car is entering setup mode'),
+        tr('Nối điện thoại vào WiFi "${st.setupSsid}", rồi ở màn chính bấm Kết nối và mở lại Mạng của xe.', 'Join WiFi "${st.setupSsid}" on the phone, then tap Connect on the main screen and open Car network again.'));
     if (mounted) Navigator.pop(context);
   }
 
@@ -250,10 +262,13 @@ class _NetworkScreenState extends State<NetworkScreen> {
     final st = status!;
     if (!await _guard()) return;
     final ok = await _confirm(
-      'Khôi phục mạng mặc định?',
-      'Xe quên WiFi router và về mặc định: phát WiFi "RC-CAR", mật khẩu 12345678, IP 192.168.4.1, port 4210. '
-          'Xe khởi động lại và ngắt kết nối.',
-      'Khôi phục',
+      tr('Khôi phục mạng mặc định?', 'Reset network to defaults?'),
+      tr(
+          'Xe quên WiFi router và về mặc định: phát WiFi "RC-CAR", mật khẩu 12345678, IP 192.168.4.1, port 4210. '
+              'Xe khởi động lại và ngắt kết nối.',
+          'The car forgets the router WiFi and goes back to defaults: WiFi "RC-CAR", password 12345678, '
+              'IP 192.168.4.1, port 4210. The car restarts and disconnects.'),
+      tr('Khôi phục', 'Reset'),
     );
     if (!ok || !mounted) return;
     setState(() => busy = true);
@@ -271,13 +286,13 @@ class _NetworkScreenState extends State<NetworkScreen> {
       ..port = d.udpPort
       ..ssid = d.apSsid);
     if (!mounted) return;
-    await _info('Đã khôi phục mạng mặc định', _nextSteps(d));
+    await _info(tr('Đã khôi phục mạng mặc định', 'Network reset to defaults'), _nextSteps(d));
     if (mounted) Navigator.pop(context);
   }
 
   Future<void> _onPop(bool didPop, Object? _) async {
     if (didPop) return;
-    final leave = await _confirm('Bỏ thay đổi?', 'Các thay đổi chưa lưu vào xe sẽ bị mất.', 'Bỏ');
+    final leave = await _confirm(tr('Bỏ thay đổi?', 'Discard changes?'), tr('Các thay đổi chưa lưu vào xe sẽ bị mất.', 'Changes not yet saved to the car will be lost.'), tr('Bỏ', 'Discard'));
     if (leave && mounted) Navigator.pop(context);
   }
 
@@ -293,11 +308,11 @@ class _NetworkScreenState extends State<NetworkScreen> {
           onPopInvokedWithResult: _onPop,
           child: Scaffold(
             appBar: AppBar(
-              title: const Text('Mạng của xe'),
+              title: Text(tr('Mạng của xe', 'Car network')),
               actions: [
                 if (_connected)
                   IconButton(
-                    tooltip: 'Đọc lại từ xe',
+                    tooltip: tr('Đọc lại từ xe', 'Reload from the car'),
                     onPressed: busy ? null : _load,
                     icon: const AppIcon(AppIcons.refresh),
                   ),
@@ -306,13 +321,17 @@ class _NetworkScreenState extends State<NetworkScreen> {
                     icon: const AppIcon(AppIcons.more),
                     enabled: !busy,
                     onSelected: (v) => v == 'setup' ? _enterSetup() : _reset(),
-                    itemBuilder: (_) => const [
+                    itemBuilder: (_) => [
                       PopupMenuItem(
                           value: 'setup',
-                          child: ListTile(leading: AppIcon(AppIcons.wifi), title: Text('Chế độ cấu hình (WiFi tạm)'))),
+                          child: ListTile(
+                              leading: const AppIcon(AppIcons.wifi),
+                              title: Text(tr('Chế độ cấu hình (WiFi tạm)', 'Setup mode (temporary WiFi)')))),
                       PopupMenuItem(
                           value: 'reset',
-                          child: ListTile(leading: AppIcon(AppIcons.reset), title: Text('Khôi phục mạng mặc định'))),
+                          child: ListTile(
+                              leading: const AppIcon(AppIcons.reset),
+                              title: Text(tr('Khôi phục mạng mặc định', 'Reset network to defaults')))),
                     ],
                   ),
               ],
@@ -337,11 +356,14 @@ class _NetworkScreenState extends State<NetworkScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           AppIcon(AppIcons.wifi, size: 48, color: t.textMuted),
           const SizedBox(height: Gap.l),
-          Text('Chưa kết nối xe', style: AppText.headline.copyWith(color: t.text)),
+          Text(tr('Chưa kết nối xe', 'Car not connected'), style: AppText.headline.copyWith(color: t.text)),
           const SizedBox(height: Gap.s),
           Text(
-            'Cấu hình mạng lưu trên xe, không nằm trong hồ sơ. '
-            'Kết nối xe (WiFi hoặc Bluetooth) ở màn Xe của tôi rồi mở lại màn này.',
+            tr(
+                'Cấu hình mạng lưu trên xe, không nằm trong hồ sơ. '
+                    'Kết nối xe (WiFi hoặc Bluetooth) ở màn chính rồi mở lại màn này.',
+                'Network settings are stored on the car, not in the profile. '
+                    'Connect the car (WiFi or Bluetooth) on the main screen, then open this screen again.'),
             textAlign: TextAlign.center,
             style: AppText.body.copyWith(color: t.textBody),
           ),
@@ -361,15 +383,15 @@ class _NetworkScreenState extends State<NetworkScreen> {
             : Column(mainAxisSize: MainAxisSize.min, children: [
                 AppIcon(AppIcons.warning, size: 40, color: t.warn),
                 const SizedBox(height: Gap.m),
-                Text('Không đọc được cấu hình mạng', style: AppText.title.copyWith(color: t.text)),
+                Text(tr('Không đọc được cấu hình mạng', 'Could not read the network settings'), style: AppText.title.copyWith(color: t.text)),
                 const SizedBox(height: Gap.xs),
-                Text('$err\nFirmware trên xe cần bản có "Mạng của xe".',
+                Text(tr('$err\nFirmware trên xe cần bản có "Mạng của xe".', '$err\nThe car firmware needs a version with "Car network".'),
                     textAlign: TextAlign.center, style: AppText.label.copyWith(color: t.textMuted)),
                 const SizedBox(height: Gap.l),
                 FilledButton.icon(
                   onPressed: busy ? null : _load,
                   icon: const AppIcon(AppIcons.refresh, mini: true),
-                  label: const Text('Thử lại'),
+                  label: Text(tr('Thử lại', 'Retry')),
                 ),
               ]),
       ),
@@ -403,7 +425,7 @@ class _NetworkScreenState extends State<NetworkScreen> {
               icon: busy
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : const AppIcon(AppIcons.save, mini: true),
-              label: Text(setupMode && !_dirty ? 'Thoát chế độ cấu hình' : 'Lưu vào xe & khởi động lại'),
+              label: Text(setupMode && !_dirty ? tr('Thoát chế độ cấu hình', 'Exit setup mode') : tr('Lưu vào xe & khởi động lại', 'Save to car & restart')),
             ),
           ],
         ),
@@ -454,7 +476,7 @@ class _NetworkScreenState extends State<NetworkScreen> {
       );
 
   Widget _eye(bool shown, VoidCallback toggle) => IconButton(
-        tooltip: shown ? 'Ẩn' : 'Hiện',
+        tooltip: shown ? tr('Ẩn', 'Hide') : tr('Hiện', 'Show'),
         onPressed: toggle,
         icon: AppIcon(shown ? AppIcons.hideSecret : AppIcons.showSecret, mini: true),
       );
@@ -470,36 +492,40 @@ class _NetworkScreenState extends State<NetworkScreen> {
       padding: const EdgeInsets.all(Gap.l),
       children: [
         _statusCard(),
-        _heading('Khi bật nguồn'),
+        _heading(tr('Khi bật nguồn', 'At power-on')),
         SegmentedButton<NetMode>(
-          segments: const [
-            ButtonSegment(value: NetMode.ap, label: Text('WiFi riêng (AP)')),
-            ButtonSegment(value: NetMode.sta, label: Text('Vào router nhà')),
+          segments: [
+            ButtonSegment(value: NetMode.ap, label: Text(tr('WiFi riêng (AP)', 'Own WiFi (AP)'))),
+            ButtonSegment(value: NetMode.sta, label: Text(tr('Vào router nhà', 'Join home router'))),
           ],
           selected: {cf.bootMode},
           onSelectionChanged: busy ? null : (s) => setState(() => cf.bootMode = s.first),
         ),
         const SizedBox(height: Gap.s),
         _hint(sta
-            ? 'Xe vào WiFi router (chỉ băng 2.4 GHz). Điện thoại vào cùng router, băng 2.4 hay 5 GHz đều được, '
-                'và vẫn có internet. Không vào được router sau 15 giây thì xe tự phát WiFi riêng.'
-            : 'Xe tự phát WiFi, điện thoại nối thẳng vào xe. Dùng ngoài trời, không cần router.'),
+            ? tr(
+                'Xe vào WiFi router (chỉ băng 2.4 GHz). Điện thoại vào cùng router, băng 2.4 hay 5 GHz đều được, '
+                    'và vẫn có internet. Không vào được router sau 15 giây thì xe tự phát WiFi riêng.',
+                'The car joins the router WiFi (2.4 GHz only). The phone joins the same router, 2.4 or 5 GHz, '
+                    'and keeps internet. If the car cannot join within 15 seconds it starts its own WiFi.')
+            : tr('Xe tự phát WiFi, điện thoại nối thẳng vào xe. Dùng ngoài trời, không cần router.',
+                'The car broadcasts its own WiFi and the phone connects straight to it. For outdoors, no router needed.')),
 
-        _heading('Chung'),
-        _field(_name, 'Tên thiết bị', e['name'], (v) => cf.name = v.trim(),
-            helper: 'Tên Bluetooth và tên của xe trong mạng router'),
-        _field(_port, 'Port UDP', e['udpPort'], (v) => cf.udpPort = int.tryParse(v.trim()) ?? 0,
-            keyboard: TextInputType.number, helper: 'Mặc định 4210. Port $discoveryPort dành cho tìm xe'),
+        _heading(tr('Chung', 'General')),
+        _field(_name, tr('Tên thiết bị', 'Device name'), e['name'], (v) => cf.name = v.trim(),
+            helper: tr('Tên Bluetooth và tên của xe trong mạng router', 'Bluetooth name and the car name on the router network')),
+        _field(_port, tr('Port UDP', 'UDP port'), e['udpPort'], (v) => cf.udpPort = int.tryParse(v.trim()) ?? 0,
+            keyboard: TextInputType.number, helper: tr('Mặc định 4210. Port $discoveryPort dành cho tìm xe', 'Default 4210. Port $discoveryPort is reserved for car discovery')),
 
-        _heading('WiFi riêng của xe (AP)'),
-        _field(_apSsid, 'Tên WiFi (SSID)', e['apSsid'], (v) => cf.apSsid = v),
+        _heading(tr('WiFi riêng của xe (AP)', 'Car WiFi (AP)')),
+        _field(_apSsid, tr('Tên WiFi (SSID)', 'WiFi name (SSID)'), e['apSsid'], (v) => cf.apSsid = v),
         _field(
           _apPass,
-          'Mật khẩu',
+          tr('Mật khẩu', 'Password'),
           e['apPass'],
           (v) => cf.apPass = v.isEmpty ? null : v,
-          hint: 'Để trống = giữ mật khẩu hiện tại',
-          helper: '8–63 ký tự. Cũng là mật khẩu WiFi tạm ở chế độ cấu hình',
+          hint: tr('Để trống = giữ mật khẩu hiện tại', 'Leave empty to keep the current password'),
+          helper: tr('8–63 ký tự. Cũng là mật khẩu WiFi tạm ở chế độ cấu hình', '8–63 characters. Also the temporary WiFi password in setup mode'),
           obscure: !showApPass,
           suffix: _eye(showApPass, () => setState(() => showApPass = !showApPass)),
         ),
@@ -508,21 +534,21 @@ class _NetworkScreenState extends State<NetworkScreen> {
           child: DropdownButtonFormField<int>(
             key: ValueKey('ch-${saved!.signature}'), // đọc lại từ xe thì dựng lại với giá trị mới
             initialValue: cf.apChannel.clamp(1, 13).toInt(),
-            decoration: InputDecoration(labelText: 'Kênh WiFi', errorText: e['apChannel']),
-            items: [for (var ch = 1; ch <= 13; ch++) DropdownMenuItem(value: ch, child: Text('Kênh $ch'))],
+            decoration: InputDecoration(labelText: tr('Kênh WiFi', 'WiFi channel'), errorText: e['apChannel']),
+            items: [for (var ch = 1; ch <= 13; ch++) DropdownMenuItem(value: ch, child: Text(tr('Kênh $ch', 'Channel $ch')))],
             onChanged: busy ? null : (v) => setState(() => cf.apChannel = v ?? 1),
           ),
         ),
-        _field(_apIp, 'IP của xe', e['apIp'], (v) => cf.apIp = v.trim(),
-            keyboard: _ipKeyboard, helper: 'IP tĩnh, mạng /24. Mặc định 192.168.4.1'),
+        _field(_apIp, tr('IP của xe', 'Car IP'), e['apIp'], (v) => cf.apIp = v.trim(),
+            keyboard: _ipKeyboard, helper: tr('IP tĩnh, mạng /24. Mặc định 192.168.4.1', 'Static IP, /24 network. Default 192.168.4.1')),
 
-        _heading('WiFi router'),
-        _hint('Xe chỉ dùng được WiFi 2.4 GHz. Nếu router đặt tên riêng cho hai băng, chọn tên 2.4 GHz.'),
-        _field(_staSsid, 'Tên WiFi router (SSID)', e['staSsid'], (v) => cf.staSsid = v),
+        _heading(tr('WiFi router', 'Router WiFi')),
+        _hint(tr('Xe chỉ dùng được WiFi 2.4 GHz. Nếu router đặt tên riêng cho hai băng, chọn tên 2.4 GHz.', 'The car only supports 2.4 GHz WiFi. If the router names the two bands separately, pick the 2.4 GHz one.')),
+        _field(_staSsid, tr('Tên WiFi router (SSID)', 'Router WiFi name (SSID)'), e['staSsid'], (v) => cf.staSsid = v),
         CheckboxListTile(
           contentPadding: EdgeInsets.zero,
           controlAffinity: ListTileControlAffinity.leading,
-          title: const Text('Mạng không có mật khẩu'),
+          title: Text(tr('Mạng không có mật khẩu', 'Network has no password')),
           value: staOpen,
           onChanged: busy
               ? null
@@ -532,37 +558,37 @@ class _NetworkScreenState extends State<NetworkScreen> {
         ),
         _field(
           _staPass,
-          'Mật khẩu router',
+          tr('Mật khẩu router', 'Router password'),
           e['staPass'],
           (v) => cf.staPass = v.isEmpty ? null : v,
-          hint: cf.staHasPass ? 'Để trống = giữ mật khẩu hiện tại' : null,
+          hint: cf.staHasPass ? tr('Để trống = giữ mật khẩu hiện tại', 'Leave empty to keep the current password') : null,
           enabled: !staOpen,
           obscure: !showStaPass,
           suffix: _eye(showStaPass, () => setState(() => showStaPass = !showStaPass)),
         ),
-        Text('Địa chỉ IP của xe trong mạng router', style: AppText.label.copyWith(color: context.tokens.text)),
+        Text(tr('Địa chỉ IP của xe trong mạng router', 'Car IP address on the router network'), style: AppText.label.copyWith(color: context.tokens.text)),
         const SizedBox(height: Gap.s),
         SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(value: true, label: Text('Động (DHCP)')),
-            ButtonSegment(value: false, label: Text('Tĩnh')),
+          segments: [
+            ButtonSegment(value: true, label: Text(tr('Động (DHCP)', 'Dynamic (DHCP)'))),
+            ButtonSegment(value: false, label: Text(tr('Tĩnh', 'Static'))),
           ],
           selected: {cf.staDhcp},
           onSelectionChanged: busy ? null : (s) => setState(() => cf.staDhcp = s.first),
         ),
         const SizedBox(height: Gap.s),
         if (cf.staDhcp)
-          _hint('Router tự cấp IP. App tự tìm xe trong mạng theo mã xe khi kết nối.')
+          _hint(tr('Router tự cấp IP. App tự tìm xe trong mạng theo mã xe khi kết nối.', 'The router assigns the IP. The app finds the car on the network by its car ID when connecting.'))
         else ...[
           const SizedBox(height: Gap.s),
-          _field(_staIp, 'IP tĩnh', e['staIp'], (v) => cf.staIp = v.trim(), keyboard: _ipKeyboard, hint: '192.168.1.50'),
+          _field(_staIp, tr('IP tĩnh', 'Static IP'), e['staIp'], (v) => cf.staIp = v.trim(), keyboard: _ipKeyboard, hint: '192.168.1.50'),
           _field(_staGateway, 'Gateway', e['staGateway'], (v) => cf.staGateway = v.trim(),
-              keyboard: _ipKeyboard, hint: '192.168.1.1', helper: 'Thường là IP của router'),
+              keyboard: _ipKeyboard, hint: '192.168.1.1', helper: tr('Thường là IP của router', 'Usually the router IP')),
           _field(_staSubnet, 'Subnet mask', e['staSubnet'], (v) => cf.staSubnet = v.trim(),
               keyboard: _ipKeyboard, hint: '255.255.255.0'),
-          _field(_staDns, 'DNS (tuỳ chọn)', e['staDns'], (v) => cf.staDns = v.trim(),
-              keyboard: _ipKeyboard, helper: 'Để trống = dùng gateway'),
-          _hint('Chọn IP nằm ngoài dải router tự cấp để không trùng máy khác.'),
+          _field(_staDns, tr('DNS (tuỳ chọn)', 'DNS (optional)'), e['staDns'], (v) => cf.staDns = v.trim(),
+              keyboard: _ipKeyboard, helper: tr('Để trống = dùng gateway', 'Leave empty to use the gateway')),
+          _hint(tr('Chọn IP nằm ngoài dải router tự cấp để không trùng máy khác.', 'Pick an IP outside the router DHCP range so it does not clash with other devices.')),
         ],
       ],
     );
@@ -575,13 +601,13 @@ class _NetworkScreenState extends State<NetworkScreen> {
     String two(int n) => n.toString().padLeft(2, '0');
     final lines = <String>[
       'IP ${st.ip} · port ${cf.udpPort}',
-      if (st.mode == NetMode.sta) 'Router "${cf.staSsid}"${st.rssi != 0 ? ' · sóng ${st.rssi} dBm' : ''}',
-      if (st.mode == NetMode.ap) 'Phát WiFi "${cf.apSsid}" · ${st.clients} máy đang nối',
+      if (st.mode == NetMode.sta) 'Router "${cf.staSsid}"${st.rssi != 0 ? tr(' · sóng ${st.rssi} dBm', ' · signal ${st.rssi} dBm') : ''}',
+      if (st.mode == NetMode.ap) tr('Phát WiFi "${cf.apSsid}" · ${st.clients} máy đang nối', 'Broadcasting WiFi "${cf.apSsid}" · ${st.clients} device(s) connected'),
       if (st.mode == NetMode.setup)
-        'Phát WiFi tạm "${st.setupSsid}" · tự thoát sau ${st.setupLeftS ~/ 60}:${two(st.setupLeftS % 60)} nếu không có máy nối',
+        tr('Phát WiFi tạm "${st.setupSsid}" · tự thoát sau ${st.setupLeftS ~/ 60}:${two(st.setupLeftS % 60)} nếu không có máy nối', 'Temporary WiFi "${st.setupSsid}" · exits in ${st.setupLeftS ~/ 60}:${two(st.setupLeftS % 60)} if no device connects'),
       if (st.mode != NetMode.sta && cf.staSsid.isNotEmpty && st.staResult != StaResult.none)
         'Router "${cf.staSsid}": ${st.staResult.label}',
-      'Mã xe ${st.id}',
+      tr('Mã xe ${st.id}', 'Car ID ${st.id}'),
     ];
     return Card(
       child: Padding(
@@ -590,14 +616,14 @@ class _NetworkScreenState extends State<NetworkScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Wrap(spacing: Gap.s, runSpacing: Gap.xs, children: [
-              Pill(color: st.mode == NetMode.setup ? t.warn : t.ok, label: 'Đang chạy: ${st.mode.label}'),
-              if (st.fellBack) Pill(color: t.bad, label: 'Không vào được router: ${st.staResult.label}'),
+              Pill(color: st.mode == NetMode.setup ? t.warn : t.ok, label: tr('Đang chạy: ${st.mode.label}', 'Running: ${st.mode.label}')),
+              if (st.fellBack) Pill(color: t.bad, label: tr('Không vào được router: ${st.staResult.label}', 'Could not join router: ${st.staResult.label}')),
             ]),
             const SizedBox(height: Gap.s),
             for (final l in lines) Text(l, style: AppText.label.copyWith(color: t.textBody)),
             if (st.fellBack) ...[
               const SizedBox(height: Gap.s),
-              Text('Xe đang phát WiFi riêng để bạn sửa thông tin router bên dưới.',
+              Text(tr('Xe đang phát WiFi riêng để bạn sửa thông tin router bên dưới.', 'The car is broadcasting its own WiFi so you can fix the router details below.'),
                   style: AppText.label.copyWith(color: t.bad, fontSize: 13)),
             ],
           ],

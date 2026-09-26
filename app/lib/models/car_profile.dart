@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../l10n/lang.dart';
 import '../layout/layout_templates.dart';
 import '../protocol/protocol.dart';
 import 'channel_config.dart';
@@ -105,6 +106,9 @@ class CarProfile {
   String id;
   String name;
   String? icon;
+
+  /// Ảnh đại diện: tên file trong thư mục ảnh của ProfileRepository, null = biểu tượng xe
+  String? photo;
   ConnType connType;
   WifiConn? wifi;
   BleConn? ble;
@@ -136,6 +140,7 @@ class CarProfile {
     required this.id,
     required this.name,
     this.icon,
+    this.photo,
     required this.connType,
     this.wifi,
     this.ble,
@@ -205,7 +210,7 @@ class CarProfile {
   /// Tên hiển thị của kênh: "CH3" hoặc "CH3 · Đèn"
   String chLabel(int n) {
     final c = ch(n);
-    return c.name == 'Kênh $n' ? 'CH$n' : 'CH$n · ${c.name}';
+    return c.hasDefaultName ? 'CH$n' : 'CH$n · ${c.name}';
   }
 
   /// Luật đang bật ghi vào kênh `ch`
@@ -245,7 +250,7 @@ class CarProfile {
     final rs = rulesUsing(inputId);
     if (rs.isEmpty) return null;
     if (rs.length == 1 && rs.first.source == inputId && isPlain(rs.first)) return rs.first.destCh;
-    throw StateError('Input có cấu hình mix phức tạp');
+    throw StateError(tr('Input có cấu hình mix phức tạp', 'Input has a complex mix setup'));
   }
 
   bool canQuickRoute(String inputId) {
@@ -373,35 +378,35 @@ class CarProfile {
     final e = <String, String>{};
     final n = name.trim();
     if (n.isEmpty || n.length > 32) {
-      e['name'] = 'Tên xe dài 1–32 ký tự';
+      e['name'] = tr('Tên xe dài 1–32 ký tự', 'Car name must be 1–32 characters');
     } else if (otherNames.any((o) => o.trim().toLowerCase() == n.toLowerCase())) {
-      e['name'] = 'Đã có xe khác tên này';
+      e['name'] = tr('Đã có xe khác tên này', 'Another car already has this name');
     }
     if (connType == ConnType.wifi) {
       final w = wifi;
-      if (w == null || !isValidIpv4(w.ip)) e['ip'] = 'Địa chỉ IPv4 không hợp lệ';
-      if (w == null || w.port < 1 || w.port > 65535) e['port'] = 'Port trong khoảng 1–65535';
+      if (w == null || !isValidIpv4(w.ip)) e['ip'] = tr('Địa chỉ IPv4 không hợp lệ', 'Invalid IPv4 address');
+      if (w == null || w.port < 1 || w.port > 65535) e['port'] = tr('Port trong khoảng 1–65535', 'Port must be 1–65535');
       final id = w?.carId;
-      if (id != null && !isValidMac(id)) e['carId'] = 'Mã xe dạng AA:BB:CC:DD:EE:FF';
+      if (id != null && !isValidMac(id)) e['carId'] = tr('Mã xe dạng AA:BB:CC:DD:EE:FF', 'Car ID format: AA:BB:CC:DD:EE:FF');
     } else {
       final b = ble;
       if (b == null || (b.mac.trim().isEmpty && b.deviceName.trim().isEmpty)) {
-        e['ble'] = 'Cần chọn xe hoặc nhập MAC/tên';
+        e['ble'] = tr('Cần chọn xe hoặc nhập MAC/tên', 'Pick a car or enter a MAC/name');
       } else if (b.mac.trim().isNotEmpty && !isValidMac(b.mac.trim())) {
-        e['ble'] = 'MAC dạng AA:BB:CC:DD:EE:FF';
+        e['ble'] = tr('MAC dạng AA:BB:CC:DD:EE:FF', 'MAC format: AA:BB:CC:DD:EE:FF');
       }
     }
     if (failsafeTimeoutMs < 100 || failsafeTimeoutMs > 3000) {
-      e['failsafeTimeout'] = 'Thời gian failsafe trong khoảng 100–3000 ms';
+      e['failsafeTimeout'] = tr('Thời gian failsafe trong khoảng 100–3000 ms', 'Failsafe timeout must be 100–3000 ms');
     }
     for (final (c, k) in [(throttleCh, 'throttleCh'), (steeringCh, 'steeringCh')]) {
-      if (c != null && (c < 1 || c > 10)) e[k] = 'Kênh phải trong CH1–CH10';
+      if (c != null && (c < 1 || c > 10)) e[k] = tr('Kênh phải trong CH1–CH10', 'Channel must be CH1–CH10');
     }
-    if (throttleCh != null && throttleCh == steeringCh) e['steeringCh'] = 'Kênh Lái trùng kênh Ga';
-    if (gears.gearCount < 1 || gears.gearCount > GearConfig.maxGears) e['gearCount'] = 'Số lượng số 1–5';
+    if (throttleCh != null && throttleCh == steeringCh) e['steeringCh'] = tr('Kênh Lái trùng kênh Ga', 'Steering channel is the same as the throttle channel');
+    if (gears.gearCount < 1 || gears.gearCount > GearConfig.maxGears) e['gearCount'] = tr('Số lượng số 1–5', 'Gear count must be 1–5');
     for (var i = 0; i < gears.gearCount; i++) {
       final g = gears.maxThrottle[i];
-      if (g < 1 || g > 100) e['gear$i'] = 'Ga tối đa số ${i + 1} phải 1–100%';
+      if (g < 1 || g > 100) e['gear$i'] = tr('Ga tối đa số ${i + 1} phải 1–100%', 'Max throttle in gear ${i + 1} must be 1–100%');
     }
     return e;
   }
@@ -412,13 +417,13 @@ class CarProfile {
   String? roleWarning({required bool throttle}) {
     final ch = throttle ? throttleCh : steeringCh;
     if (ch == null) return null;
-    final label = throttle ? 'Ga' : 'Lái';
-    if (rulesTo(ch).isEmpty) return 'Chưa có luật mix nào điều khiển kênh $label (CH$ch)';
+    final label = throttle ? tr('Ga', 'throttle') : tr('Lái', 'steering');
+    if (rulesTo(ch).isEmpty) return tr('Chưa có luật mix nào điều khiển kênh $label (CH$ch)', 'No mix rule drives the $label channel (CH$ch)');
     final drivers = driversOf(ch);
     if (drivers.isEmpty) return null; // chỉ có luật hằng số: không cần phần tử
     for (final l in layouts) {
       if (!drivers.any((d) => l.itemForInput(d) != null)) {
-        return 'Bố cục "${l.name}" chưa có phần tử cho kênh $label (CH$ch)';
+        return tr('Bố cục "${l.name}" chưa có phần tử cho kênh $label (CH$ch)', 'Layout "${l.name}" has no control for the $label channel (CH$ch)');
       }
     }
     return null;
@@ -437,16 +442,16 @@ class CarProfile {
     final a = arm.armCondition;
     if (a != null) {
       final e = a.validate(ids, condIds);
-      if (e != null) r.errors.add('Điều kiện ARM: $e');
+      if (e != null) r.errors.add(tr('Điều kiện ARM: $e', 'ARM condition: $e'));
     }
     for (final l in layouts) {
       for (final it in l.items) {
         for (final id in it.inputIds) {
           final d = ids[id];
           if (d == null) {
-            r.errors.add('Bố cục "${l.name}": phần tử gắn Input "$id" không tồn tại');
+            r.errors.add(tr('Bố cục "${l.name}": phần tử gắn Input "$id" không tồn tại', 'Layout "${l.name}": a control is bound to missing Input "$id"'));
           } else if (!d.accepts(it.kind)) {
-            r.errors.add('Bố cục "${l.name}": ${it.kind.label.toLowerCase()} không gắn được Input ${d.type.label.toLowerCase()} "${d.name}"');
+            r.errors.add(tr('Bố cục "${l.name}": ${it.kind.label.toLowerCase()} không gắn được Input ${d.type.label.toLowerCase()} "${d.name}"', 'Layout "${l.name}": ${it.kind.label.toLowerCase()} cannot take ${d.type.label.toLowerCase()} Input "${d.name}"'));
           }
         }
       }
@@ -456,7 +461,7 @@ class CarProfile {
       final d = ids[id];
       if (d == null || d.type == InputType.constant) continue;
       if (activeLayout.itemForInput(id) == null) {
-        r.warnings.add('Input "${d.name}" được luật mix dùng nhưng chưa có phần tử trên bố cục "${activeLayout.name}"');
+        r.warnings.add(tr('Input "${d.name}" được luật mix dùng nhưng chưa có phần tử trên bố cục "${activeLayout.name}"', 'Input "${d.name}" is used by a mix rule but has no control on layout "${activeLayout.name}"'));
       }
     }
     for (final throttle in [true, false]) {
@@ -516,6 +521,7 @@ class CarProfile {
         'id': id,
         'name': name,
         'icon': icon,
+        if (photo != null) 'photo': photo,
         'connType': connType.name,
         'wifi': wifi?.toJson(),
         'ble': ble?.toJson(),
@@ -552,6 +558,7 @@ class CarProfile {
       id: j['id'] as String,
       name: j['name'] as String? ?? 'Xe',
       icon: j['icon'] as String?,
+      photo: j['photo'] as String?,
       connType: ConnType.values.asNameMap()[j['connType']] ?? ConnType.wifi,
       wifi: j['wifi'] == null ? null : WifiConn.fromJson(j['wifi'] as Map<String, dynamic>),
       ble: j['ble'] == null ? null : BleConn.fromJson(j['ble'] as Map<String, dynamic>),
@@ -581,13 +588,19 @@ class CarProfile {
 
 /// Mẫu khởi đầu ở bước 3 tạo xe (E3), dựng bằng Input + luật mặc định (U5)
 enum ProfileTemplate {
-  blank('Trống', 'Chưa có Input, luật mix hay kênh Ga/Lái. Tự thêm phần tử và gắn vào kênh bạn muốn'),
-  basic('Xe cơ bản 2 kênh', 'Lái (CH1) và Ga (CH2)'),
-  lightsHorn('Xe có đèn/còi', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)'),
-  copy('Sao chép từ xe khác', 'Lấy Input, mix, kênh, hộp số và bố cục của một xe có sẵn');
+  blank('Trống', 'Blank', 'Chưa có Input, luật mix hay kênh Ga/Lái. Tự thêm phần tử và gắn vào kênh bạn muốn',
+      'No Inputs, mix rules or throttle/steering channels. Add controls yourself and route them to any channel'),
+  basic('Xe cơ bản 2 kênh', 'Basic 2-channel car', 'Lái (CH1) và Ga (CH2)', 'Steering (CH1) and throttle (CH2)'),
+  lightsHorn('Xe có đèn/còi', 'Car with lights/horn', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)',
+      'Adds Lights (CH3, on/off) and Horn (CH4, push)'),
+  copy('Sao chép từ xe khác', 'Copy from another car', 'Lấy Input, mix, kênh, hộp số và bố cục của một xe có sẵn',
+      'Takes Inputs, mix, channels, gears and layout from an existing car');
 
-  const ProfileTemplate(this.label, this.description);
-  final String label, description;
+  const ProfileTemplate(this._vi, this._en, this._descVi, this._descEn);
+  final String _vi, _en, _descVi, _descEn;
+
+  String get label => tr(_vi, _en);
+  String get description => tr(_descVi, _descEn);
 
   /// Áp mẫu lên hồ sơ mới (giữ id, tên, kết nối)
   void applyTo(CarProfile p, {CarProfile? source}) {
@@ -628,8 +641,8 @@ enum ProfileTemplate {
       ..steeringCh = 1
       ..throttleCh = 2
       ..inputs = [
-        InputDef(id: 'steer', name: 'Lái'),
-        InputDef(id: 'throttle', name: 'Ga'),
+        InputDef(id: 'steer', name: tr('Lái', 'Steering')),
+        InputDef(id: 'throttle', name: tr('Ga', 'Throttle')),
       ]
       ..conditions = []
       ..mixer = [
@@ -641,14 +654,14 @@ enum ProfileTemplate {
     if (this == ProfileTemplate.lightsHorn) {
       final l = p.activeLayout;
       p.ch(3)
-        ..name = 'Đèn'
+        ..name = tr('Đèn', 'Lights')
         ..failsafeUs = 1000;
       p.ch(4)
-        ..name = 'Còi'
+        ..name = tr('Còi', 'Horn')
         ..failsafeUs = 1000;
       p.inputs.addAll([
-        InputDef(id: 'light', name: 'Đèn', type: InputType.binary),
-        InputDef(id: 'horn', name: 'Còi', type: InputType.binary),
+        InputDef(id: 'light', name: tr('Đèn', 'Lights'), type: InputType.binary),
+        InputDef(id: 'horn', name: tr('Còi', 'Horn'), type: InputType.binary),
       ]);
       p
         ..setQuickRoute('light', 3)

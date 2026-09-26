@@ -3,22 +3,26 @@
 import 'dart:collection';
 import 'dart:math';
 
+import '../l10n/lang.dart';
+import '../theme/tokens.dart';
+
 
 enum ItemKind {
-  stickH('Cần gạt ngang'),
-  stickV('Cần gạt dọc'),
-  stick2D('Cần 2 trục'),
-  button('Nút nhấn giữ'),
-  toggle('Nút bật/tắt'),
-  switch3('Công tắc 3 nấc'),
-  knob('Núm xoay'),
-  gauge('Ô đồng hồ'),
-  gearBox('Hộp số'),
-  trim('Trim lái'),
-  statusBadge('Trạng thái');
+  stickH('Cần gạt ngang', 'Horizontal stick'),
+  stickV('Cần gạt dọc', 'Vertical stick'),
+  stick2D('Cần 2 trục', '2-axis stick'),
+  button('Nút nhấn giữ', 'Push button'),
+  toggle('Nút bật/tắt', 'Toggle button'),
+  switch3('Công tắc 3 nấc', '3-position switch'),
+  knob('Núm xoay', 'Knob'),
+  gauge('Ô đồng hồ', 'Gauge'),
+  gearBox('Hộp số', 'Gearbox'),
+  trim('Trim lái', 'Steering trim'),
+  statusBadge('Trạng thái', 'Status');
 
-  const ItemKind(this.label);
-  final String label;
+  const ItemKind(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 
   bool get isControl => index <= ItemKind.knob.index;
   bool get isStick => this == stickH || this == stickV || this == stick2D;
@@ -30,15 +34,16 @@ enum ItemKind {
 
 /// Các ô đồng hồ có thể đặt lên màn Lái
 enum GaugeKey {
-  battery('Pin'),
-  current('Dòng'),
-  speed('Tốc độ'),
-  ping('Ping'),
-  rssi('RSSI'),
-  channels('Kênh đầu ra');
+  battery('Pin', 'Battery'),
+  current('Dòng', 'Current'),
+  speed('Tốc độ', 'Speed'),
+  ping('Ping', 'Ping'),
+  rssi('RSSI', 'RSSI'),
+  channels('Kênh đầu ra', 'Output channels');
 
-  const GaugeKey(this.label);
-  final String label;
+  const GaugeKey(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 }
 
 /// Giới hạn kích thước theo ô lưới (H2)
@@ -67,22 +72,24 @@ class SizeLimits {
 }
 
 enum ValueDisplay {
-  pct('%'),
-  us('µs'),
-  hidden('Ẩn');
+  pct('%', '%'),
+  us('µs', 'µs'),
+  hidden('Ẩn', 'Hidden');
 
-  const ValueDisplay(this.label);
-  final String label;
+  const ValueDisplay(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 }
 
 enum KnobSize {
-  small('Nhỏ', 0.28),
-  medium('Vừa', 0.38),
-  large('Lớn', 0.5);
+  small('Nhỏ', 'Small', 0.28),
+  medium('Vừa', 'Medium', 0.38),
+  large('Lớn', 'Large', 0.5);
 
-  const KnobSize(this.label, this.factor);
-  final String label;
+  const KnobSize(this._vi, this._en, this.factor);
+  final String _vi, _en;
   final double factor;
+  String get label => tr(_vi, _en);
 }
 
 class ItemStyle {
@@ -94,6 +101,7 @@ class ItemStyle {
   double deadzonePct; // 0–20
   bool haptic;
   double opacityPct; // 30–100
+  AccentColor? color; // màu riêng của phần tử; null = theo màu chủ đạo của app
 
   ItemStyle({
     this.labelText,
@@ -104,6 +112,7 @@ class ItemStyle {
     this.deadzonePct = 0,
     this.haptic = true,
     this.opacityPct = 100,
+    this.color,
   });
 
   Map<String, dynamic> toJson() => {
@@ -115,6 +124,7 @@ class ItemStyle {
         'deadzonePct': deadzonePct,
         'haptic': haptic,
         'opacityPct': opacityPct,
+        if (color != null) 'color': color!.name,
       };
 
   factory ItemStyle.fromJson(Map<String, dynamic>? j) {
@@ -128,25 +138,28 @@ class ItemStyle {
       deadzonePct: (j['deadzonePct'] as num?)?.toDouble() ?? 0,
       haptic: j['haptic'] as bool? ?? true,
       opacityPct: (j['opacityPct'] as num?)?.toDouble() ?? 100,
+      color: AccentColor.values.asNameMap()[j['color']],
     );
   }
 }
 
 enum ReturnMode {
-  spring('Tự về'),
-  hold('Giữ vị trí'),
-  halfSpring('Về một nửa');
+  spring('Tự về', 'Spring back'),
+  hold('Giữ vị trí', 'Hold position'),
+  halfSpring('Về một nửa', 'Half return');
 
-  const ReturnMode(this.label);
-  final String label;
+  const ReturnMode(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 }
 
 enum ReturnCurve {
-  linear('Tuyến tính'),
-  easeOut('Chậm dần cuối');
+  linear('Tuyến tính', 'Linear'),
+  easeOut('Chậm dần cuối', 'Ease out');
 
-  const ReturnCurve(this.label);
-  final String label;
+  const ReturnCurve(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 }
 
 /// Cài đặt tự về của một trục cần gạt (H3b)
@@ -186,10 +199,10 @@ class ReturnConfig {
   bool get risky => mode == ReturnMode.hold || durationMs > 500;
 
   String? validate() {
-    if (targetPct < -100 || targetPct > 100) return 'Vị trí về phải trong −100…+100%';
-    if (positiveOnly && negativeOnly) return 'Không thể bật cả "chỉ nửa dương" và "chỉ nửa âm"';
-    if (delayMs < 0 || delayMs > 1000) return 'Trễ trước khi về trong 0–1000 ms';
-    if (durationMs < 0 || durationMs > 2000) return 'Thời gian về trong 0–2000 ms';
+    if (targetPct < -100 || targetPct > 100) return tr('Vị trí về phải trong −100…+100%', 'Return position must be within −100…+100%');
+    if (positiveOnly && negativeOnly) return tr('Không thể bật cả "chỉ nửa dương" và "chỉ nửa âm"', 'Cannot enable both "positive half only" and "negative half only"');
+    if (delayMs < 0 || delayMs > 1000) return tr('Trễ trước khi về trong 0–1000 ms', 'Return delay must be 0–1000 ms');
+    if (durationMs < 0 || durationMs > 2000) return tr('Thời gian về trong 0–2000 ms', 'Return time must be 0–2000 ms');
     return null;
   }
 

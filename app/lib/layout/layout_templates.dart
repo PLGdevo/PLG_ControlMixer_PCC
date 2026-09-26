@@ -1,4 +1,5 @@
 // Bố cục khởi đầu. (Các mẫu Thuận tay trái / Tay cầm / Tối giản và nút Lật ngang thuộc H4, Sprint 4.)
+import '../l10n/lang.dart';
 import '../models/control_layout.dart';
 import 'layout_grid.dart';
 
@@ -17,7 +18,7 @@ abstract final class LayoutTemplates {
       );
 
   /// Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, hộp số, trim người dùng tự thêm.
-  static ControlLayout blank() => ControlLayout(id: ControlLayout.newId(), name: 'Mặc định', items: [
+  static ControlLayout blank() => ControlLayout(id: ControlLayout.newId(), name: tr('Mặc định', 'Default'), items: [
         _it(ItemKind.statusBadge, 5, 0, 6, 2),
         _it(ItemKind.gauge, 5, 2, 4, 2, gauge: GaugeKey.battery.name),
         _it(ItemKind.gauge, 9, 2, 4, 2, gauge: GaugeKey.current.name),

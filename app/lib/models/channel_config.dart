@@ -1,6 +1,8 @@
 // Kênh đầu ra (Sprint 4 — O1): Min/Center/Max, trim, offset, reverse, failsafe.
 // Kênh nhận giá trị từ luật mix (M); kênh tắt luôn ra failsafeUs.
 
+import '../l10n/lang.dart';
+
 class ChannelConfig {
   static const minLimitUs = 500;
   static const maxLimitUs = 2500;
@@ -31,8 +33,8 @@ class ChannelConfig {
 
   /// Kênh Lái / Ga kiểu servo lái và ESC (mẫu "Xe cơ bản", hồ sơ cũ)
   factory ChannelConfig.steering(int index) =>
-      ChannelConfig(index: index, name: 'Lái', enabled: true, minUs: 1100, maxUs: 1900);
-  factory ChannelConfig.throttle(int index) => ChannelConfig(index: index, name: 'Ga', enabled: true);
+      ChannelConfig(index: index, name: tr('Lái', 'Steering'), enabled: true, minUs: 1100, maxUs: 1900);
+  factory ChannelConfig.throttle(int index) => ChannelConfig(index: index, name: tr('Ga', 'Throttle'), enabled: true);
 
   /// 10 kênh mặc định; kênh `steeringCh` / `throttleCh` (nếu có) dựng theo kiểu Lái / Ga
   static List<ChannelConfig> defaultList({int? steeringCh, int? throttleCh}) => List.generate(10, (i) {
@@ -46,6 +48,10 @@ class ChannelConfig {
   bool get alwaysOn => index <= 2;
 
   String get label => 'CH$index';
+
+  /// Tên mặc định "Kênh N" (lưu cố định trong hồ sơ, không theo ngôn ngữ) — hiển thị theo ngôn ngữ đang chọn
+  bool get hasDefaultName => name == 'Kênh $index' || name == 'Channel $index';
+  String get displayName => hasDefaultName ? tr('Kênh $index', 'Channel $index') : name;
 
   int get effectiveCenter => (centerUs + trimUs + offsetUs).clamp(minUs, maxUs).toInt();
 
@@ -70,14 +76,14 @@ class ChannelConfig {
   /// Kiểm tra theo E7. Trả về {tên trường: lỗi}; rỗng là hợp lệ.
   Map<String, String> validate() {
     final e = <String, String>{};
-    if (name.trim().isEmpty) e['name'] = 'Tên kênh không được trống';
-    if (minUs < minLimitUs) e['min'] = 'Min tối thiểu $minLimitUs µs';
-    if (maxUs > maxLimitUs) e['max'] = 'Max tối đa $maxLimitUs µs';
-    if (minUs >= centerUs) e['center'] = 'Cần Min < Center';
-    if (centerUs >= maxUs) e['center'] = 'Cần Center < Max';
-    if (failsafeUs < minUs || failsafeUs > maxUs) e['failsafe'] = 'Failsafe phải nằm trong [Min, Max]';
-    if (trimUs.abs() > 200) e['trim'] = 'Trim trong khoảng ±200 µs';
-    if (offsetUs.abs() > 300) e['offset'] = 'Offset trong khoảng ±300 µs';
+    if (name.trim().isEmpty) e['name'] = tr('Tên kênh không được trống', 'Channel name cannot be empty');
+    if (minUs < minLimitUs) e['min'] = tr('Min tối thiểu $minLimitUs µs', 'Min is at least $minLimitUs µs');
+    if (maxUs > maxLimitUs) e['max'] = tr('Max tối đa $maxLimitUs µs', 'Max is at most $maxLimitUs µs');
+    if (minUs >= centerUs) e['center'] = tr('Cần Min < Center', 'Min must be below Center');
+    if (centerUs >= maxUs) e['center'] = tr('Cần Center < Max', 'Center must be below Max');
+    if (failsafeUs < minUs || failsafeUs > maxUs) e['failsafe'] = tr('Failsafe phải nằm trong [Min, Max]', 'Failsafe must be within [Min, Max]');
+    if (trimUs.abs() > 200) e['trim'] = tr('Trim trong khoảng ±200 µs', 'Trim must be within ±200 µs');
+    if (offsetUs.abs() > 300) e['offset'] = tr('Offset trong khoảng ±300 µs', 'Offset must be within ±300 µs');
     return e;
   }
 

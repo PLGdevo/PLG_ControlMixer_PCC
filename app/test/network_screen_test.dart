@@ -75,7 +75,7 @@ void main() {
 
     await tester.pumpWidget(MaterialApp(
       theme: AppTheme.dark(),
-      home: SettingsScreen(controller: c, repo: repo, profileId: 'p1', initialTab: 5),
+      home: SettingsScreen(controller: c, repo: repo, profileId: 'p1', initialTab: SettingsScreen.generalTab),
     ));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Mạng của xe'));

@@ -1,6 +1,7 @@
 // Nâng JSON hồ sơ cũ lên `CarProfile.schemaVersion` hiện tại (B5, E1, Sprint 4 — J4).
 import 'dart:convert';
 
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/channel_config.dart';
 import '../models/condition.dart';
@@ -22,7 +23,7 @@ abstract final class ProfileMigration {
     var j = Map<String, dynamic>.from(input);
     var v = j['schemaVersion'] as int? ?? 0;
     if (v > CarProfile.schemaVersion) {
-      throw ProfileFormatException('Hồ sơ được tạo bởi bản app mới hơn (định dạng $v)');
+      throw ProfileFormatException(tr('Hồ sơ được tạo bởi bản app mới hơn (định dạng $v)', 'Profile was made by a newer app version (format $v)'));
     }
     if (v == 0) {
       j = _v0ToV1(j);
@@ -35,7 +36,7 @@ abstract final class ProfileMigration {
       v = 2;
     }
     if (j['id'] is! String || (j['id'] as String).isEmpty) {
-      throw ProfileFormatException('Hồ sơ thiếu mã (id)');
+      throw ProfileFormatException(tr('Hồ sơ thiếu mã (id)', 'Profile has no ID'));
     }
     return j;
   }
@@ -76,7 +77,7 @@ abstract final class ProfileMigration {
     return {
       'schemaVersion': 1,
       'id': old['id'] as String? ?? CarProfile.newId(),
-      'name': old['name'] as String? ?? 'Xe cũ',
+      'name': old['name'] as String? ?? tr('Xe cũ', 'Old car'),
       'connType': old['connType'] ?? (old['mac'] != null ? 'ble' : 'wifi'),
       'wifi': {'ip': old['ip'] ?? '192.168.4.1', 'port': old['port'] ?? 4210},
       if (old['mac'] != null) 'ble': {'mac': old['mac'], 'deviceName': old['deviceName'] ?? ''},
@@ -139,8 +140,11 @@ abstract final class ProfileMigration {
                 .firstOrNull;
             if (id == null) {
               id = newInput(InputDef.uniqueId('ch${n}_2', inputs.keys), '${chName(n)} (${kind.label})', type, n);
-              warnings.add('CH$n được gán vào hai kiểu phần tử khác nhau. ${kind.label} ở bố cục '
-                  '"${l['name']}" gắn vào Input riêng "$id", chưa có luật mix.');
+              warnings.add(tr(
+                  'CH$n được gán vào hai kiểu phần tử khác nhau. ${kind.label} ở bố cục '
+                      '"${l['name']}" gắn vào Input riêng "$id", chưa có luật mix.',
+                  'CH$n was assigned to two different control types. ${kind.label} on layout '
+                      '"${l['name']}" now uses its own Input "$id", with no mix rule yet.'));
             }
             it[to] = id;
           }
@@ -177,7 +181,7 @@ abstract final class ProfileMigration {
       final s = (whole ? v.round().toString() : v.toStringAsFixed(1)).replaceAll('-', 'm').replaceAll('.', '_');
       final id = 'k_$s';
       inputs.putIfAbsent(
-          id, () => InputDef(id: id, name: 'Hằng ${whole ? v.round() : v}%', type: InputType.constant, constPct: v));
+          id, () => InputDef(id: id, name: tr('Hằng ${whole ? v.round() : v}%', 'Constant ${whole ? v.round() : v}%'), type: InputType.constant, constPct: v));
       return id;
     }
 
@@ -209,16 +213,19 @@ abstract final class ProfileMigration {
       void checkRead(int n, String role) {
         if (!enabled) return;
         if (written.contains(n)) {
-          warnings.add('Luật mix $no đọc CH$n ($role) đã bị luật trước ghi vào; '
-              'nay đọc giá trị trước mix, kết quả có thể khác.');
+          warnings.add(tr(
+              'Luật mix $no đọc CH$n ($role) đã bị luật trước ghi vào; '
+                  'nay đọc giá trị trước mix, kết quả có thể khác.',
+              'Mix rule $no reads CH$n ($role), which an earlier rule wrote to; '
+                  'it now reads the value before mixing, results may differ.'));
         }
-        if (n == thr) warnings.add('Luật mix $no đọc CH$thr (Ga): hộp số nay áp sau mix, kết quả có thể khác.');
+        if (n == thr) warnings.add(tr('Luật mix $no đọc CH$thr (Ga): hộp số nay áp sau mix, kết quả có thể khác.', 'Mix rule $no reads CH$thr (throttle): gears now apply after mixing, results may differ.'));
       }
 
       void checkLevels(int n, String role) {
         final inp = inputs[source(n)];
         if (enabled && inp != null && !inp.isAxis && inp.type != InputType.constant && inp.levels.offPct > 0) {
-          warnings.add('Luật mix $no: $role CH$n có mức tắt > 0%; điều kiện nay so theo trạng thái bật/tắt.');
+          warnings.add(tr('Luật mix $no: $role CH$n có mức tắt > 0%; điều kiện nay so theo trạng thái bật/tắt.', 'Mix rule $no: $role CH$n has an off level > 0%; the condition now compares on/off state.'));
         }
       }
 
@@ -226,15 +233,15 @@ abstract final class ProfileMigration {
       final gateCh = type == 'select' ? null : m['gateCh'] as int?;
       Expr? gate;
       if (gateCh != null) {
-        checkRead(gateCh, 'điều kiện');
-        checkLevels(gateCh, 'điều kiện');
+        checkRead(gateCh, tr('điều kiện', 'condition'));
+        checkLevels(gateCh, tr('điều kiện', 'condition'));
         gate = gtZero(gateCh);
       }
       Expr withGate(Expr e) => gate == null ? e : (e is ExprTrue ? gate : ExprAnd([gate, e]));
 
       switch (type) {
         case 'linear' || 'curve':
-          checkRead(src, 'nguồn');
+          checkRead(src, tr('nguồn', 'source'));
           final r = rule('$base${type == 'linear' ? 'lin' : 'curve'}', source(src), m['targetCh'] as int? ?? 3,
               cond: withGate(const ExprTrue()), combine: combine, priority: 1);
           if (type == 'linear') {
@@ -249,13 +256,13 @@ abstract final class ProfileMigration {
           }
           added.add(r);
         case 'threshold':
-          checkRead(src, 'nguồn');
+          checkRead(src, tr('nguồn', 'source'));
           final inp = inputs[source(src)];
           if (enabled && inp != null && !inp.isAxis && inp.type != InputType.constant) {
-            warnings.add('Luật mix $no: ngưỡng trên nút/công tắc nay so theo trạng thái (0/1), không theo %.');
+            warnings.add(tr('Luật mix $no: ngưỡng trên nút/công tắc nay so theo trạng thái (0/1), không theo %.', 'Mix rule $no: thresholds on buttons/switches now compare state (0/1), not %.'));
           }
           if (enabled && gate != null) {
-            warnings.add('Luật mix $no: trạng thái trễ không còn reset khi điều kiện CH$gateCh tắt.');
+            warnings.add(tr('Luật mix $no: trạng thái trễ không còn reset khi điều kiện CH$gateCh tắt.', 'Mix rule $no: hysteresis state no longer resets when the CH$gateCh condition turns off.'));
           }
           final onAt = d('onAtPct', 80), offBelow = d('offBelowPct', 70);
           final cmp = ExprCmp(input: source(src), op: CmpOp.ge, value: onAt, hyst: onAt - offBelow);
@@ -266,14 +273,17 @@ abstract final class ProfileMigration {
             ..add(rule('${base}on', constInput(d('onValuePct', 100)), dest,
                 cond: withGate(cmp), combine: combine, priority: 1));
         case 'select':
-          checkRead(src, 'nguồn');
+          checkRead(src, tr('nguồn', 'source'));
           final sel = m['selectCh'] as int? ?? 3;
-          checkRead(sel, 'nút chọn');
-          checkLevels(sel, 'nút chọn');
+          checkRead(sel, tr('nút chọn', 'selector'));
+          checkLevels(sel, tr('nút chọn', 'selector'));
           final tOn = m['targetOnCh'] as int? ?? 1, tOff = m['targetOffCh'] as int? ?? 4;
           if (enabled && [tOn, tOff].any((t) => primary[t] != null || written.contains(t))) {
-            warnings.add('Luật mix $no (chuyển kênh): kênh đích không active trước đây bị ép 0%, '
-                'nay giữ giá trị của phần tử/luật khác.');
+            warnings.add(tr(
+                'Luật mix $no (chuyển kênh): kênh đích không active trước đây bị ép 0%, '
+                    'nay giữ giá trị của phần tử/luật khác.',
+                'Mix rule $no (channel switch): inactive target channels used to be forced to 0%, '
+                    'now they keep the value from other controls/rules.'));
           }
           final neutral = m['requireNeutralToSwitch'] as bool? ?? true;
           final dz = d('neutralDeadzonePct', 5);
@@ -289,7 +299,7 @@ abstract final class ProfileMigration {
         if (!enabled) continue;
         if (r.combine == Combine.max) ensureBase(r.destCh);
         if (r.destCh == thr) {
-          warnings.add('Luật mix $no ghi vào CH$thr (Ga): hộp số nay áp sau mix, kết quả có thể khác.');
+          warnings.add(tr('Luật mix $no ghi vào CH$thr (Ga): hộp số nay áp sau mix, kết quả có thể khác.', 'Mix rule $no writes to CH$thr (throttle): gears now apply after mixing, results may differ.'));
         }
         ch[r.destCh]!['enabled'] = true; // Sprint 4: kênh tắt ra failsafe; Sprint 3 vẫn xuất giá trị mix
       }

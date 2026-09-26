@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/channel_config.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
@@ -51,9 +52,9 @@ class ChannelTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(c.name, style: AppText.title.copyWith(fontSize: 16, color: on ? t.text : t.disabled)),
+                    Text(c.displayName, style: AppText.title.copyWith(fontSize: 16, color: on ? t.text : t.disabled)),
                     Text(
-                      '${controlLabel ?? 'Chưa có luật'} · ${c.minUs}/${c.centerUs}/${c.maxUs} µs${c.reverse ? ' · đảo' : ''}',
+                      '${controlLabel ?? tr('Chưa có luật', 'No rule')} · ${c.minUs}/${c.centerUs}/${c.maxUs} µs${c.reverse ? tr(' · đảo', ' · reversed') : ''}',
                       style: AppText.label.copyWith(color: on ? t.textMuted : t.disabled, fontSize: 13),
                     ),
                   ],

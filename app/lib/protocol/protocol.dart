@@ -2,6 +2,8 @@
 // Khung: [0xAA][type][len][payload][crc8], little-endian.
 import 'dart:typed_data';
 
+import '../l10n/lang.dart';
+
 class PacketType {
   static const control = 0x01;
   static const telemetry = 0x02;
@@ -168,11 +170,11 @@ class ServoChannel {
 
   /// Kiểm tra giống firmware; trả về thông báo lỗi hoặc null
   String? validate(String name) {
-    if (minUs < 800 || maxUs > 2200) return '$name: Min/Max phải trong khoảng 800–2200 µs';
-    if (!(minUs < centerUs && centerUs < maxUs)) return '$name: cần Min < Center < Max';
-    if (trimUs.abs() > 200) return '$name: Trim trong khoảng ±200 µs';
-    if (offsetUs.abs() > 300) return '$name: Offset trong khoảng ±300 µs';
-    if (failsafeUs < minUs || failsafeUs > maxUs) return '$name: Failsafe phải nằm giữa Min và Max';
+    if (minUs < 800 || maxUs > 2200) return tr('$name: Min/Max phải trong khoảng 800–2200 µs', '$name: Min/Max must be within 800–2200 µs');
+    if (!(minUs < centerUs && centerUs < maxUs)) return tr('$name: cần Min < Center < Max', '$name: requires Min < Center < Max');
+    if (trimUs.abs() > 200) return tr('$name: Trim trong khoảng ±200 µs', '$name: Trim must be within ±200 µs');
+    if (offsetUs.abs() > 300) return tr('$name: Offset trong khoảng ±300 µs', '$name: Offset must be within ±300 µs');
+    if (failsafeUs < minUs || failsafeUs > maxUs) return tr('$name: Failsafe phải nằm giữa Min và Max', '$name: Failsafe must be between Min and Max');
     return null;
   }
 }
@@ -224,14 +226,14 @@ class CarConfig {
       );
 
   String? validate() {
-    final e = throttle.validate('Ga') ?? steering.validate('Lái');
+    final e = throttle.validate(tr('Ga', 'Throttle')) ?? steering.validate(tr('Lái', 'Steering'));
     if (e != null) return e;
     if (failsafeTimeoutMs < 100 || failsafeTimeoutMs > 3000) {
-      return 'Thời gian failsafe trong khoảng 100–3000 ms';
+      return tr('Thời gian failsafe trong khoảng 100–3000 ms', 'Failsafe timeout must be 100–3000 ms');
     }
-    if (gearCount < 1 || gearCount > 5) return 'Số lượng số trong khoảng 1–5';
+    if (gearCount < 1 || gearCount > 5) return tr('Số lượng số trong khoảng 1–5', 'Gear count must be 1–5');
     for (var i = 0; i < gearCount; i++) {
-      if (gearLimit[i] < 1 || gearLimit[i] > 100) return 'Giới hạn ga số ${i + 1} phải 1–100%';
+      if (gearLimit[i] < 1 || gearLimit[i] > 100) return tr('Giới hạn ga số ${i + 1} phải 1–100%', 'Throttle limit in gear ${i + 1} must be 1–100%');
     }
     return null;
   }

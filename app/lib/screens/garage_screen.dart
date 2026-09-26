@@ -1,10 +1,14 @@
-// "Xe của tôi" — màn mở app (E2): danh sách hồ sơ xe.
+// Màn chính "PCC TX Control" — màn mở app (E2): danh sách hồ sơ xe.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../services/car_discovery.dart';
 import '../services/quick_ping.dart';
@@ -16,16 +20,20 @@ import '../transport/ble_transport.dart';
 import '../transport/transport.dart';
 import '../transport/udp_transport.dart';
 import '../widgets/status_badge.dart';
+import 'app_settings_screen.dart';
 import 'control_screen.dart';
 import 'profile_wizard_screen.dart';
 import 'settings_screen.dart';
 
 class GarageScreen extends StatefulWidget {
-  const GarageScreen({super.key, required this.controller, required this.repo, required this.theme});
+  const GarageScreen({super.key, required this.controller, required this.repo, required this.theme, this.pickPhoto});
 
   final CarController controller;
   final ProfileRepository repo;
   final ThemeController theme;
+
+  /// Chọn ảnh, trả về đường dẫn file (null = huỷ). Mặc định mở thư viện ảnh của máy; test truyền hàm giả.
+  final Future<String?> Function()? pickPhoto;
 
   @override
   State<GarageScreen> createState() => _GarageScreenState();
@@ -63,21 +71,25 @@ class _GarageScreenState extends State<GarageScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Đã cập nhật hồ sơ xe'),
+        title: Text(tr('Đã cập nhật hồ sơ xe', 'Car profiles updated')),
         content: SizedBox(
           width: 480,
           child: ListView(shrinkWrap: true, children: [
             Text(
-              'Cấu hình điều khiển được chuyển sang dạng Input → luật mix → kênh. '
-              'Mỗi kênh cũ thành một Input "chN" và một luật; luật mix cũ được giữ nguyên thứ tự. '
-              'Bản gốc được lưu cạnh hồ sơ (đuôi .bak).',
+              tr(
+                  'Cấu hình điều khiển được chuyển sang dạng Input → luật mix → kênh. '
+                      'Mỗi kênh cũ thành một Input "chN" và một luật; luật mix cũ được giữ nguyên thứ tự. '
+                      'Bản gốc được lưu cạnh hồ sơ (đuôi .bak).',
+                  'Controls now use Input → mix rule → channel. '
+                      'Each old channel became an Input "chN" plus one rule; old mix rules keep their order. '
+                      'The original is saved next to the profile (.bak).'),
               style: AppText.body.copyWith(color: t.textBody),
             ),
             for (final e in reports.entries) ...[
               const SizedBox(height: Gap.m),
               Text(repo.get(e.key)?.name ?? e.key, style: AppText.title.copyWith(color: t.text)),
               if (e.value.isEmpty)
-                Text('Không có thay đổi hành vi.', style: AppText.label.copyWith(color: t.ok))
+                Text(tr('Không có thay đổi hành vi.', 'No behavior changes.'), style: AppText.label.copyWith(color: t.ok))
               else
                 for (final w in e.value)
                   Padding(
@@ -91,7 +103,7 @@ class _GarageScreenState extends State<GarageScreen> {
             ],
           ]),
         ),
-        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đã hiểu'))],
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Đã hiểu', 'Got it')))],
       ),
     );
   }
@@ -146,7 +158,7 @@ class _GarageScreenState extends State<GarageScreen> {
       final mac = p.ble?.mac ?? '';
       if (mac.isEmpty) {
         setState(() => _connectingId = null);
-        _snack('Hồ sơ chưa có MAC. Bấm Sửa để chọn xe BLE.');
+        _snack(tr('Hồ sơ chưa có MAC. Bấm Sửa để chọn xe BLE.', 'This profile has no MAC yet. Tap Edit to pick a BLE car.'));
         return;
       }
       try {
@@ -162,8 +174,11 @@ class _GarageScreenState extends State<GarageScreen> {
     if (c.error != null) {
       _snack(found
           ? c.error!
-          : '${c.error!}. Không thấy xe trong mạng: kiểm tra điện thoại và xe cùng router (không dùng mạng khách). '
-              'Xe không vào được router thì sau 15 giây tự phát WiFi riêng.');
+          : tr(
+              '${c.error!}. Không thấy xe trong mạng: kiểm tra điện thoại và xe cùng router (không dùng mạng khách). '
+                  'Xe không vào được router thì sau 15 giây tự phát WiFi riêng.',
+              '${c.error!}. Car not found on the network: make sure the phone and the car use the same router '
+                  '(not a guest network). If the car cannot join the router it starts its own WiFi after 15 seconds.'));
       return;
     }
     final fresh = repo.get(p.id);
@@ -174,7 +189,7 @@ class _GarageScreenState extends State<GarageScreen> {
       try {
         await c.syncProfile(fresh);
       } catch (e) {
-        _snack('Không đồng bộ được cấu hình với xe: ${e.toString().replaceFirst('Exception: ', '')}');
+        _snack(tr('Không đồng bộ được cấu hình với xe: ${e.toString().replaceFirst('Exception: ', '')}', 'Could not sync the configuration with the car: ${e.toString().replaceFirst('Exception: ', '')}'));
       }
     }
     if (mounted) await _drive(p);
@@ -209,7 +224,7 @@ class _GarageScreenState extends State<GarageScreen> {
         final probe = p.copy()..name = ctrl.text;
         final err = probe.validateGeneral(otherNames: repo.namesExcept(p.id))['name'];
         return AlertDialog(
-          title: const Text('Đổi tên xe'),
+          title: Text(tr('Đổi tên xe', 'Rename car')),
           content: TextField(
             controller: ctrl,
             autofocus: true,
@@ -218,10 +233,10 @@ class _GarageScreenState extends State<GarageScreen> {
             onChanged: (_) => setD(() {}),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Huỷ')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Huỷ', 'Cancel'))),
             FilledButton(
               onPressed: err == null ? () => Navigator.pop(ctx, ctrl.text.trim()) : null,
-              child: const Text('Lưu'),
+              child: Text(tr('Lưu', 'Save')),
             ),
           ],
         );
@@ -233,15 +248,58 @@ class _GarageScreenState extends State<GarageScreen> {
     await repo.save(fresh);
   }
 
+  static Future<String?> _pickFromGallery() async {
+    // Ảnh chỉ hiện nhỏ trên thẻ xe: thu nhỏ luôn khi chọn cho nhẹ file
+    final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 512, maxHeight: 512, imageQuality: 85);
+    return x?.path;
+  }
+
+  /// Chưa có ảnh thì mở thẳng thư viện ảnh; có rồi thì hỏi chọn ảnh khác hay bỏ ảnh
+  Future<void> _photo(CarProfile p) async {
+    var remove = false;
+    if (p.photo != null) {
+      final r = await showModalBottomSheet<bool>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            ListTile(
+              leading: const AppIcon(AppIcons.photo),
+              title: Text(tr('Chọn ảnh khác', 'Choose another photo')),
+              onTap: () => Navigator.pop(ctx, false),
+            ),
+            ListTile(
+              leading: const AppIcon(AppIcons.delete),
+              title: Text(tr('Bỏ ảnh', 'Remove photo')),
+              onTap: () => Navigator.pop(ctx, true),
+            ),
+          ]),
+        ),
+      );
+      if (r == null) return;
+      remove = r;
+    }
+    try {
+      if (remove) {
+        await repo.setPhoto(p.id, null);
+        return;
+      }
+      final path = await (widget.pickPhoto ?? _pickFromGallery)();
+      if (path != null) await repo.setPhoto(p.id, File(path));
+    } catch (e) {
+      _snack(tr('Không đặt được ảnh: ${e is PlatformException ? e.message ?? e.code : e}', 'Could not set the photo: ${e is PlatformException ? e.message ?? e.code : e}'));
+    }
+  }
+
   Future<void> _delete(CarProfile p) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Xoá hồ sơ xe?'),
-        content: Text('"${p.name}" cùng cấu hình và bố cục sẽ bị xoá khỏi máy. Cấu hình đã lưu trên xe không đổi.'),
+        title: Text(tr('Xoá hồ sơ xe?', 'Delete car profile?')),
+        content: Text('tr("${p.name}" cùng cấu hình và bố cục sẽ bị xoá khỏi máy. Cấu hình đã lưu trên xe không đổi., "${p.name}" and its settings and layout will be deleted from this phone. Settings stored on the car stay unchanged.)'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Huỷ')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Xoá')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Huỷ', 'Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Xoá', 'Delete'))),
         ],
       ),
     );
@@ -255,50 +313,86 @@ class _GarageScreenState extends State<GarageScreen> {
       switch (action) {
         case 'rename':
           await _rename(p);
+        case 'photo':
+          await _photo(p);
         case 'duplicate':
           final d = await repo.duplicate(p.id);
-          _snack('Đã tạo "${d.name}"');
+          _snack(tr('Đã tạo "${d.name}"', 'Created "${d.name}"'));
         case 'export':
           final path = await repo.exportToFile(p.id);
-          _snack('Đã xuất: $path');
+          _snack(tr('Đã xuất: $path', 'Exported: $path'));
         case 'delete':
           await _delete(p);
       }
     } catch (e) {
-      _snack('Lỗi: $e');
+      _snack(tr('Lỗi: $e', 'Error: $e'));
     }
+  }
+
+  Future<void> _openAppSettings() => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => AppSettingsScreen(theme: widget.theme)),
+      );
+
+  /// Nút VN / EN trên thanh tiêu đề: đổi ngôn ngữ ngay tại màn chính
+  Widget _langButton(AppTokens t) {
+    final lang = LangController.instance;
+    return PopupMenuButton<AppLang>(
+      tooltip: tr('Ngôn ngữ', 'Language'),
+      initialValue: lang.lang,
+      onSelected: lang.setLang,
+      itemBuilder: (_) => [
+        for (final l in AppLang.values)
+          PopupMenuItem(
+            value: l,
+            child: ListTile(
+              leading: SizedBox(
+                width: 28,
+                child: Text(l.short, style: AppText.label.copyWith(color: t.text, fontWeight: FontWeight.w700)),
+              ),
+              title: Text(l.nativeName),
+              trailing: l == lang.lang ? AppIcon(AppIcons.check, color: t.accent, mini: true) : null,
+            ),
+          ),
+      ],
+      // Vùng chạm cao 48, viền pill 36 bên trong
+      child: SizedBox(
+        height: 48,
+        child: Center(
+          child: Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: Gap.m),
+            decoration: BoxDecoration(
+              border: Border.all(color: t.line),
+              borderRadius: BorderRadius.circular(Radii.pill),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              AppIcon(AppIcons.language, color: t.textMuted, mini: true),
+              const SizedBox(width: Gap.xs),
+              Text(lang.lang.short, style: AppText.label.copyWith(color: t.text, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     return ListenableBuilder(
-      listenable: Listenable.merge([repo, c, widget.theme]),
+      listenable: Listenable.merge([repo, c, widget.theme, LangController.instance]),
       builder: (context, _) {
         final list = repo.list();
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Xe của tôi'),
+            title: const Text('PCC TX Control'),
             actions: [
-              PopupMenuButton<ThemeMode>(
-                tooltip: 'Giao diện',
-                icon: AppIcon(switch (widget.theme.mode) {
-                  ThemeMode.light => AppIcons.themeLight,
-                  ThemeMode.dark => AppIcons.themeDark,
-                  ThemeMode.system => AppIcons.themeSystem,
-                }),
-                initialValue: widget.theme.mode,
-                onSelected: widget.theme.setMode,
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                      value: ThemeMode.dark, child: ListTile(leading: AppIcon(AppIcons.themeDark), title: Text('Tối'))),
-                  PopupMenuItem(
-                      value: ThemeMode.light,
-                      child: ListTile(leading: AppIcon(AppIcons.themeLight), title: Text('Sáng'))),
-                  PopupMenuItem(
-                      value: ThemeMode.system,
-                      child: ListTile(leading: AppIcon(AppIcons.themeSystem), title: Text('Theo hệ thống'))),
-                ],
+              _langButton(t),
+              IconButton(
+                tooltip: tr('Cài đặt', 'Settings'),
+                icon: const AppIcon(AppIcons.settings),
+                onPressed: _openAppSettings,
               ),
               const SizedBox(width: Gap.xs),
             ],
@@ -308,7 +402,7 @@ class _GarageScreenState extends State<GarageScreen> {
               : FloatingActionButton.extended(
                   onPressed: _create,
                   icon: const AppIcon(AppIcons.plus),
-                  label: const Text('Tạo xe mới'),
+                  label: Text(tr('Tạo xe mới', 'New car')),
                 ),
           body: list.isEmpty
               ? _empty(t)
@@ -318,7 +412,7 @@ class _GarageScreenState extends State<GarageScreen> {
                     if (repo.loadErrors.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: Gap.m),
-                        child: Text('Không đọc được ${repo.loadErrors.length} hồ sơ hỏng.',
+                        child: Text(tr('Không đọc được ${repo.loadErrors.length} hồ sơ hỏng.', 'Could not read ${repo.loadErrors.length} damaged profile(s).'),
                             style: AppText.label.copyWith(color: t.warn)),
                       ),
                     for (final p in list) _card(p),
@@ -335,15 +429,15 @@ class _GarageScreenState extends State<GarageScreen> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             CustomIconView(CustomIcon.car, size: 64, color: t.textMuted),
             const SizedBox(height: Gap.l),
-            Text('Chưa có xe nào', style: AppText.headline.copyWith(color: t.text)),
+            Text(tr('Chưa có xe nào', 'No cars yet'), style: AppText.headline.copyWith(color: t.text)),
             const SizedBox(height: Gap.s),
-            Text('Tạo hồ sơ xe để lưu kết nối và cấu hình. Không cần bật xe khi tạo.',
+            Text(tr('Tạo hồ sơ xe để lưu kết nối và cấu hình. Không cần bật xe khi tạo.', 'Create a car profile to store its connection and settings. The car does not need to be on.'),
                 textAlign: TextAlign.center, style: AppText.body.copyWith(color: t.textBody)),
             const SizedBox(height: Gap.xl),
             FilledButton.icon(
               onPressed: _create,
               icon: const AppIcon(AppIcons.plus, mini: true),
-              label: const Text('Tạo xe mới'),
+              label: Text(tr('Tạo xe mới', 'New car')),
             ),
           ]),
         ),
@@ -351,9 +445,37 @@ class _GarageScreenState extends State<GarageScreen> {
 
   String _lastConnected(CarProfile p) {
     final d = p.lastConnectedAt;
-    if (d == null) return 'Chưa kết nối lần nào';
+    if (d == null) return tr('Chưa kết nối lần nào', 'Never connected');
     String two(int n) => n.toString().padLeft(2, '0');
-    return 'Kết nối lần cuối ${two(d.day)}/${two(d.month)} ${two(d.hour)}:${two(d.minute)}';
+    return tr('Kết nối lần cuối ${two(d.day)}/${two(d.month)} ${two(d.hour)}:${two(d.minute)}', 'Last connected ${two(d.day)}/${two(d.month)} ${two(d.hour)}:${two(d.minute)}');
+  }
+
+  /// Ảnh xe (bấm để đổi); chưa có ảnh hoặc ảnh hỏng thì hiện biểu tượng xe
+  Widget _avatar(CarProfile p, bool connected) {
+    final t = context.tokens;
+    const size = 56.0;
+    final radius = BorderRadius.circular(Radii.field);
+    final icon = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(color: connected ? t.accentContainer : t.surface2, borderRadius: radius),
+      alignment: Alignment.center,
+      child: CustomIconView(CustomIcon.car, color: connected ? t.onAccentContainer : t.textMuted),
+    );
+    final f = repo.photoFile(p);
+    return Tooltip(
+      message: p.photo == null ? tr('Chọn ảnh cho xe', 'Choose a car photo') : tr('Đổi ảnh xe', 'Change car photo'),
+      child: InkWell(
+        borderRadius: radius,
+        onTap: () => _photo(p),
+        child: f == null
+            ? icon
+            : ClipRRect(
+                borderRadius: radius,
+                child: Image.file(f, width: size, height: size, fit: BoxFit.cover, errorBuilder: (_, __, ___) => icon),
+              ),
+      ),
+    );
   }
 
   Widget _card(CarProfile p) {
@@ -375,16 +497,7 @@ class _GarageScreenState extends State<GarageScreen> {
           children: [
             Row(
               children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: connected ? t.accentContainer : t.surface2,
-                    borderRadius: BorderRadius.circular(Radii.field),
-                  ),
-                  alignment: Alignment.center,
-                  child: CustomIconView(CustomIcon.car, color: connected ? t.onAccentContainer : t.textMuted),
-                ),
+                _avatar(p, connected),
                 const SizedBox(width: Gap.m),
                 Expanded(
                   child: Column(
@@ -410,12 +523,15 @@ class _GarageScreenState extends State<GarageScreen> {
                 PopupMenuButton<String>(
                   icon: AppIcon(AppIcons.more, color: t.textMuted),
                   onSelected: (a) => _menu(p, a),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'rename', child: ListTile(leading: AppIcon(AppIcons.edit), title: Text('Đổi tên'))),
-                    PopupMenuItem(
-                        value: 'duplicate', child: ListTile(leading: AppIcon(AppIcons.duplicate), title: Text('Nhân bản'))),
-                    PopupMenuItem(value: 'export', child: ListTile(leading: AppIcon(AppIcons.exportFile), title: Text('Xuất'))),
-                    PopupMenuItem(value: 'delete', child: ListTile(leading: AppIcon(AppIcons.delete), title: Text('Xoá'))),
+                  itemBuilder: (_) => [
+                    for (final (value, icon, label) in [
+                      ('rename', AppIcons.edit, tr('Đổi tên', 'Rename')),
+                      ('photo', AppIcons.photo, tr('Đổi ảnh', 'Change photo')),
+                      ('duplicate', AppIcons.duplicate, tr('Nhân bản', 'Duplicate')),
+                      ('export', AppIcons.exportFile, tr('Xuất', 'Export')),
+                      ('delete', AppIcons.delete, tr('Xoá', 'Delete')),
+                    ])
+                      PopupMenuItem(value: value, child: ListTile(leading: AppIcon(icon), title: Text(label))),
                   ],
                 ),
               ],
@@ -437,12 +553,12 @@ class _GarageScreenState extends State<GarageScreen> {
                   FilledButton.icon(
                     onPressed: () => _drive(p),
                     icon: const CustomIconView(CustomIcon.steering, size: 20),
-                    label: const Text('Lái'),
+                    label: Text(tr('Lái', 'Drive')),
                   ),
                   OutlinedButton.icon(
                     onPressed: c.disconnect,
                     icon: const AppIcon(AppIcons.disconnect, mini: true),
-                    label: const Text('Ngắt'),
+                    label: Text(tr('Ngắt', 'Disconnect')),
                   ),
                 ] else
                   FilledButton.icon(
@@ -450,19 +566,19 @@ class _GarageScreenState extends State<GarageScreen> {
                     icon: connecting
                         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                         : const AppIcon(AppIcons.connect, mini: true),
-                    label: Text(connecting ? 'Đang kết nối' : 'Kết nối'),
+                    label: Text(connecting ? tr('Đang kết nối', 'Connecting') : tr('Kết nối', 'Connect')),
                   ),
                 OutlinedButton.icon(
                   onPressed: () => _edit(p),
                   icon: const AppIcon(AppIcons.config, mini: true),
-                  label: const Text('Sửa'),
+                  label: Text(tr('Sửa', 'Edit')),
                 ),
                 OutlinedButton.icon(
                   onPressed: pinging ? null : () => _test(p),
                   icon: pinging
                       ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                       : const AppIcon(AppIcons.signal, mini: true),
-                  label: const Text('Kiểm tra'),
+                  label: Text(tr('Kiểm tra', 'Test')),
                 ),
               ],
             ),

@@ -1,27 +1,30 @@
 // Luật mix (Sprint 4 — M1): Nguồn (Input) → Condition → Weight / Offset / Curve / Min–Max → kênh đích.
 import 'dart:math';
 
+import '../l10n/lang.dart';
 import 'condition.dart';
 import 'input_def.dart';
 
 enum Combine {
-  replace('Thay thế'),
-  add('Cộng'),
-  multiply('Nhân'),
-  max('Lấy lớn hơn'),
-  min('Lấy nhỏ hơn');
+  replace('Thay thế', 'Replace'),
+  add('Cộng', 'Add'),
+  multiply('Nhân', 'Multiply'),
+  max('Lấy lớn hơn', 'Take larger'),
+  min('Lấy nhỏ hơn', 'Take smaller');
 
-  const Combine(this.label);
-  final String label;
+  const Combine(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 }
 
 enum CurveType {
-  linear('Tuyến tính'),
-  expo('Expo'),
-  points('5 điểm');
+  linear('Tuyến tính', 'Linear'),
+  expo('Expo', 'Expo'),
+  points('5 điểm', '5-point');
 
-  const CurveType(this.label);
-  final String label;
+  const CurveType(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 }
 
 class MixCurve {
@@ -138,22 +141,22 @@ class MixRule {
 
   /// Kiểm tra riêng một luật (V). Trả về lỗi đầu tiên hoặc null.
   String? validate(Map<String, InputDef> inputs, Set<String> conditionIds) {
-    if (!inputs.containsKey(source)) return 'Nguồn "$source" không tồn tại';
-    if (destCh < 1 || destCh > 10) return 'Kênh đích phải trong CH1–CH10';
-    if (weightPct < -200 || weightPct > 200) return 'Weight trong khoảng −200…+200%';
-    if (offsetPct < -100 || offsetPct > 100) return 'Offset trong khoảng −100…+100%';
-    if (minPct < -100 || maxPct > 100 || minPct >= maxPct) return 'Cần −100 ≤ Min < Max ≤ 100';
-    if (priority < 0 || priority > 9) return 'Priority trong khoảng 0–9';
+    if (!inputs.containsKey(source)) return tr('Nguồn "$source" không tồn tại', 'Source "$source" does not exist');
+    if (destCh < 1 || destCh > 10) return tr('Kênh đích phải trong CH1–CH10', 'Target channel must be CH1–CH10');
+    if (weightPct < -200 || weightPct > 200) return tr('Weight trong khoảng −200…+200%', 'Weight must be within −200…+200%');
+    if (offsetPct < -100 || offsetPct > 100) return tr('Offset trong khoảng −100…+100%', 'Offset must be within −100…+100%');
+    if (minPct < -100 || maxPct > 100 || minPct >= maxPct) return tr('Cần −100 ≤ Min < Max ≤ 100', 'Requires −100 ≤ Min < Max ≤ 100');
+    if (priority < 0 || priority > 9) return tr('Priority trong khoảng 0–9', 'Priority must be 0–9');
     if (curve.type == CurveType.expo && (curve.expoPct < -100 || curve.expoPct > 100)) {
-      return 'Expo trong khoảng −100…+100%';
+      return tr('Expo trong khoảng −100…+100%', 'Expo must be within −100…+100%');
     }
     if (curve.type == CurveType.points &&
         (curve.points.length != 5 || curve.points.any((p) => p < -100 || p > 100))) {
-      return 'Đường cong cần 5 điểm trong −100…+100%';
+      return tr('Đường cong cần 5 điểm trong −100…+100%', 'Curve needs 5 points within −100…+100%');
     }
-    if (safety.deadzonePct < 0 || safety.deadzonePct > 50) return 'Vùng chết trong khoảng 0–50%';
+    if (safety.deadzonePct < 0 || safety.deadzonePct > 50) return tr('Vùng chết trong khoảng 0–50%', 'Deadzone must be 0–50%');
     if (priority >= emergencyPriority && safety.requireNeutral == true) {
-      return 'Luật priority ≥ $emergencyPriority không được bật khoá an toàn';
+      return tr('Luật priority ≥ $emergencyPriority không được bật khoá an toàn', 'Rules with priority ≥ $emergencyPriority cannot use the safety lock');
     }
     return condition.validate(inputs, conditionIds);
   }
@@ -175,9 +178,9 @@ class MixRule {
       if (!curve.isLinear) buf.write(' (${curve.type.label})');
       buf.write(' → $dest');
     }
-    if (!condition.isTrue) buf.write(' · khi ${condition.describe(nm)}');
+    if (!condition.isTrue) buf.write(tr(' · khi ${condition.describe(nm)}', ' · when ${condition.describe(nm)}'));
     if (combine != Combine.replace) buf.write(' · ${combine.label.toLowerCase()}');
-    if (requiresNeutral(src)) buf.write(' · chờ về giữa');
+    if (requiresNeutral(src)) buf.write(tr(' · chờ về giữa', ' · waits for center'));
     return buf.toString();
   }
 
@@ -230,30 +233,30 @@ class MixRule {
 }) {
   final errors = <String>[], warnings = <String>[];
   final byId = <String, InputDef>{};
-  if (inputs.length > InputDef.maxInputs) errors.add('Tối đa ${InputDef.maxInputs} Input');
+  if (inputs.length > InputDef.maxInputs) errors.add(tr('Tối đa ${InputDef.maxInputs} Input', 'At most ${InputDef.maxInputs} Inputs'));
   for (final i in inputs) {
     final e = i.validate();
     if (e != null) errors.add('Input "${i.name}": $e');
-    if (byId.containsKey(i.id)) errors.add('Trùng mã Input "${i.id}"');
+    if (byId.containsKey(i.id)) errors.add(tr('Trùng mã Input "${i.id}"', 'Duplicate Input ID "${i.id}"'));
     byId[i.id] = i;
   }
   final condIds = <String>{};
-  if (conditions.length > ConditionDef.maxConditions) errors.add('Tối đa ${ConditionDef.maxConditions} điều kiện đặt tên');
+  if (conditions.length > ConditionDef.maxConditions) errors.add(tr('Tối đa ${ConditionDef.maxConditions} điều kiện đặt tên', 'At most ${ConditionDef.maxConditions} named conditions'));
   for (final c in conditions) {
-    if (!condIds.add(c.id)) errors.add('Trùng mã điều kiện "${c.id}"');
+    if (!condIds.add(c.id)) errors.add(tr('Trùng mã điều kiện "${c.id}"', 'Duplicate condition ID "${c.id}"'));
   }
   for (final c in conditions) {
     final e = c.expr.validate(byId, condIds);
-    if (e != null) errors.add('Điều kiện "${c.name}": $e');
+    if (e != null) errors.add(tr('Điều kiện "${c.name}": $e', 'Condition "${c.name}": $e'));
   }
   final cycle = ConditionDef.findRefCycle(conditions);
-  if (cycle != null) errors.add('Điều kiện tham chiếu vòng: ${cycle.join(' → ')}');
-  if (rules.length > MixRule.maxRules) errors.add('Tối đa ${MixRule.maxRules} luật mix');
+  if (cycle != null) errors.add(tr('Điều kiện tham chiếu vòng: ${cycle.join(' → ')}', 'Circular condition reference: ${cycle.join(' → ')}'));
+  if (rules.length > MixRule.maxRules) errors.add(tr('Tối đa ${MixRule.maxRules} luật mix', 'At most ${MixRule.maxRules} mix rules'));
   for (var i = 0; i < rules.length; i++) {
     final r = rules[i];
     final e = r.validate(byId, condIds);
-    if (e != null) errors.add('Luật ${i + 1}: $e');
-    if (r.enabled && disabledChannels.contains(r.destCh)) warnings.add('Luật ${i + 1} ghi vào CH${r.destCh} đang tắt');
+    if (e != null) errors.add(tr('Luật ${i + 1}: $e', 'Rule ${i + 1}: $e'));
+    if (r.enabled && disabledChannels.contains(r.destCh)) warnings.add(tr('Luật ${i + 1} ghi vào CH${r.destCh} đang tắt', 'Rule ${i + 1} writes to CH${r.destCh}, which is off'));
   }
   return (errors: errors, warnings: warnings);
 }

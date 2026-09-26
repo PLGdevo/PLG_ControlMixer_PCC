@@ -40,6 +40,7 @@ abstract final class AppIcons {
   static const themeDark = HeroIcons.moon;
   static const themeSystem = HeroIcons.computerDesktop;
   static const edit = HeroIcons.pencilSquare;
+  static const photo = HeroIcons.photo;
   static const more = HeroIcons.ellipsisVertical;
   static const locked = HeroIcons.lockClosed;
   static const unlocked = HeroIcons.lockOpen;
@@ -51,6 +52,10 @@ abstract final class AppIcons {
   static const hideSecret = HeroIcons.eyeSlash;
   static const refresh = HeroIcons.arrowPath;
   static const chevronRight = HeroIcons.chevronRight;
+  static const language = HeroIcons.language;
+  static const palette = HeroIcons.swatch;
+  static const check = HeroIcons.check;
+  static const layout = HeroIcons.squares2x2;
 
   /// Icon cho nút/công tắc, chọn được trong bảng thuộc tính (H3)
   static const pickable = <String, HeroIcons>{

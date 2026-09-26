@@ -1,6 +1,7 @@
 // Phép tính thuần trên lưới bố cục (H1/H2/H5): bám ô, chồng lấn, giới hạn, đường gióng.
 import 'dart:math';
 
+import '../l10n/lang.dart';
 import '../models/control_layout.dart';
 
 class GridRect {
@@ -81,29 +82,29 @@ abstract final class LayoutGrid {
   /// Trả về lỗi đầu tiên hoặc null.
   static String? validate(ControlLayout l,
       {Set<String> throttleInputs = const {}, Set<String> steerInputs = const {}}) {
-    if (l.name.trim().isEmpty) return 'Tên bố cục không được trống';
+    if (l.name.trim().isEmpty) return tr('Tên bố cục không được trống', 'Layout name cannot be empty');
     final seen = <String>{};
     for (final i in l.items) {
       final r = GridRect.of(i);
-      if (!r.inside(l.cols, l.rows)) return '${i.kind.label} nằm ngoài lưới';
+      if (!r.inside(l.cols, l.rows)) return tr('${i.kind.label} nằm ngoài lưới', '${i.kind.label} is outside the grid');
       final lim = SizeLimits.of(i.kind);
       if (i.w < lim.minW || i.h < lim.minH || i.w > lim.maxW || i.h > lim.maxH) {
-        return '${i.kind.label} có kích thước ngoài giới hạn';
+        return tr('${i.kind.label} có kích thước ngoài giới hạn', '${i.kind.label} has an out-of-range size');
       }
-      if (collides(l, i.id, r)) return 'Có phần tử chồng lên nhau';
+      if (collides(l, i.id, r)) return tr('Có phần tử chồng lên nhau', 'Some controls overlap');
       for (final id in i.inputIds) {
-        if (!seen.add(id)) return 'Input "$id" có nhiều hơn một phần tử trên màn';
+        if (!seen.add(id)) return tr('Input "$id" có nhiều hơn một phần tử trên màn', 'Input "$id" has more than one control on screen');
       }
       final err = i.returnCfg?.validate() ?? i.returnCfgY?.validate();
       if (err != null) return err;
-      if (i.style.deadzonePct < 0 || i.style.deadzonePct > 20) return 'Vùng chết trong khoảng 0–20%';
-      if (i.style.opacityPct < 30 || i.style.opacityPct > 100) return 'Độ trong suốt trong khoảng 30–100%';
+      if (i.style.deadzonePct < 0 || i.style.deadzonePct > 20) return tr('Vùng chết trong khoảng 0–20%', 'Deadzone must be 0–20%');
+      if (i.style.opacityPct < 30 || i.style.opacityPct > 100) return tr('Độ trong suốt trong khoảng 30–100%', 'Opacity must be 30–100%');
     }
     if (throttleInputs.isNotEmpty && !throttleInputs.any(seen.contains)) {
-      return 'Bố cục phải có phần tử điều khiển kênh Ga';
+      return tr('Bố cục phải có phần tử điều khiển kênh Ga', 'The layout needs a control for the throttle channel');
     }
     if (steerInputs.isNotEmpty && !steerInputs.any(seen.contains)) {
-      return 'Bố cục phải có phần tử điều khiển kênh Lái';
+      return tr('Bố cục phải có phần tử điều khiển kênh Lái', 'The layout needs a control for the steering channel');
     }
     return null;
   }

@@ -3,6 +3,7 @@
 // Biểu thức lồng sâu hơn (tạo từ file nhập) chỉ xem được, có nút xoá để dựng lại.
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/condition.dart';
 import '../models/input_def.dart';
 import '../theme/app_icons.dart';
@@ -136,7 +137,7 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Text(widget.value.describe((id) => names[id] ?? id), style: AppText.body.copyWith(color: t.text)),
         const SizedBox(height: Gap.xs),
-        Text('Điều kiện lồng nhiều tầng: chỉ xem được ở đây.',
+        Text(tr('Điều kiện lồng nhiều tầng: chỉ xem được ở đây.', 'Deeply nested condition: view only here.'),
             style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
         Align(
           alignment: Alignment.centerLeft,
@@ -146,20 +147,20 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
               rows = [];
               _emit();
             },
-            child: const Text('Xoá và dựng lại'),
+            child: Text(tr('Xoá và dựng lại', 'Clear and rebuild')),
           ),
         ),
       ]);
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       if (rows.isEmpty)
-        Text('Luôn đúng — luật luôn chạy.', style: AppText.label.copyWith(color: t.textMuted))
+        Text(tr('Luôn đúng — luật luôn chạy.', 'Always true — the rule always runs.'), style: AppText.label.copyWith(color: t.textMuted))
       else if (rows.length > 1)
         SegmentedButton<_Group>(
           showSelectedIcon: false,
-          segments: const [
-            ButtonSegment(value: _Group.all, label: Text('Tất cả (AND)')),
-            ButtonSegment(value: _Group.any, label: Text('Một trong (OR)')),
+          segments: [
+            ButtonSegment(value: _Group.all, label: Text(tr('Tất cả (AND)', 'All (AND)'))),
+            ButtonSegment(value: _Group.any, label: Text(tr('Một trong (OR)', 'Any (OR)'))),
           ],
           selected: {group},
           onSelectionChanged: (s) {
@@ -173,7 +174,7 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
         child: TextButton.icon(
           onPressed: rows.length < Expr.maxCmp && (_usable.isNotEmpty || widget.named.isNotEmpty) ? _add : null,
           icon: const AppIcon(AppIcons.plus, mini: true),
-          label: const Text('Thêm điều kiện'),
+          label: Text(tr('Thêm điều kiện', 'Add condition')),
         ),
       ),
     ]);
@@ -195,11 +196,11 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
                 initialValue: r.ref != null ? '$refPrefix${r.ref}' : r.input,
                 isDense: true,
                 isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Khi'),
+                decoration: InputDecoration(labelText: tr('Khi', 'When')),
                 items: [
                   for (final d in _usable) DropdownMenuItem(value: d.id, child: Text(d.name, overflow: TextOverflow.ellipsis)),
                   for (final c in widget.named)
-                    DropdownMenuItem(value: '$refPrefix${c.id}', child: Text('Điều kiện "${c.name}"')),
+                    DropdownMenuItem(value: '$refPrefix${c.id}', child: Text(tr('Điều kiện "${c.name}"', 'Condition "${c.name}"'))),
                 ],
                 onChanged: (v) {
                   if (v == null) return;
@@ -225,7 +226,7 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
               ),
             ),
             IconButton(
-              tooltip: 'Xoá',
+              tooltip: tr('Xoá', 'Delete'),
               onPressed: () {
                 rows.removeAt(i);
                 _emit();
@@ -250,7 +251,7 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
               Expanded(child: _valueEditor(r, input, i)),
             ]),
             if (r.op.ordered && input.isAxis)
-              _numField(ValueKey('hyst-$i-${r.input}'), 'Trễ (hysteresis)', r.hyst, 0, 200, (v) {
+              _numField(ValueKey('hyst-$i-${r.input}'), tr('Trễ (hysteresis)', 'Hysteresis'), r.hyst, 0, 200, (v) {
                 r.hyst = v;
                 _emit();
               }),
@@ -263,7 +264,7 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
                 _emit();
               },
             ),
-            Text('Phủ định (KHÔNG)', style: AppText.label.copyWith(color: t.text)),
+            Text(tr('Phủ định (KHÔNG)', 'Negate (NOT)'), style: AppText.label.copyWith(color: t.text)),
           ]),
         ]),
       ),
@@ -275,7 +276,7 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
       case InputType.binary:
         return SegmentedButton<double>(
           showSelectedIcon: false,
-          segments: const [ButtonSegment(value: 0, label: Text('Tắt (0)')), ButtonSegment(value: 1, label: Text('Bật (1)'))],
+          segments: [ButtonSegment(value: 0, label: Text(tr('Tắt (0)', 'Off (0)'))), ButtonSegment(value: 1, label: Text(tr('Bật (1)', 'On (1)')))],
           selected: {r.value == 0 ? 0.0 : 1.0},
           onSelectionChanged: (s) {
             r.value = s.first;
@@ -285,10 +286,10 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
       case InputType.ternary:
         return SegmentedButton<double>(
           showSelectedIcon: false,
-          segments: const [
-            ButtonSegment(value: -1, label: Text('Trái')),
-            ButtonSegment(value: 0, label: Text('Giữa')),
-            ButtonSegment(value: 1, label: Text('Phải')),
+          segments: [
+            ButtonSegment(value: -1, label: Text(tr('Trái', 'Left'))),
+            ButtonSegment(value: 0, label: Text(tr('Giữa', 'Center'))),
+            ButtonSegment(value: 1, label: Text(tr('Phải', 'Right'))),
           ],
           selected: {r.value.clamp(-1, 1).roundToDouble()},
           onSelectionChanged: (s) {
@@ -297,7 +298,7 @@ class _ConditionBuilderState extends State<ConditionBuilder> {
           },
         );
       default:
-        return _numField(ValueKey('val-$i-${r.input}'), d.isUnipolar ? 'Giá trị (0…100%)' : 'Giá trị (%)', r.value,
+        return _numField(ValueKey('val-$i-${r.input}'), d.isUnipolar ? tr('Giá trị (0…100%)', 'Value (0…100%)') : tr('Giá trị (%)', 'Value (%)'), r.value,
             d.isUnipolar ? 0 : -100, 100, (v) {
           r.value = v;
           _emit();

@@ -2,6 +2,7 @@
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../controller/car_controller.dart';
+import '../l10n/lang.dart';
 import '../transport/ble_transport.dart';
 import '../transport/transport.dart';
 import '../transport/udp_transport.dart';
@@ -19,7 +20,7 @@ class QuickPingResult {
       : ok = false,
         rttMs = null;
 
-  String get label => ok ? '✓ ${rttMs!.round()} ms' : '✗ ${error ?? 'Không phản hồi'}';
+  String get label => ok ? '✓ ${rttMs!.round()} ms' : '✗ ${error ?? tr('Không phản hồi', 'No response')}';
 }
 
 abstract final class QuickPing {
@@ -40,10 +41,10 @@ abstract final class QuickPing {
     }
     final CarTransport t;
     if (ble) {
-      if (bleId == null || bleId.isEmpty) return const QuickPingResult.fail('Chưa có MAC');
+      if (bleId == null || bleId.isEmpty) return QuickPingResult.fail(tr('Chưa có MAC', 'No MAC yet'));
       t = BleTransport(BluetoothDevice.fromId(bleId));
     } else {
-      if (ip == null || port == null) return const QuickPingResult.fail('Thiếu IP/port');
+      if (ip == null || port == null) return QuickPingResult.fail(tr('Thiếu IP/port', 'Missing IP/port'));
       t = UdpTransport(ip, port);
     }
     try {
@@ -52,7 +53,7 @@ abstract final class QuickPing {
       try {
         await t.close();
       } catch (_) {}
-      return QuickPingResult.fail(ble ? 'Không kết nối được' : 'IP không hợp lệ');
+      return QuickPingResult.fail(ble ? tr('Không kết nối được', 'Could not connect') : tr('IP không hợp lệ', 'Invalid IP'));
     }
     return _measure(t, close: true);
   }
@@ -61,9 +62,9 @@ abstract final class QuickPing {
     final svc = PingService(t);
     try {
       final s = await svc.burst(count: 3, intervalMs: 150);
-      return s.hasData ? QuickPingResult.ok(s.avgMs) : const QuickPingResult.fail('Không phản hồi');
+      return s.hasData ? QuickPingResult.ok(s.avgMs) : QuickPingResult.fail(tr('Không phản hồi', 'No response'));
     } catch (_) {
-      return const QuickPingResult.fail('Không phản hồi');
+      return QuickPingResult.fail(tr('Không phản hồi', 'No response'));
     } finally {
       svc.dispose();
       if (close) {

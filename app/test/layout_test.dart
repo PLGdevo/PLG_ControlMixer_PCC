@@ -4,8 +4,18 @@ import 'package:rc_controller/layout/layout_history.dart';
 import 'package:rc_controller/layout/layout_templates.dart';
 import 'package:rc_controller/layout/return_motion.dart';
 import 'package:rc_controller/models/control_layout.dart';
+import 'package:rc_controller/theme/tokens.dart';
 
 void main() {
+  test('Màu riêng của phần tử: lưu theo tên màu, không có / tên lạ thì theo màu app', () {
+    final st = ItemStyle(color: AccentColor.red);
+    expect(st.toJson()['color'], 'red');
+    expect(ItemStyle.fromJson(st.toJson()).color, AccentColor.red);
+    expect(ItemStyle().toJson().containsKey('color'), isFalse);
+    expect(ItemStyle.fromJson({'color': 'rainbow'}).color, isNull);
+    expect(ItemStyle.fromJson(null).color, isNull);
+  });
+
   group('Lưới bố cục (H2)', () {
     test('bố cục mặc định hợp lệ, có Ga và Lái', () {
       final l = LayoutTemplates.standard();

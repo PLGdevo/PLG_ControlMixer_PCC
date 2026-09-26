@@ -265,6 +265,60 @@ void main() {
       expect(again.list().length, 1); // file .bak không bị đọc
     });
 
+    test('ảnh xe: chép vào thư mục ảnh, bản nhân bản dùng chung, xoá hồ sơ cuối cùng mới xoá ảnh', () async {
+      final repo = ProfileRepository(dir);
+      await repo.load();
+      await repo.save(sample());
+      final src = File('${dir.parent.path}/rc_photo_src_${DateTime.now().microsecondsSinceEpoch}.PNG')
+        ..writeAsBytesSync([1, 2, 3]);
+      addTearDown(() => src.existsSync() ? src.deleteSync() : null);
+
+      await repo.setPhoto('p1', src);
+      final first = repo.photoFile(repo.get('p1')!)!;
+      expect(first.readAsBytesSync(), [1, 2, 3]);
+      expect(first.path, endsWith('.png'));
+      expect(first.parent.path, repo.photoDir.path);
+      final again = ProfileRepository(dir);
+      await again.load();
+      expect(again.list().length, 1, reason: 'thư mục ảnh không bị đọc như hồ sơ');
+      expect(again.get('p1')!.photo, repo.get('p1')!.photo);
+
+      // Đổi ảnh: ảnh cũ bị xoá
+      await repo.setPhoto('p1', src);
+      final second = repo.photoFile(repo.get('p1')!)!;
+      expect(second.path, isNot(first.path));
+      expect(first.existsSync(), isFalse);
+
+      final d = await repo.duplicate('p1');
+      expect(d.photo, repo.get('p1')!.photo);
+      await repo.delete('p1');
+      expect(second.existsSync(), isTrue, reason: 'bản nhân bản còn dùng');
+      await repo.setPhoto(d.id, null);
+      expect(repo.get(d.id)!.photo, isNull);
+      expect(second.existsSync(), isFalse);
+    });
+
+    test('ảnh xe: tên file lạ không được đọc / xoá; nhập hồ sơ thì bỏ ảnh không có trên máy', () async {
+      final repo = ProfileRepository(dir);
+      await repo.load();
+      await repo.save(sample());
+      final bad = sample()
+        ..id = 'p2'
+        ..name = 'Xe lạ'
+        ..photo = '../p1.json';
+      expect(repo.photoFile(bad), isNull);
+      await repo.save(bad);
+      await repo.delete('p2');
+      expect(File('${dir.path}/p1.json').existsSync(), isTrue, reason: 'không xoá ra ngoài thư mục ảnh');
+
+      final missing = sample()
+        ..id = 'p3'
+        ..name = 'Xe nhập'
+        ..photo = 'khong-co.jpg';
+      final imported = await repo.import(jsonEncode(missing.toJson()));
+      expect(imported.photo, isNull);
+    });
+
     test('xuất rồi nhập lại cho ra hồ sơ giống hệt; trùng id thì hỏi', () async {
       final repo = ProfileRepository(dir);
       await repo.load();

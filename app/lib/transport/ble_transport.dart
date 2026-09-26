@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+import '../l10n/lang.dart';
 import 'transport.dart';
 
 class BleUuids {
@@ -45,7 +46,7 @@ class BleTransport implements CarTransport {
     final services = await device.discoverServices();
     final svc = services.firstWhere(
       (s) => s.uuid == BleUuids.service,
-      orElse: () => throw Exception('Thiết bị không có service điều khiển RC'),
+      orElse: () => throw Exception(tr('Thiết bị không có service điều khiển RC', 'Device has no RC control service')),
     );
     _rx = svc.characteristics.firstWhere((c) => c.uuid == BleUuids.rx);
     final tx = svc.characteristics.firstWhere((c) => c.uuid == BleUuids.tx);

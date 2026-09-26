@@ -5,6 +5,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/lang.dart';
 import '../models/control_layout.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
@@ -469,7 +470,7 @@ class ChannelButton extends StatelessWidget {
             if (label != null)
               Text(label!, style: AppText.label.copyWith(color: fg, fontWeight: FontWeight.w600)),
             if (!momentary)
-              Text(on ? 'BẬT' : 'TẮT', style: AppText.caption.copyWith(color: on ? fg : t.textMuted)),
+              Text(on ? tr('BẬT', 'ON') : tr('TẮT', 'OFF'), style: AppText.caption.copyWith(color: on ? fg : t.textMuted)),
           ],
         ),
       ),

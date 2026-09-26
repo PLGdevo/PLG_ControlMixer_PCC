@@ -18,8 +18,13 @@ abstract final class AppText {
 }
 
 abstract final class AppTheme {
-  static ThemeData dark() => _build(AppTokens.dark, Brightness.dark);
-  static ThemeData light() => _build(AppTokens.light, Brightness.light);
+  static ThemeData dark([AccentColor a = AccentColor.lime]) => of(a, Brightness.dark);
+  static ThemeData light([AccentColor a = AccentColor.lime]) => of(a, Brightness.light);
+
+  static final _cache = <(AccentColor, Brightness), ThemeData>{};
+
+  /// Theme theo màu nhấn, dựng một lần rồi dùng lại (màn Lái bọc từng phần tử có màu riêng mỗi khung hình)
+  static ThemeData of(AccentColor a, Brightness b) => _cache[(a, b)] ??= _build(AppTokens.of(a, b), b);
 
   static ThemeData _build(AppTokens t, Brightness b) {
     final scheme = ColorScheme(

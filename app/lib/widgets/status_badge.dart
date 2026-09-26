@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../controller/car_controller.dart';
+import '../l10n/lang.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 
@@ -14,10 +15,10 @@ class StatusBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final (color, label) = switch (state) {
-      LinkState.connected => (t.ok, 'Đã kết nối'),
-      LinkState.connecting => (t.warn, 'Đang kết nối…'),
-      LinkState.lost => (t.bad, 'Mất tín hiệu'),
-      LinkState.disconnected => (t.idle, 'Chưa kết nối'),
+      LinkState.connected => (t.ok, tr('Đã kết nối', 'Connected')),
+      LinkState.connecting => (t.warn, tr('Đang kết nối…', 'Connecting…')),
+      LinkState.lost => (t.bad, tr('Mất tín hiệu', 'Signal lost')),
+      LinkState.disconnected => (t.idle, tr('Chưa kết nối', 'Not connected')),
     };
     return Pill(color: color, label: label);
   }

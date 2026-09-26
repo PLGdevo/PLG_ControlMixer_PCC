@@ -1,5 +1,6 @@
 // Condition (Sprint 4 — K1–K3): cây biểu thức quyết định luật mix có được chạy hay không.
 // So sánh trên **trạng thái** của Input (I2), có hysteresis cho so sánh lớn/nhỏ.
+import '../l10n/lang.dart';
 import 'input_def.dart';
 
 enum CmpOp {
@@ -94,12 +95,12 @@ sealed class Expr {
 
   /// Mô tả ngắn cho thẻ luật (M6). `nameOf` đổi mã Input/Condition thành tên hiển thị.
   String describe(String Function(String id) nameOf) => switch (this) {
-        ExprTrue() => 'luôn đúng',
+        ExprTrue() => tr('luôn đúng', 'always true'),
         ExprCmp(:final input, :final op, :final value, :final hyst) =>
-          '${nameOf(input)} ${op.symbol} ${_num(value)}${hyst > 0 ? ' (trễ ${_num(hyst)})' : ''}',
-        ExprAnd(:final args) => args.map((a) => _paren(a, nameOf)).join(' VÀ '),
-        ExprOr(:final args) => args.map((a) => _paren(a, nameOf)).join(' HOẶC '),
-        ExprNot(:final arg) => 'KHÔNG ${_paren(arg, nameOf)}',
+          '${nameOf(input)} ${op.symbol} ${_num(value)}${hyst > 0 ? tr(' (trễ ${_num(hyst)})', ' (hyst ${_num(hyst)})') : ''}',
+        ExprAnd(:final args) => args.map((a) => _paren(a, nameOf)).join(tr(' VÀ ', ' AND ')),
+        ExprOr(:final args) => args.map((a) => _paren(a, nameOf)).join(tr(' HOẶC ', ' OR ')),
+        ExprNot(:final arg) => tr('KHÔNG ${_paren(arg, nameOf)}', 'NOT ${_paren(arg, nameOf)}'),
         ExprRef(:final id) => nameOf(id),
       };
 
@@ -110,19 +111,19 @@ sealed class Expr {
 
   /// Kiểm tra (K1, V). `inputs`: Input của hồ sơ; `conditionIds`: Condition đặt tên đang có.
   String? validate(Map<String, InputDef> inputs, Set<String> conditionIds) {
-    if (depth > maxDepth) return 'Điều kiện lồng quá $maxDepth tầng';
-    if (cmpCount > maxCmp) return 'Điều kiện có quá $maxCmp phép so sánh';
+    if (depth > maxDepth) return tr('Điều kiện lồng quá $maxDepth tầng', 'Condition nested deeper than $maxDepth levels');
+    if (cmpCount > maxCmp) return tr('Điều kiện có quá $maxCmp phép so sánh', 'Condition has more than $maxCmp comparisons');
     return _check(inputs, conditionIds);
   }
 
   String? _check(Map<String, InputDef> inputs, Set<String> conditionIds) {
     switch (this) {
       case ExprCmp(:final input, :final op, :final hyst):
-        if (!inputs.containsKey(input)) return 'Điều kiện dùng Input "$input" không tồn tại';
-        if (hyst < 0 || hyst > 200) return 'Độ trễ trong khoảng 0–200';
-        if (hyst > 0 && !op.ordered) return 'Độ trễ chỉ dùng với so sánh lớn/nhỏ';
+        if (!inputs.containsKey(input)) return tr('Điều kiện dùng Input "$input" không tồn tại', 'Condition uses missing Input "$input"');
+        if (hyst < 0 || hyst > 200) return tr('Độ trễ trong khoảng 0–200', 'Hysteresis must be 0–200');
+        if (hyst > 0 && !op.ordered) return tr('Độ trễ chỉ dùng với so sánh lớn/nhỏ', 'Hysteresis only works with greater/less comparisons');
       case ExprAnd(:final args) || ExprOr(:final args):
-        if (args.isEmpty) return 'Nhóm điều kiện trống';
+        if (args.isEmpty) return tr('Nhóm điều kiện trống', 'Empty condition group');
         for (final a in args) {
           final e = a._check(inputs, conditionIds);
           if (e != null) return e;
@@ -130,7 +131,7 @@ sealed class Expr {
       case ExprNot(:final arg):
         return arg._check(inputs, conditionIds);
       case ExprRef(:final id):
-        if (!conditionIds.contains(id)) return 'Điều kiện "$id" không tồn tại';
+        if (!conditionIds.contains(id)) return tr('Điều kiện "$id" không tồn tại', 'Condition "$id" does not exist');
       case ExprTrue():
         break;
     }

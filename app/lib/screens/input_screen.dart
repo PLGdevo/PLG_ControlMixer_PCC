@@ -1,6 +1,7 @@
 // Trang sửa một Input (Sprint 4 — U2). Trả về bản đã sửa qua Navigator.pop, hoặc null nếu huỷ.
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/input_def.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
@@ -38,7 +39,7 @@ class _InputScreenState extends State<InputScreen> {
   String? get _error {
     final e = d.validate();
     if (e != null) return e;
-    if (widget.takenIds.contains(d.id)) return 'Đã có Input khác mã "${d.id}"';
+    if (widget.takenIds.contains(d.id)) return tr('Đã có Input khác mã "${d.id}"', 'Another Input already has ID "${d.id}"');
     return null;
   }
 
@@ -55,7 +56,7 @@ class _InputScreenState extends State<InputScreen> {
           TextField(
             controller: _name,
             maxLength: 24,
-            decoration: const InputDecoration(labelText: 'Tên'),
+            decoration: InputDecoration(labelText: tr('Tên', 'Name')),
             onChanged: (v) => setState(() => d.name = v.trim()),
           ),
           TextField(
@@ -63,13 +64,13 @@ class _InputScreenState extends State<InputScreen> {
             enabled: !widget.idLocked,
             maxLength: 24,
             decoration: InputDecoration(
-              labelText: 'Mã (dùng trong điều kiện)',
-              helperText: widget.idLocked ? 'Đang được ${widget.usedBy} luật dùng nên không đổi được mã' : 'a–z, 0–9, "_"',
+              labelText: tr('Mã (dùng trong điều kiện)', 'ID (used in conditions)'),
+              helperText: widget.idLocked ? tr('Đang được ${widget.usedBy} luật dùng nên không đổi được mã', 'Used by ${widget.usedBy} rule(s), so the ID cannot change') : 'a–z, 0–9, "_"',
             ),
             onChanged: (v) => setState(() => d.id = v.trim()),
           ),
           const SizedBox(height: Gap.m),
-          Text('KIỂU', style: AppText.caption.copyWith(color: t.textMuted)),
+          Text(tr('KIỂU', 'TYPE'), style: AppText.caption.copyWith(color: t.textMuted)),
           const SizedBox(height: Gap.xs),
           SegmentedButton<InputType>(
             showSelectedIcon: false,
@@ -80,12 +81,12 @@ class _InputScreenState extends State<InputScreen> {
           if (widget.idLocked)
             Padding(
               padding: const EdgeInsets.only(top: Gap.xs),
-              child: Text('Kiểu bị khoá vì Input đang được luật dùng.',
+              child: Text(tr('Kiểu bị khoá vì Input đang được luật dùng.', 'The type is locked because rules use this Input.'),
                   style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
             ),
           const SizedBox(height: Gap.m),
           if (d.type == InputType.axis) ...[
-            Text('DẢI GIÁ TRỊ', style: AppText.caption.copyWith(color: t.textMuted)),
+            Text(tr('DẢI GIÁ TRỊ', 'VALUE RANGE'), style: AppText.caption.copyWith(color: t.textMuted)),
             const SizedBox(height: Gap.xs),
             SegmentedButton<AxisRange>(
               showSelectedIcon: false,
@@ -96,15 +97,15 @@ class _InputScreenState extends State<InputScreen> {
             const SizedBox(height: Gap.s),
             Text(
               d.range == AxisRange.unipolar
-                  ? 'Cần ở thấp nhất = 0%, cao nhất = 100%. Muốn phủ cả Min…Max của kênh thì dùng nút "Toàn dải" trong luật mix.'
-                  : 'Cần ở giữa = 0%, hai đầu = −100% / +100%.',
+                  ? tr('Cần ở thấp nhất = 0%, cao nhất = 100%. Muốn phủ cả Min…Max của kênh thì dùng nút "Toàn dải" trong luật mix.', 'Stick at the bottom = 0%, top = 100%. To cover the full Min…Max of a channel use "Full range" in the mix rule.')
+                  : tr('Cần ở giữa = 0%, hai đầu = −100% / +100%.', 'Stick centered = 0%, ends = −100% / +100%.'),
               style: AppText.label.copyWith(color: t.textMuted, fontSize: 13),
             ),
           ],
           if (discrete) ...[
-            Text('GIÁ TRỊ ĐƯA VÀO MIXER', style: AppText.caption.copyWith(color: t.textMuted)),
+            Text(tr('GIÁ TRỊ ĐƯA VÀO MIXER', 'VALUES SENT TO THE MIXER'), style: AppText.caption.copyWith(color: t.textMuted)),
             NumberField(
-              label: d.type == InputType.binary ? 'Khi tắt' : 'Nấc trái',
+              label: d.type == InputType.binary ? tr('Khi tắt', 'When off') : tr('Nấc trái', 'Left position'),
               unit: '%',
               value: d.levels.offPct.round(),
               min: -100,
@@ -114,7 +115,7 @@ class _InputScreenState extends State<InputScreen> {
             ),
             if (d.type == InputType.ternary)
               NumberField(
-                label: 'Nấc giữa',
+                label: tr('Nấc giữa', 'Middle position'),
                 unit: '%',
                 value: d.levels.midPct.round(),
                 min: -100,
@@ -123,7 +124,7 @@ class _InputScreenState extends State<InputScreen> {
                 onChanged: (v) => setState(() => d.levels.midPct = v.toDouble()),
               ),
             NumberField(
-              label: d.type == InputType.binary ? 'Khi bật' : 'Nấc phải',
+              label: d.type == InputType.binary ? tr('Khi bật', 'When on') : tr('Nấc phải', 'Right position'),
               unit: '%',
               value: d.levels.onPct.round(),
               min: -100,
@@ -132,14 +133,17 @@ class _InputScreenState extends State<InputScreen> {
               onChanged: (v) => setState(() => d.levels.onPct = v.toDouble()),
             ),
             Text(
-              'Điều kiện so theo trạng thái (${d.type == InputType.binary ? '0 = tắt, 1 = bật' : '−1 / 0 / 1'}), '
-              'không phụ thuộc các giá trị % ở trên.',
+              tr(
+                  'Điều kiện so theo trạng thái (${d.type == InputType.binary ? '0 = tắt, 1 = bật' : '−1 / 0 / 1'}), '
+                      'không phụ thuộc các giá trị % ở trên.',
+                  'Conditions compare the state (${d.type == InputType.binary ? '0 = off, 1 = on' : '−1 / 0 / 1'}), '
+                      'not the % values above.'),
               style: AppText.label.copyWith(color: t.textMuted, fontSize: 13),
             ),
           ],
           if (d.type == InputType.constant)
             NumberField(
-              label: 'Giá trị',
+              label: tr('Giá trị', 'Value'),
               unit: '%',
               value: d.constPct.round(),
               min: -100,
@@ -164,7 +168,7 @@ class _InputScreenState extends State<InputScreen> {
           child: FilledButton.icon(
             onPressed: err == null ? () => Navigator.pop(context, d) : null,
             icon: const AppIcon(AppIcons.save, mini: true),
-            label: const Text('Xong'),
+            label: Text(tr('Xong', 'Done')),
           ),
         ),
       ),

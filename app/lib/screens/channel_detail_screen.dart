@@ -2,6 +2,7 @@
 // Min/Center/Max, trim, offset, reverse, failsafe và liệt kê các luật đang ghi vào kênh. Sửa trên hồ sơ nháp.
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/channel_config.dart';
 import '../services/output_pipeline.dart';
@@ -24,7 +25,7 @@ class ChannelDetailScreen extends StatefulWidget {
 }
 
 class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
-  late final _nameCtrl = TextEditingController(text: ch.name);
+  late final _nameCtrl = TextEditingController(text: ch.displayName);
   double _preview = 0;
 
   ChannelConfig get ch => widget.profile.ch(widget.index);
@@ -45,14 +46,14 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
     final t = context.tokens;
     final err = ch.validate();
     return Scaffold(
-      appBar: AppBar(title: Text('${ch.label} · ${ch.name}')),
+      appBar: AppBar(title: Text('${ch.label} · ${ch.displayName}')),
       body: ListView(
         padding: const EdgeInsets.all(Gap.l),
         children: [
           TextField(
             controller: _nameCtrl,
             maxLength: 20,
-            decoration: InputDecoration(labelText: 'Tên kênh', errorText: err['name']),
+            decoration: InputDecoration(labelText: tr('Tên kênh', 'Channel name'), errorText: err['name']),
             onChanged: (v) => setState(() => ch.name = v),
           ),
           const SizedBox(height: Gap.s),
@@ -60,28 +61,28 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
             final rules = widget.profile.mixer.where((r) => r.destCh == ch.index).toList();
             final inputs = widget.profile.inputMap;
             return InputDecorator(
-              decoration: const InputDecoration(labelText: 'Luật mix ghi vào kênh này'),
+              decoration: InputDecoration(labelText: tr('Luật mix ghi vào kênh này', 'Mix rules writing to this channel')),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 if (rules.isEmpty)
-                  Text('Chưa có luật nào — kênh ra Center (hoặc failsafe nếu tắt).',
+                  Text(tr('Chưa có luật nào — kênh ra Center (hoặc failsafe nếu tắt).', 'No rules yet — the channel outputs Center (or failsafe when off).'),
                       style: AppText.body.copyWith(color: t.textMuted)),
                 for (final r in rules)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Text('• ${r.describe(inputs)}${r.enabled ? '' : ' (đang tắt)'}',
+                    child: Text('• ${r.describe(inputs)}${r.enabled ? '' : tr(' (đang tắt)', ' (off)')}',
                         style: AppText.body.copyWith(color: r.enabled ? t.text : t.disabled)),
                   ),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: TextButton(onPressed: widget.onOpenMix, child: const Text('Sửa ở tab Mix')),
+                  child: TextButton(onPressed: widget.onOpenMix, child: Text(tr('Sửa ở tab Mix', 'Edit in the Mix tab'))),
                 ),
               ]),
             );
           }),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Bật kênh'),
-            subtitle: Text(isMain ? 'CH1/CH2 luôn bật: firmware xe hiện tại luôn xuất hai kênh này' : 'Kênh tắt luôn ra failsafe, luật mix ghi vào bị bỏ qua'),
+            title: Text(tr('Bật kênh', 'Channel on')),
+            subtitle: Text(isMain ? tr('CH1/CH2 luôn bật: firmware xe hiện tại luôn xuất hai kênh này', 'CH1/CH2 are always on: the current car firmware always outputs these two channels') : tr('Kênh tắt luôn ra failsafe, luật mix ghi vào bị bỏ qua', 'A disabled channel always outputs failsafe; mix rules into it are ignored')),
             value: ch.enabled,
             onChanged: isMain ? null : (v) => setState(() => ch.enabled = v),
           ),
@@ -99,7 +100,7 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
               error: err['offset'], onChanged: (v) => setState(() => ch.offsetUs = v)),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Đảo chiều (Reverse)'),
+            title: Text(tr('Đảo chiều (Reverse)', 'Reverse')),
             value: ch.reverse,
             onChanged: (v) => setState(() => ch.reverse = v),
           ),
@@ -112,15 +113,15 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
                 AppIcon(AppIcons.warning, color: t.warn, mini: true),
                 const SizedBox(width: Gap.s),
                 Expanded(
-                  child: Text('Firmware xe hiện tại chỉ nhận 800–2200 µs cho CH1/CH2.',
+                  child: Text(tr('Firmware xe hiện tại chỉ nhận 800–2200 µs cho CH1/CH2.', 'The current car firmware only accepts 800–2200 µs on CH1/CH2.'),
                       style: AppText.label.copyWith(color: t.warn)),
                 ),
               ]),
             ),
           const Divider(),
-          Text('Xem trước', style: AppText.title.copyWith(color: t.text)),
+          Text(tr('Xem trước', 'Preview'), style: AppText.title.copyWith(color: t.text)),
           const SizedBox(height: Gap.xs),
-          Text('Kéo thử để thấy giá trị xe sẽ xuất ra.', style: AppText.label.copyWith(color: t.textMuted)),
+          Text(tr('Kéo thử để thấy giá trị xe sẽ xuất ra.', 'Drag to see the value the car will output.'), style: AppText.label.copyWith(color: t.textMuted)),
           Slider(
             value: _preview,
             min: -100,
@@ -131,9 +132,9 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _Metric(label: 'Vị trí', value: '${_preview.round()}%'),
-              _Metric(label: 'Xung ra', value: err.isEmpty ? '${_outUs(_preview)} µs' : '--'),
-              _Metric(label: 'Tâm thực tế', value: '${ch.effectiveCenter} µs'),
+              _Metric(label: tr('Vị trí', 'Position'), value: '${_preview.round()}%'),
+              _Metric(label: tr('Xung ra', 'Output pulse'), value: err.isEmpty ? '${_outUs(_preview)} µs' : '--'),
+              _Metric(label: tr('Tâm thực tế', 'Actual center'), value: '${ch.effectiveCenter} µs'),
             ],
           ),
           const SizedBox(height: Gap.xl),

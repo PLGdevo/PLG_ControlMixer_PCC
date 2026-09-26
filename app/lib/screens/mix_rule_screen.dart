@@ -2,6 +2,7 @@
 // Làm việc trên hồ sơ nháp: tạo Input hằng số mới được thêm thẳng vào hồ sơ nháp.
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/input_def.dart';
 import '../models/mixer_rule.dart';
@@ -65,18 +66,18 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
     final val = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Input hằng số'),
+        title: Text(tr('Input hằng số', 'Constant Input')),
         content: TextField(
           controller: ctrl,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true),
-          decoration: const InputDecoration(labelText: 'Giá trị (−100…+100%)'),
+          decoration: InputDecoration(labelText: tr('Giá trị (−100…+100%)', 'Value (−100…+100%)')),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Huỷ')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Huỷ', 'Cancel'))),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.replaceAll(',', '.'))?.clamp(-100.0, 100.0)),
-            child: const Text('Tạo'),
+            child: Text(tr('Tạo', 'Create')),
           ),
         ],
       ),
@@ -88,7 +89,7 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
     final d = existing ??
         (InputDef(
           id: InputDef.uniqueId('k_${label.replaceAll('-', 'm').replaceAll('.', '_')}', p.inputs.map((i) => i.id)),
-          name: 'Hằng $label%',
+          name: tr('Hằng $label%', 'Constant $label%'),
           type: InputType.constant,
           constPct: val,
         ));
@@ -104,23 +105,23 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
     final err = _error;
     final src = p.input(r.source);
     return Scaffold(
-      appBar: AppBar(title: const Text('Luật mix')),
+      appBar: AppBar(title: Text(tr('Luật mix', 'Mix rule'))),
       body: ListView(
         padding: const EdgeInsets.all(Gap.l),
         children: [
           TextFormField(
             initialValue: r.name,
             maxLength: 32,
-            decoration: const InputDecoration(labelText: 'Tên luật (tuỳ chọn)', counterText: ''),
+            decoration: InputDecoration(labelText: tr('Tên luật (tuỳ chọn)', 'Rule name (optional)'), counterText: ''),
             onChanged: (v) => _upd(() => r.name = v.trim()),
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Bật luật'),
+            title: Text(tr('Bật luật', 'Rule on')),
             value: r.enabled,
             onChanged: (v) => _upd(() => r.enabled = v),
           ),
-          _section('Nguồn', [
+          _section(tr('Nguồn', 'Source'), [
             DropdownButtonFormField<String>(
               key: ValueKey('src-${r.source}-${p.inputs.length}'),
               initialValue: src == null ? null : r.source,
@@ -130,15 +131,15 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
                 for (final d in p.inputs)
                   DropdownMenuItem(
                     value: d.id,
-                    child: Text(d.type == InputType.constant ? '${d.name} (hằng số)' : '${d.name} · ${d.type.label.toLowerCase()}',
+                    child: Text(d.type == InputType.constant ? tr('${d.name} (hằng số)', '${d.name} (constant)') : '${d.name} · ${d.type.label.toLowerCase()}',
                         overflow: TextOverflow.ellipsis),
                   ),
-                const DropdownMenuItem(value: _newConst, child: Text('+ Hằng số…')),
+                DropdownMenuItem(value: _newConst, child: Text(tr('+ Hằng số…', '+ Constant…'))),
               ],
               onChanged: _pickSource,
             ),
           ]),
-          _section('Điều kiện', [
+          _section(tr('Điều kiện', 'Condition'), [
             ConditionBuilder(
               value: r.condition,
               inputs: p.inputs,
@@ -146,7 +147,7 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
               onChanged: (e) => _upd(() => r.condition = e),
             ),
           ]),
-          _section('Tính giá trị', [
+          _section(tr('Tính giá trị', 'Value'), [
             _pct('Weight', r.weightPct, (v) => r.weightPct = v, min: -200, max: 200),
             _pct('Offset', r.offsetPct, (v) => r.offsetPct = v),
             if (src?.isUnipolar ?? false)
@@ -158,7 +159,7 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
                       ..weightPct = 200
                       ..offsetPct = -100;
                   }),
-                  child: const Text('Toàn dải (0…100% → Min…Max)'),
+                  child: Text(tr('Toàn dải (0…100% → Min…Max)', 'Full range (0…100% → Min…Max)')),
                 ),
               ),
             const SizedBox(height: Gap.s),
@@ -171,47 +172,47 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
             if (r.curve.type == CurveType.expo) _pct('Expo', r.curve.expoPct, (v) => r.curve.expoPct = v),
             if (r.curve.type == CurveType.points)
               for (var i = 0; i < 5; i++)
-                _pct('Tại ${MixCurve.xs[i].round()}%', r.curve.points[i], (v) => r.curve.points[i] = v),
+                _pct(tr('Tại ${MixCurve.xs[i].round()}%', 'At ${MixCurve.xs[i].round()}%'), r.curve.points[i], (v) => r.curve.points[i] = v),
             _pct('Min', r.minPct, (v) => r.minPct = v),
             _pct('Max', r.maxPct, (v) => r.maxPct = v),
           ]),
-          _section('Đích', [
+          _section(tr('Đích', 'Target'), [
             DropdownButtonFormField<int>(
               key: ValueKey('dest-${r.destCh}'),
               initialValue: r.destCh,
-              decoration: const InputDecoration(labelText: 'Kênh'),
+              decoration: InputDecoration(labelText: tr('Kênh', 'Channel')),
               items: [for (var i = 1; i <= 10; i++) DropdownMenuItem(value: i, child: Text(p.chLabel(i)))],
               onChanged: (v) => _upd(() => r.destCh = v ?? r.destCh),
             ),
             if (!p.ch(r.destCh).enabled)
               Padding(
                 padding: const EdgeInsets.only(top: Gap.xs),
-                child: Text('${p.chLabel(r.destCh)} đang tắt: luật không có tác dụng tới khi bật kênh.',
+                child: Text(tr('${p.chLabel(r.destCh)} đang tắt: luật không có tác dụng tới khi bật kênh.', '${p.chLabel(r.destCh)} is off: the rule has no effect until the channel is on.'),
                     style: AppText.label.copyWith(color: t.warn, fontSize: 12)),
               ),
             const SizedBox(height: Gap.s),
             DropdownButtonFormField<Combine>(
               key: ValueKey('comb-${r.combine}'),
               initialValue: r.combine,
-              decoration: const InputDecoration(labelText: 'Gộp với luật khác cùng kênh'),
+              decoration: InputDecoration(labelText: tr('Gộp với luật khác cùng kênh', 'Combine with other rules on the channel')),
               items: [for (final c in Combine.values) DropdownMenuItem(value: c, child: Text(c.label))],
               onChanged: (v) => _upd(() => r.combine = v ?? r.combine),
             ),
             NumberField(
-              label: 'Priority (cao chạy sau)',
+              label: tr('Priority (cao chạy sau)', 'Priority (higher runs later)'),
               value: r.priority,
               min: 0,
               max: 9,
               onChanged: (v) => _upd(() => r.priority = v),
             ),
           ]),
-          _section('Khoá an toàn khi đổi đích', [
+          _section(tr('Khoá an toàn khi đổi đích', 'Safety lock when switching target'), [
             SegmentedButton<bool?>(
               showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(value: null, label: Text('Tự động')),
-                ButtonSegment(value: true, label: Text('Bật')),
-                ButtonSegment(value: false, label: Text('Tắt')),
+              segments: [
+                ButtonSegment(value: null, label: Text(tr('Tự động', 'Auto'))),
+                ButtonSegment(value: true, label: Text(tr('Bật', 'On'))),
+                ButtonSegment(value: false, label: Text(tr('Tắt', 'Off'))),
               ],
               selected: {r.safety.requireNeutral},
               onSelectionChanged: (s) => _upd(() => r.safety.requireNeutral = s.first),
@@ -219,14 +220,14 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
             const SizedBox(height: Gap.xs),
             Text(
               r.requiresNeutral(src)
-                  ? 'Điều kiện đổi khi nguồn đang lệch tâm thì giữ trạng thái cũ tới khi nguồn về vùng chết.'
-                  : 'Điều kiện đổi là luật tác động / ngừng ngay.',
+                  ? tr('Điều kiện đổi khi nguồn đang lệch tâm thì giữ trạng thái cũ tới khi nguồn về vùng chết.', 'If the condition changes while the source is off-center, the old state is kept until the source returns to the deadzone.')
+                  : tr('Điều kiện đổi là luật tác động / ngừng ngay.', 'When the condition changes the rule starts / stops right away.'),
               style: AppText.label.copyWith(color: t.textMuted, fontSize: 13),
             ),
-            if (r.requiresNeutral(src)) _pct('Vùng chết', r.safety.deadzonePct, (v) => r.safety.deadzonePct = v, min: 0, max: 50, step: 1),
+            if (r.requiresNeutral(src)) _pct(tr('Vùng chết', 'Deadzone'), r.safety.deadzonePct, (v) => r.safety.deadzonePct = v, min: 0, max: 50, step: 1),
           ]),
-          _section('Xem trước', [
-            if (err == null) MixPreview(profile: p, rule: r) else Text('Sửa lỗi để xem trước', style: AppText.label.copyWith(color: t.textMuted)),
+          _section(tr('Xem trước', 'Preview'), [
+            if (err == null) MixPreview(profile: p, rule: r) else Text(tr('Sửa lỗi để xem trước', 'Fix the error to see a preview'), style: AppText.label.copyWith(color: t.textMuted)),
           ]),
           const SizedBox(height: Gap.xl),
         ],
@@ -247,7 +248,7 @@ class _MixRuleScreenState extends State<MixRuleScreen> {
             FilledButton.icon(
               onPressed: err == null ? () => Navigator.pop(context, r) : null,
               icon: const AppIcon(AppIcons.save, mini: true),
-              label: const Text('Xong'),
+              label: Text(tr('Xong', 'Done')),
             ),
           ]),
         ),

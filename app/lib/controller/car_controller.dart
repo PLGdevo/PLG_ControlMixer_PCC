@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../protocol/net_protocol.dart';
 import '../protocol/protocol.dart';
@@ -93,7 +94,7 @@ class CarController extends ChangeNotifier {
       WakelockPlus.enable();
       _setState(LinkState.connected);
     } catch (e) {
-      error = 'Kết nối thất bại: ${_msg(e)}';
+      error = tr('Kết nối thất bại: ${_msg(e)}', 'Connection failed: ${_msg(e)}');
       await _teardown();
       _setState(LinkState.disconnected);
     }
@@ -114,7 +115,7 @@ class CarController extends ChangeNotifier {
   }
 
   Future<void> _onTransportLost() async {
-    error = 'Mất kết nối với xe';
+    error = tr('Mất kết nối với xe', 'Lost connection to the car');
     await _teardown();
     _setState(LinkState.disconnected);
   }
@@ -129,7 +130,7 @@ class CarController extends ChangeNotifier {
     _inSub = null;
     _lostSub = null;
     for (final w in _waiters.values) {
-      if (!w.isCompleted) w.completeError(StateError('Đã ngắt kết nối'));
+      if (!w.isCompleted) w.completeError(StateError(tr('Đã ngắt kết nối', 'Disconnected')));
     }
     _waiters.clear();
     try {
@@ -167,7 +168,7 @@ class CarController extends ChangeNotifier {
 
   /// Rời màn Lái: DISARM, bỏ hồ sơ khỏi vòng gửi
   void unloadProfile() {
-    arm.disarm('Thoát màn Lái');
+    arm.disarm(tr('Thoát màn Lái', 'Left the drive screen'));
     armCheck = null;
     pipeline = null;
     _armCond = null;
@@ -259,7 +260,7 @@ class CarController extends ChangeNotifier {
     if (state == LinkState.connected &&
         last != null &&
         DateTime.now().difference(last) > linkTimeout) {
-      arm.disarm('Mất tín hiệu');
+      arm.disarm(tr('Mất tín hiệu', 'Signal lost'));
       _setState(LinkState.lost);
     }
   }
@@ -297,7 +298,7 @@ class CarController extends ChangeNotifier {
   }) async {
     for (var i = 0; i < retries; i++) {
       final t = _transport;
-      if (t == null) throw StateError('Chưa kết nối');
+      if (t == null) throw StateError(tr('Chưa kết nối', 'Not connected'));
       final c = Completer<Frame>();
       _waiters[expectKey] = c;
       try {
@@ -309,14 +310,14 @@ class CarController extends ChangeNotifier {
         _waiters.remove(expectKey);
       }
     }
-    throw TimeoutException('Xe không phản hồi');
+    throw TimeoutException(tr('Xe không phản hồi', 'The car is not responding'));
   }
 
   // ---------------- Cấu hình ----------------
   Future<CarConfig> _fetchConfig() async {
     final f = await _request(encodeFrame(PacketType.configGet), PacketType.configData);
     final c = CarConfig.parse(f.payload);
-    if (c == null) throw Exception('Dữ liệu cấu hình không hợp lệ');
+    if (c == null) throw Exception(tr('Dữ liệu cấu hình không hợp lệ', 'Invalid configuration data'));
     return c;
   }
 
@@ -328,7 +329,7 @@ class CarController extends ChangeNotifier {
       encodeFrame(PacketType.configSet, c.toBytes()),
       _ackKey | PacketType.configSet,
     );
-    if (f.payload.length < 2 || f.payload[1] != 1) throw Exception('Xe từ chối cấu hình');
+    if (f.payload.length < 2 || f.payload[1] != 1) throw Exception(tr('Xe từ chối cấu hình', 'The car rejected the configuration'));
     config = c;
     if (gear > c.gearCount) gear = c.gearCount;
     notifyListeners();
@@ -336,13 +337,13 @@ class CarController extends ChangeNotifier {
 
   Future<void> saveConfig() async {
     final f = await _request(encodeFrame(PacketType.configSave), _ackKey | PacketType.configSave);
-    if (f.payload.length < 2 || f.payload[1] != 1) throw Exception('Lưu thất bại');
+    if (f.payload.length < 2 || f.payload[1] != 1) throw Exception(tr('Lưu thất bại', 'Save failed'));
   }
 
   Future<void> resetConfig() async {
     final f = await _request(encodeFrame(PacketType.configReset), PacketType.configData);
     final c = CarConfig.parse(f.payload);
-    if (c == null) throw Exception('Dữ liệu cấu hình không hợp lệ');
+    if (c == null) throw Exception(tr('Dữ liệu cấu hình không hợp lệ', 'Invalid configuration data'));
     config = c;
     if (gear > c.gearCount) gear = c.gearCount;
     notifyListeners();
@@ -388,7 +389,7 @@ class CarController extends ChangeNotifier {
   /// Cấu hình mạng nằm trên xe (xe cần nó lúc khởi động), không nằm trong hồ sơ
   Future<NetStatus> readNetStatus() async {
     final s = NetStatus.parse(await _netGet(NetSection.status));
-    if (s == null) throw Exception('Dữ liệu trạng thái mạng không hợp lệ');
+    if (s == null) throw Exception(tr('Dữ liệu trạng thái mạng không hợp lệ', 'Invalid network status data'));
     return s;
   }
 
@@ -397,7 +398,7 @@ class CarController extends ChangeNotifier {
     final a = await _netGet(NetSection.ap);
     final s = await _netGet(NetSection.sta);
     final c = NetConfig.parse(g, a, s);
-    if (c == null) throw Exception('Dữ liệu cấu hình mạng không hợp lệ (firmware cũ?)');
+    if (c == null) throw Exception(tr('Dữ liệu cấu hình mạng không hợp lệ (firmware cũ?)', 'Invalid network configuration data (old firmware?)'));
     return c;
   }
 
@@ -411,28 +412,28 @@ class CarController extends ChangeNotifier {
     final errors = c.validate();
     if (errors.isNotEmpty) throw Exception(errors.values.first);
     for (final s in NetConfig.sections) {
-      await _netCommand(PacketType.netSet, c.sectionBytes(s), 'Xe từ chối cấu hình mạng');
+      await _netCommand(PacketType.netSet, c.sectionBytes(s), tr('Xe từ chối cấu hình mạng', 'The car rejected the network configuration'));
     }
-    await _netCommand(PacketType.netApply, const [], 'Xe từ chối cấu hình mạng');
+    await _netCommand(PacketType.netApply, const [], tr('Xe từ chối cấu hình mạng', 'The car rejected the network configuration'));
     await disconnect();
   }
 
   /// Khởi động lại xe vào chế độ cấu hình (WiFi tạm)
   Future<void> enterNetSetup() async {
-    await _netCommand(PacketType.netSetup, const [], 'Xe không vào được chế độ cấu hình');
+    await _netCommand(PacketType.netSetup, const [], tr('Xe không vào được chế độ cấu hình', 'The car could not enter setup mode'));
     await disconnect();
   }
 
   /// Mạng của xe về mặc định (WiFi riêng RC-CAR / 12345678, 192.168.4.1, UDP 4210)
   Future<void> resetNetConfig() async {
-    await _netCommand(PacketType.netReset, const [], 'Xe không khôi phục được mạng');
+    await _netCommand(PacketType.netReset, const [], tr('Xe không khôi phục được mạng', 'The car could not reset its network'));
     await disconnect();
   }
 
   Future<void> _netCommand(int type, List<int> payload, String failMsg) async {
     final f = await _request(encodeFrame(type, payload), _ackKey | type);
     final status = f.payload.length < 2 ? NetAck.fail : f.payload[1];
-    if (status == NetAck.busy) throw Exception('Xe đang chạy: dừng xe (nhả ga) rồi thử lại');
+    if (status == NetAck.busy) throw Exception(tr('Xe đang chạy: dừng xe (nhả ga) rồi thử lại', 'The car is moving: stop it (release throttle) and try again'));
     if (status != NetAck.ok) throw Exception(failMsg);
   }
 

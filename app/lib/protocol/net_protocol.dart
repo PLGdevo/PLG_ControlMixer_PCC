@@ -3,6 +3,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../l10n/lang.dart';
 import 'protocol.dart';
 
 /// Cổng cố định cho DISCOVER/HERE, không đổi theo cấu hình (firmware: proto::DISCOVERY_PORT)
@@ -26,28 +27,30 @@ abstract final class NetAck {
 
 /// Chế độ mạng; `index` là giá trị trên dây
 enum NetMode {
-  ap('WiFi riêng (AP)'),
-  sta('Router'),
-  setup('Cấu hình');
+  ap('WiFi riêng (AP)', 'Own WiFi (AP)'),
+  sta('Router', 'Router'),
+  setup('Cấu hình', 'Setup');
 
-  const NetMode(this.label);
-  final String label;
+  const NetMode(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 
   static NetMode of(int v) => v >= 0 && v < values.length ? values[v] : ap;
 }
 
 /// Kết quả lần vào router gần nhất; `index` là giá trị trên dây
 enum StaResult {
-  none('Chưa thử'),
-  connecting('Đang kết nối'),
-  ok('Đã vào router'),
-  noSsid('Không thấy mạng'),
-  wrongPass('Sai mật khẩu'),
-  noIp('Không nhận được IP'),
-  fail('Lỗi kết nối');
+  none('Chưa thử', 'Not tried'),
+  connecting('Đang kết nối', 'Connecting'),
+  ok('Đã vào router', 'Joined router'),
+  noSsid('Không thấy mạng', 'Network not found'),
+  wrongPass('Sai mật khẩu', 'Wrong password'),
+  noIp('Không nhận được IP', 'No IP address'),
+  fail('Lỗi kết nối', 'Connection error');
 
-  const StaResult(this.label);
-  final String label;
+  const StaResult(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 
   bool get isError => index >= noSsid.index;
 
@@ -344,32 +347,32 @@ class NetConfig {
 
     final n = name;
     if (n.isEmpty || n.length > nameMax || !RegExp(r'^[A-Za-z0-9-]+$').hasMatch(n) || n.startsWith('-') || n.endsWith('-')) {
-      e['name'] = 'Tên 1–$nameMax ký tự: chữ không dấu, số, dấu "-" (không ở đầu/cuối)';
+      e['name'] = tr('Tên 1–$nameMax ký tự: chữ không dấu, số, dấu "-" (không ở đầu/cuối)', 'Name 1–$nameMax characters: plain letters, digits, "-" (not at start/end)');
     }
     if (udpPort < 1 || udpPort > 65535) {
-      e['udpPort'] = 'Port trong khoảng 1–65535';
+      e['udpPort'] = tr('Port trong khoảng 1–65535', 'Port must be 1–65535');
     } else if (udpPort == discoveryPort) {
-      e['udpPort'] = 'Port $discoveryPort dành cho tìm xe, chọn port khác';
+      e['udpPort'] = tr('Port $discoveryPort dành cho tìm xe, chọn port khác', 'Port $discoveryPort is reserved for car discovery, pick another');
     }
 
     final apLen = utf8.encode(apSsid).length;
-    if (apLen < 1 || apLen > ssidMax) e['apSsid'] = 'Tên WiFi 1–$ssidMax byte';
+    if (apLen < 1 || apLen > ssidMax) e['apSsid'] = tr('Tên WiFi 1–$ssidMax byte', 'WiFi name must be 1–$ssidMax bytes');
     final ap = apPass;
     if (ap != null) {
       final err = _passError(ap, allowEmpty: false);
       if (err != null) e['apPass'] = err;
     }
-    if (apChannel < 1 || apChannel > 13) e['apChannel'] = 'Kênh 1–13';
+    if (apChannel < 1 || apChannel > 13) e['apChannel'] = tr('Kênh 1–13', 'Channel 1–13');
     final apIpB = parseIpv4(apIp);
     if (apIpB == null || !_validHost(apIpB) || apIpB[3] == 0 || apIpB[3] == 255) {
-      e['apIp'] = 'IP dạng 192.168.4.1 (số cuối 1–254)';
+      e['apIp'] = tr('IP dạng 192.168.4.1 (số cuối 1–254)', 'IP like 192.168.4.1 (last number 1–254)');
     }
 
     final staLen = utf8.encode(staSsid).length;
     if (staLen > ssidMax) {
-      e['staSsid'] = 'Tên WiFi tối đa $ssidMax byte';
+      e['staSsid'] = tr('Tên WiFi tối đa $ssidMax byte', 'WiFi name at most $ssidMax bytes');
     } else if (bootMode == NetMode.sta && staLen == 0) {
-      e['staSsid'] = 'Nhập tên WiFi router';
+      e['staSsid'] = tr('Nhập tên WiFi router', 'Enter the router WiFi name');
     }
     final sp = staPass;
     if (sp != null) {
@@ -380,33 +383,33 @@ class NetConfig {
     if (!staDhcp) {
       final ip = parseIpv4(staIp), gw = parseIpv4(staGateway), m = parseIpv4(staSubnet);
       final prefix = m == null ? -1 : maskPrefix(m);
-      if (m == null || prefix < 8 || prefix > 30) e['staSubnet'] = 'Subnet mask dạng 255.255.255.0';
-      if (ip == null || !_validHost(ip)) e['staIp'] = 'IP không hợp lệ';
-      if (gw == null || !_validHost(gw)) e['staGateway'] = 'Gateway không hợp lệ';
+      if (m == null || prefix < 8 || prefix > 30) e['staSubnet'] = tr('Subnet mask dạng 255.255.255.0', 'Subnet mask like 255.255.255.0');
+      if (ip == null || !_validHost(ip)) e['staIp'] = tr('IP không hợp lệ', 'Invalid IP');
+      if (gw == null || !_validHost(gw)) e['staGateway'] = tr('Gateway không hợp lệ', 'Invalid gateway');
       if (ip != null && gw != null && m != null && prefix >= 8 && prefix <= 30 && !e.containsKey('staIp')) {
         final mask = _u32(m), ipv = _u32(ip), gwv = _u32(gw), host = ~mask & 0xFFFFFFFF;
         if ((ipv & mask) != (gwv & mask)) {
-          e['staGateway'] = 'Gateway phải cùng mạng với IP';
+          e['staGateway'] = tr('Gateway phải cùng mạng với IP', 'Gateway must be on the same network as the IP');
         } else if (ipv == gwv) {
-          e['staIp'] = 'IP phải khác gateway';
+          e['staIp'] = tr('IP phải khác gateway', 'IP must differ from the gateway');
         } else if ((ipv & host) == 0 || (ipv & host) == host) {
-          e['staIp'] = 'Đây là địa chỉ mạng/broadcast, chọn IP khác';
+          e['staIp'] = tr('Đây là địa chỉ mạng/broadcast, chọn IP khác', 'This is a network/broadcast address, pick another IP');
         } else if ((gwv & host) == 0 || (gwv & host) == host) {
-          e['staGateway'] = 'Gateway không hợp lệ';
+          e['staGateway'] = tr('Gateway không hợp lệ', 'Invalid gateway');
         }
       }
       if (staDns.trim().isNotEmpty) {
         final d = parseIpv4(staDns);
-        if (d == null || !_validHost(d)) e['staDns'] = 'DNS không hợp lệ (để trống = dùng gateway)';
+        if (d == null || !_validHost(d)) e['staDns'] = tr('DNS không hợp lệ (để trống = dùng gateway)', 'Invalid DNS (leave empty to use the gateway)');
       }
     }
     return e;
   }
 
   static String? _passError(String s, {required bool allowEmpty}) {
-    if (s.isEmpty) return allowEmpty ? null : 'Mật khẩu 8–$passMax ký tự';
-    if (s.length < 8 || s.length > passMax) return 'Mật khẩu 8–$passMax ký tự';
-    if (s.codeUnits.any((c) => c < 0x20 || c > 0x7E)) return 'Mật khẩu chỉ dùng chữ không dấu, số, ký hiệu';
+    if (s.isEmpty) return allowEmpty ? null : tr('Mật khẩu 8–$passMax ký tự', 'Password must be 8–$passMax characters');
+    if (s.length < 8 || s.length > passMax) return tr('Mật khẩu 8–$passMax ký tự', 'Password must be 8–$passMax characters');
+    if (s.codeUnits.any((c) => c < 0x20 || c > 0x7E)) return tr('Mật khẩu chỉ dùng chữ không dấu, số, ký hiệu', 'Password may only use plain letters, digits, symbols');
     return null;
   }
 }

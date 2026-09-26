@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/control_layout.dart';
+import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import 'layout_grid.dart';
 
@@ -176,11 +177,15 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
 
   Widget _item(BuildContext context, ControlItem it, double cw, double ch) {
     final t = context.tokens;
+    // Phần tử có màu riêng: dựng trong theme của màu đó (widget điều khiển lấy màu qua context.tokens)
+    final itemColor = it.style.color;
+    Widget built = Builder(builder: (context) => widget.itemBuilder(context, it));
+    if (itemColor != null) built = Theme(data: AppTheme.of(itemColor, Theme.of(context).brightness), child: built);
     final content = Padding(
       padding: const EdgeInsets.all(2),
       child: Opacity(
         opacity: (it.style.opacityPct / 100).clamp(0.3, 1.0),
-        child: widget.itemBuilder(context, it),
+        child: built,
       ),
     );
     if (!widget.editing) return content;

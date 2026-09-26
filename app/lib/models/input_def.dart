@@ -1,15 +1,17 @@
 // Input (Sprint 4 — I1, I2): nguồn dữ liệu điều khiển. UI chỉ tạo Input; luật mix quyết định
 // Input tác động lên kênh nào. Input thuộc hồ sơ, nhiều bố cục dùng chung.
+import '../l10n/lang.dart';
 import 'control_layout.dart';
 
 enum InputType {
-  axis('Trục'),
-  binary('Bật/tắt'),
-  ternary('3 nấc'),
-  constant('Hằng số');
+  axis('Trục', 'Axis'),
+  binary('Bật/tắt', 'On/off'),
+  ternary('3 nấc', '3-position'),
+  constant('Hằng số', 'Constant');
 
-  const InputType(this.label);
-  final String label;
+  const InputType(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
 }
 
 enum AxisRange {
@@ -93,14 +95,14 @@ class InputDef {
 
   /// Kiểm tra (V). Trả về lỗi đầu tiên hoặc null.
   String? validate() {
-    if (!idPattern.hasMatch(id)) return 'Mã Input chỉ gồm a–z, 0–9, "_" (1–24 ký tự)';
+    if (!idPattern.hasMatch(id)) return tr('Mã Input chỉ gồm a–z, 0–9, "_" (1–24 ký tự)', 'Input ID may only use a–z, 0–9, "_" (1–24 characters)');
     final n = name.trim();
-    if (n.isEmpty || n.length > 24) return 'Tên Input dài 1–24 ký tự';
+    if (n.isEmpty || n.length > 24) return tr('Tên Input dài 1–24 ký tự', 'Input name must be 1–24 characters');
     bool inRange(double v) => v >= -100 && v <= 100;
     if (!inRange(levels.offPct) || !inRange(levels.midPct) || !inRange(levels.onPct)) {
-      return 'Mức bật/tắt trong khoảng −100…+100%';
+      return tr('Mức bật/tắt trong khoảng −100…+100%', 'On/off levels must be within −100…+100%');
     }
-    if (!inRange(constPct)) return 'Hằng số trong khoảng −100…+100%';
+    if (!inRange(constPct)) return tr('Hằng số trong khoảng −100…+100%', 'Constant must be within −100…+100%');
     return null;
   }
 

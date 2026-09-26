@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 
 import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
+import '../l10n/lang.dart';
 import '../layout/item_widgets.dart';
 import '../layout/layout_canvas.dart';
 import '../layout/layout_grid.dart';
@@ -25,15 +26,26 @@ import '../services/output_pipeline.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/hold_repeat.dart';
 import '../widgets/status_badge.dart';
 import 'settings_screen.dart';
 
 class ControlScreen extends StatefulWidget {
-  const ControlScreen({super.key, required this.controller, required this.repo, required this.profileId});
+  const ControlScreen({
+    super.key,
+    required this.controller,
+    required this.repo,
+    required this.profileId,
+    this.editOnly = false,
+  });
 
   final CarController controller;
   final ProfileRepository repo;
   final String profileId;
+
+  /// Mở từ Cấu hình ▸ Bố cục: vào thẳng chế độ Sửa bố cục (kể cả khi bố cục đang khoá),
+  /// Lưu hoặc Huỷ thì đóng màn, không vào chế độ lái
+  final bool editOnly;
 
   @override
   State<ControlScreen> createState() => _ControlScreenState();
@@ -53,6 +65,9 @@ class _ControlScreenState extends State<ControlScreen> {
   bool _dragging = false, _overTrash = false;
   final _trashKey = GlobalKey();
 
+  /// Trim nhấn giữ đổi liên tục: gom lại, ghi hồ sơ / gửi xe khi ngừng bấm
+  Timer? _trimCommit;
+
   CarController get c => widget.controller;
   ControlLayout get layout => editing ? draft! : profile.activeLayout;
   bool get _connectedHere => c.isConnected && c.connectedKey == profile.connKey;
@@ -69,20 +84,32 @@ class _ControlScreenState extends State<ControlScreen> {
     c.armCheck = _armCheck;
     // App xuống nền → DISARM, cần gạt về vị trí an toàn (H3b, R3)
     _lifecycle = AppLifecycleListener(onHide: () {
-      c.arm.disarm('App xuống nền');
+      c.arm.disarm(tr('App xuống nền', 'App went to background'));
       _resetSticks();
       c.refresh();
     });
+    if (widget.editOnly) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_startEdit(force: true)) Navigator.pop(context);
+      });
+    }
   }
 
   @override
   void dispose() {
     _lifecycle.dispose();
+    if (_trimCommit?.isActive ?? false) {
+      _trimCommit!.cancel();
+      _commitTrim();
+    }
     _resetSticks(remember: true);
     c.unloadProfile();
     c.gearCountOverride = null;
-    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    // Mở từ Cấu hình thì màn Cấu hình tự đặt lại hướng dọc khi quay về
+    if (!widget.editOnly) {
+      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
     super.dispose();
   }
 
@@ -160,11 +187,14 @@ class _ControlScreenState extends State<ControlScreen> {
 
   // ---------------- Cấu hình / trim ----------------
   Future<void> _openSettings({int tab = 0}) async {
-    c.arm.disarm('Mở Cấu hình');
-    await Navigator.push(
+    c.arm.disarm(tr('Mở Cấu hình', 'Opened settings'));
+    await _flushTrim(); // Cấu hình đọc hồ sơ đã lưu
+    if (!mounted) return;
+    final result = await Navigator.push<String>(
       context,
       MaterialPageRoute(
-        builder: (_) => SettingsScreen(controller: c, repo: widget.repo, profileId: profile.id, initialTab: tab),
+        builder: (_) =>
+            SettingsScreen(controller: c, repo: widget.repo, profileId: profile.id, initialTab: tab, fromDrive: true),
       ),
     );
     if (!mounted) return;
@@ -176,38 +206,56 @@ class _ControlScreenState extends State<ControlScreen> {
       _loadProfile();
       _initValues();
     });
+    // Cấu hình ▸ Bố cục ▸ Sửa bố cục: quay về đây và vào chế độ sửa
+    if (result == SettingsScreen.editLayoutResult) _startEdit(force: true);
   }
 
   /// Trim nhanh cho kênh Lái đã chọn trong hồ sơ
-  Future<void> _trim(int delta) async {
+  void _trim(int delta) {
     final s = profile.steering;
     if (s == null) return;
     final nv = (s.trimUs + delta).clamp(-200, 200).toInt();
     if (nv == s.trimUs) return;
     setState(() => s.trimUs = nv);
+    _trimCommit?.cancel();
+    _trimCommit = Timer(const Duration(milliseconds: 250), _commitTrim);
+  }
+
+  /// Ghi trim vào hồ sơ và gửi xuống xe (nếu đang nối đúng xe)
+  Future<void> _commitTrim() async {
+    _trimCommit = null;
     await widget.repo.save(profile);
-    if (_connectedHere) {
-      try {
-        await c.applyConfig(profile.toCarConfig());
-      } catch (e) {
-        _snack('Không gửi được trim: ${e.toString().replaceFirst('Exception: ', '')}');
-      }
+    if (!_connectedHere) return;
+    try {
+      await c.applyConfig(profile.toCarConfig());
+    } catch (e) {
+      _snack(tr('Không gửi được trim: ${e.toString().replaceFirst('Exception: ', '')}',
+          'Could not send trim: ${e.toString().replaceFirst('Exception: ', '')}'));
     }
   }
 
+  /// Trim còn chờ ghi thì ghi ngay (trước khi mở Cấu hình / sửa bố cục)
+  Future<void> _flushTrim() async {
+    if (!(_trimCommit?.isActive ?? false)) return;
+    _trimCommit!.cancel();
+    await _commitTrim();
+  }
+
   // ---------------- Sửa bố cục (H2, H5) ----------------
-  void _startEdit() {
-    if (profile.activeLayout.locked) {
-      _snack('Bố cục đang khoá. Mở khoá trong menu trước.');
-      return;
+  /// Vào chế độ sửa; `force` bỏ qua khoá bố cục (mở từ Cấu hình). Trả về false nếu chưa vào được.
+  bool _startEdit({bool force = false}) {
+    if (profile.activeLayout.locked && !force) {
+      _snack(tr('Bố cục đang khoá. Mở khoá trong menu trước.', 'The layout is locked. Unlock it in the menu first.'));
+      return false;
     }
     // Ga phải đang ở vị trí nghỉ (vị trí về đã cài, vd −28%), không bắt buộc đúng 0% (H5-1)
     if (!(c.pipeline?.throttleAtRest(profile.activeLayout) ?? true)) {
-      _snack('Thả cần ga trước khi sửa bố cục');
-      return;
+      _snack(tr('Thả cần ga trước khi sửa bố cục', 'Release the throttle before editing the layout'));
+      return false;
     }
+    _flushTrim(); // trim còn chờ ghi không được ghi xen vào giữa lúc sửa
     _resetSticks();
-    c.arm.disarm('Đang sửa bố cục'); // chưa ARM → không gửi lệnh lái suốt thời gian sửa (H5, R3)
+    c.arm.disarm(tr('Đang sửa bố cục', 'Editing layout')); // chưa ARM → không gửi lệnh lái suốt thời gian sửa (H5, R3)
     setState(() {
       editing = true;
       draft = profile.activeLayout.copy();
@@ -215,9 +263,14 @@ class _ControlScreenState extends State<ControlScreen> {
       history.clear();
       selectedId = null;
     });
+    return true;
   }
 
   void _endEdit() {
+    if (widget.editOnly) {
+      Navigator.pop(context);
+      return;
+    }
     setState(() {
       editing = false;
       draft = null;
@@ -253,11 +306,12 @@ class _ControlScreenState extends State<ControlScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Cần ga không tự về ngay'),
-          content: const Text('Xe có thể tiếp tục chạy sau khi thả tay. Vẫn lưu bố cục?'),
+          title: Text(tr('Cần ga không tự về ngay', 'Throttle does not return right away')),
+          content: Text(tr('Xe có thể tiếp tục chạy sau khi thả tay. Vẫn lưu bố cục?',
+              'The car may keep moving after you let go. Save the layout anyway?')),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Huỷ')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Vẫn lưu')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Huỷ', 'Cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Vẫn lưu', 'Save anyway'))),
           ],
         ),
       );
@@ -268,11 +322,11 @@ class _ControlScreenState extends State<ControlScreen> {
     try {
       await widget.repo.save(profile);
     } catch (e) {
-      _snack('Không lưu được: $e');
+      _snack(tr('Không lưu được: $e', 'Could not save: $e'));
       return;
     }
     _endEdit();
-    _snack('Đã lưu bố cục');
+    _snack(tr('Đã lưu bố cục', 'Layout saved'));
   }
 
   void _mutate(void Function(ControlLayout l) f) {
@@ -299,7 +353,7 @@ class _ControlScreenState extends State<ControlScreen> {
     final l = profile.activeLayout;
     setState(() => l.locked = !l.locked);
     await widget.repo.save(profile, touch: false);
-    _snack(l.locked ? 'Đã khoá bố cục' : 'Đã mở khoá bố cục');
+    _snack(l.locked ? tr('Đã khoá bố cục', 'Layout locked') : tr('Đã mở khoá bố cục', 'Layout unlocked'));
   }
 
   Future<void> _openAddSheet() async {
@@ -318,7 +372,7 @@ class _ControlScreenState extends State<ControlScreen> {
           shrinkWrap: true,
           padding: const EdgeInsets.fromLTRB(Gap.l, 0, Gap.l, Gap.l),
           children: [
-            Text('Thêm điều khiển', style: AppText.title.copyWith(color: t.text)),
+            Text(tr('Thêm điều khiển', 'Add control'), style: AppText.title.copyWith(color: t.text)),
             const SizedBox(height: Gap.s),
             for (final k in controls)
               ListTile(
@@ -331,7 +385,7 @@ class _ControlScreenState extends State<ControlScreen> {
             for (final g in gauges)
               ListTile(
                 leading: const CustomIconView(CustomIcon.speedometer),
-                title: Text('Ô ${g.label}'),
+                title: Text(tr('Ô ${g.label}', '${g.label} gauge')),
                 onTap: () => Navigator.pop(ctx, g),
               ),
             for (final k in extras)
@@ -341,7 +395,7 @@ class _ControlScreenState extends State<ControlScreen> {
                 onTap: () => Navigator.pop(ctx, k),
               ),
             const SizedBox(height: Gap.s),
-            Text('Thêm xong, chọn phần tử để gắn Input, chọn kênh và chỉnh cấu hình riêng của nó.',
+            Text(tr('Thêm xong, chọn phần tử để gắn Input, chọn kênh và chỉnh cấu hình riêng của nó.', 'Once added, select the control to bind an Input, pick a channel and adjust its own settings.'),
                 style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
           ],
         ),
@@ -359,16 +413,16 @@ class _ControlScreenState extends State<ControlScreen> {
       };
       if (added != null) selectedId = added!.id;
     });
-    if (added == null) _snack('Không còn chỗ trống đủ lớn trên màn');
+    if (added == null) _snack(tr('Không còn chỗ trống đủ lớn trên màn', 'No free space large enough on screen'));
   }
 
   static String _kindHint(ItemKind k) => switch (k) {
-        ItemKind.stickH || ItemKind.stickV => '−100…+100%, tự về khi thả (chỉnh được)',
-        ItemKind.stick2D => 'Hai Input X/Y',
-        ItemKind.button => 'Bật khi giữ, thả ra là tắt',
-        ItemKind.toggle => 'Mỗi lần bấm đổi trạng thái',
-        ItemKind.switch3 => 'Trái / giữa / phải',
-        ItemKind.knob => 'Giữ nguyên vị trí',
+        ItemKind.stickH || ItemKind.stickV => tr('−100…+100%, tự về khi thả (chỉnh được)', '−100…+100%, springs back when released (adjustable)'),
+        ItemKind.stick2D => tr('Hai Input X/Y', 'Two Inputs X/Y'),
+        ItemKind.button => tr('Bật khi giữ, thả ra là tắt', 'On while held, off when released'),
+        ItemKind.toggle => tr('Mỗi lần bấm đổi trạng thái', 'Each press toggles the state'),
+        ItemKind.switch3 => tr('Trái / giữa / phải', 'Left / center / right'),
+        ItemKind.knob => tr('Giữ nguyên vị trí', 'Stays where you leave it'),
         _ => '',
       };
 
@@ -403,7 +457,7 @@ class _ControlScreenState extends State<ControlScreen> {
                     padding: insets,
                     child: Column(
                       children: [
-                        SizedBox(height: 48, child: editing ? _editBar() : _driveBar()),
+                        SizedBox(height: 48, child: editing ? _editBar() : (widget.editOnly ? null : _driveBar())),
                         const SizedBox(height: Gap.xs),
                         Expanded(
                           child: LayoutCanvas(
@@ -445,7 +499,7 @@ class _ControlScreenState extends State<ControlScreen> {
                       onDelete: () => _delete(selected.id),
                       onClose: () => setState(() => selectedId = null),
                       onMessage: _snack,
-                      onOpenMix: () => _snack('Lưu bố cục, rồi mở Cấu hình ▸ Mix để sửa luật của Input này'),
+                      onOpenMix: () => _snack(tr('Lưu bố cục, rồi mở Cấu hình ▸ Mix để sửa luật của Input này', 'Save the layout, then open Car settings ▸ Mix to edit the rules of this Input')),
                     ),
                   ),
               ],
@@ -487,10 +541,10 @@ class _ControlScreenState extends State<ControlScreen> {
                     Flexible(
                       child: Text(
                         disconnected
-                            ? 'Chưa kết nối xe'
+                            ? tr('Chưa kết nối xe', 'Car not connected')
                             : (tel?.netSetup ?? false)
-                                ? 'Xe đang ở chế độ cấu hình mạng: không lái được'
-                                : 'Failsafe: xe đang ở chế độ an toàn',
+                                ? tr('Xe đang ở chế độ cấu hình mạng: không lái được', 'The car is in network setup mode: driving is disabled')
+                                : tr('Failsafe: xe đang ở chế độ an toàn', 'Failsafe: the car is in safe mode'),
                         overflow: TextOverflow.ellipsis,
                         style: AppText.label.copyWith(color: t.bad, fontWeight: FontWeight.w700),
                       ),
@@ -500,14 +554,14 @@ class _ControlScreenState extends State<ControlScreen> {
               : const SizedBox.shrink(),
         ),
         PopupMenuButton<String>(
-          tooltip: 'Tuỳ chọn',
+          tooltip: tr('Tuỳ chọn', 'Options'),
           icon: const AppIcon(AppIcons.config),
           onSelected: (v) {
             switch (v) {
               case 'settings':
                 _openSettings();
               case 'mix':
-                _openSettings(tab: 3);
+                _openSettings(tab: SettingsScreen.mixTab);
               case 'edit':
                 _startEdit();
               case 'lock':
@@ -515,28 +569,28 @@ class _ControlScreenState extends State<ControlScreen> {
             }
           },
           itemBuilder: (_) => [
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'settings',
-              child: ListTile(leading: AppIcon(AppIcons.settings), title: Text('Cấu hình')),
+              child: ListTile(leading: const AppIcon(AppIcons.settings), title: Text(tr('Cấu hình', 'Car settings'))),
             ),
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'mix',
-              child: ListTile(leading: AppIcon(AppIcons.mix), title: Text('Luật mix')),
+              child: ListTile(leading: const AppIcon(AppIcons.mix), title: Text(tr('Luật mix', 'Mix rules'))),
             ),
             PopupMenuItem(
               value: 'edit',
               enabled: !l.locked,
               child: ListTile(
                 leading: const AppIcon(AppIcons.edit),
-                title: const Text('Sửa bố cục'),
-                subtitle: l.locked ? const Text('Đang khoá') : null,
+                title: Text(tr('Sửa bố cục', 'Edit layout')),
+                subtitle: l.locked ? Text(tr('Đang khoá', 'Locked')) : null,
               ),
             ),
             PopupMenuItem(
               value: 'lock',
               child: ListTile(
                 leading: AppIcon(l.locked ? AppIcons.locked : AppIcons.unlocked),
-                title: Text(l.locked ? 'Mở khoá bố cục' : 'Khoá bố cục'),
+                title: Text(l.locked ? tr('Mở khoá bố cục', 'Unlock layout') : tr('Khoá bố cục', 'Lock layout')),
               ),
             ),
           ],
@@ -552,15 +606,15 @@ class _ControlScreenState extends State<ControlScreen> {
         TextButton.icon(
           onPressed: _cancelEdit,
           icon: const AppIcon(AppIcons.close, mini: true),
-          label: const Text('Huỷ'),
+          label: Text(tr('Huỷ', 'Cancel')),
         ),
         IconButton(
-          tooltip: 'Hoàn tác',
+          tooltip: tr('Hoàn tác', 'Undo'),
           onPressed: history.canUndo ? _undo : null,
           icon: const AppIcon(AppIcons.undo),
         ),
         IconButton(
-          tooltip: 'Làm lại',
+          tooltip: tr('Làm lại', 'Redo'),
           onPressed: history.canRedo ? _redo : null,
           icon: const AppIcon(AppIcons.redo),
         ),
@@ -579,8 +633,17 @@ class _ControlScreenState extends State<ControlScreen> {
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 AppIcon(AppIcons.delete, color: _dragging ? t.bad : t.textMuted, mini: true),
                 const SizedBox(width: Gap.xs),
-                Text(_dragging ? 'Thả vào đây để xoá' : 'Sửa bố cục · kéo để di chuyển',
-                    style: AppText.label.copyWith(color: _dragging ? t.bad : t.textMuted)),
+                // Màn hẹp / chữ tiếng Anh dài: cắt bớt thay vì tràn thanh công cụ
+                Flexible(
+                  child: Text(
+                    _dragging
+                        ? tr('Thả vào đây để xoá', 'Drop here to delete')
+                        : tr('Sửa bố cục · kéo để di chuyển', 'Edit layout · drag to move'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.label.copyWith(color: _dragging ? t.bad : t.textMuted),
+                  ),
+                ),
               ]),
             ),
           ),
@@ -589,13 +652,13 @@ class _ControlScreenState extends State<ControlScreen> {
         OutlinedButton.icon(
           onPressed: _openAddSheet,
           icon: const AppIcon(AppIcons.plus, mini: true),
-          label: const Text('Thêm'),
+          label: Text(tr('Thêm', 'Add')),
         ),
         const SizedBox(width: Gap.s),
         FilledButton.icon(
           onPressed: _saveEdit,
           icon: const AppIcon(AppIcons.save, mini: true),
-          label: const Text('Lưu'),
+          label: Text(tr('Lưu', 'Save')),
         ),
       ],
     );
@@ -646,7 +709,7 @@ class _ControlScreenState extends State<ControlScreen> {
           content: SizedBox(
             width: 420,
             child: rules.isEmpty
-                ? const Text('Input này chưa đi vào kênh nào.')
+                ? Text(tr('Input này chưa đi vào kênh nào.', 'This Input does not drive any channel yet.'))
                 : ListView(shrinkWrap: true, children: [
                     for (final r in rules)
                       ListTile(
@@ -658,12 +721,12 @@ class _ControlScreenState extends State<ControlScreen> {
                                 : (mixer?.isActive(r.id) == true ? t.accent : t.disabled)),
                         title: Text(r.describe(inputs, chName: profile.chLabel)),
                         subtitle: Text(mixer?.isPending(r.id) == true
-                            ? 'Chờ về giữa'
-                            : (mixer?.isActive(r.id) == true ? 'Đang tác động' : 'Không tác động')),
+                            ? tr('Chờ về giữa', 'Waiting for center')
+                            : (mixer?.isActive(r.id) == true ? tr('Đang tác động', 'Active') : tr('Không tác động', 'Inactive'))),
                       ),
                   ]),
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Đóng', 'Close')))],
         );
       },
     );
@@ -694,7 +757,7 @@ class _ControlScreenState extends State<ControlScreen> {
     if (it.kind.isControl && (id == null || profile.input(id) == null)) {
       return ItemFrame(
         label: it.kind.label,
-        child: Center(child: Text('Chưa gắn Input', style: AppText.label.copyWith(color: t.textMuted))),
+        child: Center(child: Text(tr('Chưa gắn Input', 'No Input bound'), style: AppText.label.copyWith(color: t.textMuted))),
       );
     }
     switch (it.kind) {
@@ -863,22 +926,31 @@ class _ControlScreenState extends State<ControlScreen> {
       padding: const EdgeInsets.symmetric(horizontal: Gap.xs, vertical: Gap.xs),
       child: Row(
         children: [
-          IconButton.outlined(
-            onPressed: c.gear > 1 ? c.gearDown : null,
-            icon: const AppIcon(AppIcons.minus),
+          // Nhấn giữ đổi số liên tục, nhịp đều chậm để kịp dừng đúng số
+          HoldRepeat(
+            onStep: c.gear > 1 ? (_) => c.gearDown() : null,
+            accelerate: false,
+            child: IconButton.outlined(
+              onPressed: c.gear > 1 ? c.gearDown : null,
+              icon: const AppIcon(AppIcons.minus),
+            ),
           ),
           Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Text('Số $g', style: AppText.display.copyWith(fontSize: 26, color: t.text)),
-                Text('Ga tối đa $limit%', style: AppText.caption.copyWith(color: t.textMuted, letterSpacing: 0)),
+                Text(tr('Số $g', 'Gear $g'), style: AppText.display.copyWith(fontSize: 26, color: t.text)),
+                Text(tr('Ga tối đa $limit%', 'Max throttle $limit%'), style: AppText.caption.copyWith(color: t.textMuted, letterSpacing: 0)),
               ]),
             ),
           ),
-          IconButton.outlined(
-            onPressed: c.gear < profile.gears.gearCount ? c.gearUp : null,
-            icon: const AppIcon(AppIcons.plus),
+          HoldRepeat(
+            onStep: c.gear < profile.gears.gearCount ? (_) => c.gearUp() : null,
+            accelerate: false,
+            child: IconButton.outlined(
+              onPressed: c.gear < profile.gears.gearCount ? c.gearUp : null,
+              icon: const AppIcon(AppIcons.plus),
+            ),
           ),
         ],
       ),
@@ -888,21 +960,28 @@ class _ControlScreenState extends State<ControlScreen> {
   Widget _trimBox(String? label) {
     final t = context.tokens;
     final s = profile.steering;
+    final canLeft = s != null && s.trimUs > -200, canRight = s != null && s.trimUs < 200;
     return ItemFrame(
       label: label,
       padding: const EdgeInsets.symmetric(horizontal: Gap.xs, vertical: Gap.xs),
       child: Row(
         children: [
-          OutlinedButton(onPressed: s == null ? null : () => _trim(-5), child: const Text('◀')),
+          HoldRepeat(
+            onStep: canLeft ? (_) => _trim(-5) : null,
+            child: OutlinedButton(onPressed: canLeft ? () => _trim(-5) : null, child: const Text('◀')),
+          ),
           Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: s == null
-                  ? Text('Chưa chọn kênh Lái', style: AppText.label.copyWith(color: t.textMuted))
+                  ? Text(tr('Chưa chọn kênh Lái', 'No steering channel'), style: AppText.label.copyWith(color: t.textMuted))
                   : Text('Trim ${s.trimUs} µs', style: AppText.metric.copyWith(color: t.text)),
             ),
           ),
-          OutlinedButton(onPressed: s == null ? null : () => _trim(5), child: const Text('▶')),
+          HoldRepeat(
+            onStep: canRight ? (_) => _trim(5) : null,
+            child: OutlinedButton(onPressed: canRight ? () => _trim(5) : null, child: const Text('▶')),
+          ),
         ],
       ),
     );
@@ -998,7 +1077,7 @@ class _ArmButtonState extends State<_ArmButton> with SingleTickerProviderStateMi
                 else
                   AppIcon(armed ? AppIcons.unlocked : AppIcons.locked, mini: true, color: color),
                 const SizedBox(width: Gap.xs),
-                Text(armed ? 'ARMED' : (ready ? 'Giữ để ARM' : arm.state.label),
+                Text(armed ? 'ARMED' : (ready ? tr('Giữ để ARM', 'Hold to ARM') : arm.state.label),
                     style: AppText.label.copyWith(color: color, fontWeight: FontWeight.w700)),
               ]),
             ),

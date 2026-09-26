@@ -6,6 +6,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../services/car_discovery.dart';
 import '../services/quick_ping.dart';
@@ -29,7 +30,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
   int step = 0;
   late final CarProfile p = CarProfile(
     id: CarProfile.newId(),
-    name: widget.repo.uniqueName('Xe mới'),
+    name: widget.repo.uniqueName(tr('Xe mới', 'New car')),
     connType: ConnType.wifi,
     wifi: WifiConn(),
     ble: BleConn(),
@@ -108,13 +109,13 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
           .first
           .timeout(const Duration(seconds: 3));
       if (adapter != BluetoothAdapterState.on) {
-        _snack('Hãy bật Bluetooth trên điện thoại');
+        _snack(tr('Hãy bật Bluetooth trên điện thoại', 'Turn on Bluetooth on the phone'));
         return;
       }
       setState(() => results = []);
       await FlutterBluePlus.startScan(withServices: [BleUuids.service], timeout: const Duration(seconds: 6));
     } catch (e) {
-      _snack('Không quét được Bluetooth trên thiết bị này');
+      _snack(tr('Không quét được Bluetooth trên thiết bị này', 'Bluetooth scanning is not available on this device'));
     }
   }
 
@@ -141,7 +142,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
       finding = false;
       found = r;
     });
-    if (r.isEmpty) _snack('Không thấy xe nào trong mạng điện thoại đang nối');
+    if (r.isEmpty) _snack(tr('Không thấy xe nào trong mạng điện thoại đang nối', 'No car found on the network the phone is on'));
   }
 
   void _pickFound(FoundCar f) {
@@ -187,13 +188,13 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
       final go = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Chưa kiểm tra được kết nối'),
+          title: Text(tr('Chưa kiểm tra được kết nối', 'Connection not verified')),
           content: Text(pingResult == null
-              ? 'Bạn chưa bấm Kiểm tra. Xe có thể đang tắt — vẫn lưu hồ sơ được và kết nối sau.'
-              : 'Xe không phản hồi (${pingResult!.error}). Xe có thể đang tắt — vẫn lưu hồ sơ được.'),
+              ? tr('Bạn chưa bấm Kiểm tra. Xe có thể đang tắt — vẫn lưu hồ sơ được và kết nối sau.', 'You have not tapped Test. The car may be off — you can still save the profile and connect later.')
+              : tr('Xe không phản hồi (${pingResult!.error}). Xe có thể đang tắt — vẫn lưu hồ sơ được.', 'The car did not respond (${pingResult!.error}). It may be off — you can still save the profile.')),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Quay lại')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Vẫn lưu')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Quay lại', 'Back'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Vẫn lưu', 'Save anyway'))),
           ],
         ),
       );
@@ -211,7 +212,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
       await widget.repo.save(p);
       if (mounted) Navigator.pop(context, p);
     } catch (e) {
-      _snack('Không lưu được: $e');
+      _snack(tr('Không lưu được: $e', 'Could not save: $e'));
       if (mounted) setState(() => saving = false);
     }
   }
@@ -219,9 +220,13 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    const titles = ['Tên và kiểu kết nối', 'Thông tin kết nối', 'Mẫu khởi đầu'];
+    final titles = [
+      tr('Tên và kiểu kết nối', 'Name and connection type'),
+      tr('Thông tin kết nối', 'Connection details'),
+      tr('Mẫu khởi đầu', 'Starting template'),
+    ];
     return Scaffold(
-      appBar: AppBar(title: const Text('Tạo xe mới')),
+      appBar: AppBar(title: Text(tr('Tạo xe mới', 'New car'))),
       body: Column(
         children: [
           Padding(
@@ -246,7 +251,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(Gap.l, Gap.m, Gap.l, 0),
             child: Row(children: [
-              Text('BƯỚC ${step + 1}/3', style: AppText.caption.copyWith(color: t.accent)),
+              Text(tr('BƯỚC ${step + 1}/3', 'STEP ${step + 1}/3'), style: AppText.caption.copyWith(color: t.accent)),
               const SizedBox(width: Gap.s),
               Text(titles[step], style: AppText.title.copyWith(color: t.text)),
             ]),
@@ -273,7 +278,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
                 OutlinedButton.icon(
                   onPressed: saving ? null : () => setState(() => step--),
                   icon: const AppIcon(AppIcons.back, mini: true),
-                  label: const Text('Quay lại'),
+                  label: Text(tr('Quay lại', 'Back')),
                 ),
               const Spacer(),
               FilledButton(
@@ -282,7 +287,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
                     : step < 2
                         ? () => setState(() => step++)
                         : _finish,
-                child: Text(step < 2 ? 'Tiếp' : 'Tạo xe'),
+                child: Text(step < 2 ? tr('Tiếp', 'Next') : tr('Tạo xe', 'Create car')),
               ),
             ],
           ),
@@ -296,7 +301,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
           controller: _name,
           maxLength: 32,
           autofocus: true,
-          decoration: InputDecoration(labelText: 'Tên xe', hintText: 'Xe tải đỏ', errorText: _errors['name']),
+          decoration: InputDecoration(labelText: tr('Tên xe', 'Car name'), hintText: tr('Xe tải đỏ', 'Red truck'), errorText: _errors['name']),
           onChanged: (v) => setState(() => p.name = v),
         ),
         const SizedBox(height: Gap.m),
@@ -320,18 +325,21 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
     return [
       if (p.connType == ConnType.wifi) ...[
         Text(
-            'Nối điện thoại vào WiFi riêng của xe (mặc định "RC-CAR", mật khẩu 12345678), '
-            'hoặc vào cùng router với xe nếu xe đã được cài vào router nhà. Bấm Tìm xe để điền tự động.',
+            tr(
+                'Nối điện thoại vào WiFi riêng của xe (mặc định "RC-CAR", mật khẩu 12345678), '
+                    'hoặc vào cùng router với xe nếu xe đã được cài vào router nhà. Bấm Tìm xe để điền tự động.',
+                'Connect the phone to the car WiFi (default "RC-CAR", password 12345678), '
+                    'or to the same router as the car if it was set up on your home router. Tap Find car to fill in automatically.'),
             style: AppText.label.copyWith(color: t.textMuted)),
         const SizedBox(height: Gap.m),
         Row(children: [
-          Expanded(child: Text('Xe trong mạng', style: AppText.title.copyWith(color: t.text))),
+          Expanded(child: Text(tr('Xe trong mạng', 'Cars on the network'), style: AppText.title.copyWith(color: t.text))),
           OutlinedButton.icon(
             onPressed: finding ? null : _find,
             icon: finding
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const AppIcon(AppIcons.scan, mini: true),
-            label: Text(finding ? 'Đang tìm' : 'Tìm xe'),
+            label: Text(finding ? tr('Đang tìm', 'Searching') : tr('Tìm xe', 'Find car')),
           ),
         ]),
         for (final f in found)
@@ -352,7 +360,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
         TextField(
           controller: _ip,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(labelText: 'Địa chỉ IP', errorText: e['ip']),
+          decoration: InputDecoration(labelText: tr('Địa chỉ IP', 'IP address'), errorText: e['ip']),
           onChanged: (v) => setState(() {
             p.wifi!.ip = v.trim();
             pingResult = null;
@@ -362,7 +370,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
         TextField(
           controller: _port,
           keyboardType: TextInputType.number,
-          decoration: InputDecoration(labelText: 'Port UDP', errorText: e['port']),
+          decoration: InputDecoration(labelText: tr('Port UDP', 'UDP port'), errorText: e['port']),
           onChanged: (v) => setState(() {
             p.wifi!.port = int.tryParse(v.trim()) ?? 0;
             pingResult = null;
@@ -371,25 +379,25 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
         const SizedBox(height: Gap.m),
         TextField(
           controller: _ssid,
-          decoration: const InputDecoration(labelText: 'SSID (tuỳ chọn)'),
+          decoration: InputDecoration(labelText: tr('SSID (tuỳ chọn)', 'SSID (optional)')),
           onChanged: (v) => p.wifi!.ssid = v.trim().isEmpty ? null : v.trim(),
         ),
       ] else ...[
         Row(children: [
-          Expanded(child: Text('Xe tìm thấy', style: AppText.title.copyWith(color: t.text))),
+          Expanded(child: Text(tr('Xe tìm thấy', 'Cars found'), style: AppText.title.copyWith(color: t.text))),
           OutlinedButton.icon(
             onPressed: scanning ? null : _scan,
             icon: scanning
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const AppIcon(AppIcons.scan, mini: true),
-            label: Text(scanning ? 'Đang quét' : 'Quét'),
+            label: Text(scanning ? tr('Đang quét', 'Scanning') : tr('Quét', 'Scan')),
           ),
         ]),
         const SizedBox(height: Gap.s),
         if (results.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: Gap.l),
-            child: Text('Chưa thấy xe nào. Bật nguồn xe rồi bấm Quét, hoặc nhập tay bên dưới.',
+            child: Text(tr('Chưa thấy xe nào. Bật nguồn xe rồi bấm Quét, hoặc nhập tay bên dưới.', 'No car found yet. Power on the car and tap Scan, or enter it below.'),
                 textAlign: TextAlign.center, style: AppText.label.copyWith(color: t.textMuted)),
           )
         else
@@ -406,7 +414,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
         const SizedBox(height: Gap.m),
         TextField(
           controller: _devName,
-          decoration: const InputDecoration(labelText: 'Tên thiết bị BLE'),
+          decoration: InputDecoration(labelText: tr('Tên thiết bị BLE', 'BLE device name')),
           onChanged: (v) => setState(() => p.ble!.deviceName = v.trim()),
         ),
       ],
@@ -417,7 +425,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
           icon: pinging
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
               : const AppIcon(AppIcons.signal, mini: true),
-          label: const Text('Kiểm tra'),
+          label: Text(tr('Kiểm tra', 'Test')),
         ),
         const SizedBox(width: Gap.m),
         if (pingResult != null)
@@ -426,7 +434,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
       if (pingResult?.ok == false)
         Padding(
           padding: const EdgeInsets.only(top: Gap.s),
-          child: Text('Vẫn lưu được hồ sơ khi xe đang tắt.', style: AppText.label.copyWith(color: t.textMuted)),
+          child: Text(tr('Vẫn lưu được hồ sơ khi xe đang tắt.', 'You can still save the profile while the car is off.'), style: AppText.label.copyWith(color: t.textMuted)),
         ),
     ];
   }
@@ -435,7 +443,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
     final t = context.tokens;
     final name = r.device.platformName.isNotEmpty
         ? r.device.platformName
-        : (r.advertisementData.advName.isNotEmpty ? r.advertisementData.advName : 'Không tên');
+        : (r.advertisementData.advName.isNotEmpty ? r.advertisementData.advName : tr('Không tên', 'Unnamed'));
     final sel = p.ble!.mac.toUpperCase() == r.device.remoteId.str.toUpperCase();
     return Card(
       shape: RoundedRectangleBorder(
@@ -470,7 +478,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
                   value: tpl,
                   enabled: tpl != ProfileTemplate.copy || others.isNotEmpty,
                   title: Text(tpl.label),
-                  subtitle: Text(tpl == ProfileTemplate.copy && others.isEmpty ? 'Chưa có xe nào để sao chép' : tpl.description),
+                  subtitle: Text(tpl == ProfileTemplate.copy && others.isEmpty ? tr('Chưa có xe nào để sao chép', 'No car to copy from yet') : tpl.description),
                 ),
               ),
           ],
@@ -481,7 +489,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
           padding: const EdgeInsets.only(top: Gap.m),
           child: DropdownButtonFormField<String>(
             initialValue: copyFromId,
-            decoration: const InputDecoration(labelText: 'Sao chép từ xe'),
+            decoration: InputDecoration(labelText: tr('Sao chép từ xe', 'Copy from car')),
             items: [for (final o in others) DropdownMenuItem(value: o.id, child: Text(o.name))],
             onChanged: (v) => setState(() => copyFromId = v),
           ),

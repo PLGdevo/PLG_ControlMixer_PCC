@@ -2,6 +2,7 @@
 // và cài đặt tự về của cần gạt (H3b).
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/control_layout.dart';
 import '../models/input_def.dart';
@@ -53,7 +54,7 @@ class PropertiesPanel extends StatelessWidget {
     final old = y ? item.inputIdY : item.inputId;
     if (id == old) return;
     if (id != null && id != _newInput && item.kind == ItemKind.stick2D && id == (y ? item.inputId : item.inputIdY)) {
-      onMessage('Hai trục phải dùng hai Input khác nhau');
+      onMessage(tr('Hai trục phải dùng hai Input khác nhau', 'The two axes need two different Inputs'));
       return;
     }
     ControlItem? moved;
@@ -63,7 +64,7 @@ class PropertiesPanel extends StatelessWidget {
       moved = layout.bindInput(item, target, y: y);
     });
     final m = moved;
-    if (m != null && m.id != item.id) onMessage('Đã chuyển Input từ ${itemTitle(m).toLowerCase()} sang phần tử này');
+    if (m != null && m.id != item.id) onMessage(tr('Đã chuyển Input từ ${itemTitle(m).toLowerCase()} sang phần tử này', 'Moved the Input from ${itemTitle(m).toLowerCase()} to this control'));
   }
 
   /// Tên hiển thị của phần tử: nhãn tự đặt, nếu không thì loại phần tử
@@ -94,7 +95,7 @@ class PropertiesPanel extends StatelessWidget {
       final holder = layout.itemForInput(d.id);
       return holder == null || holder.id == item.id
           ? d.name
-          : '${d.name} (đang ở ${holder.kind.label.toLowerCase()})';
+          : tr('${d.name} (đang ở ${holder.kind.label.toLowerCase()})', '${d.name} (on ${holder.kind.label.toLowerCase()})');
     }
 
     Widget inputSlot(String? value, {bool y = false}) {
@@ -106,12 +107,12 @@ class PropertiesPanel extends StatelessWidget {
           initialValue: d == null ? null : value,
           isDense: true,
           isExpanded: true,
-          decoration: InputDecoration(labelText: k == ItemKind.stick2D ? 'Input trục ${y ? 'Y' : 'X'}' : 'Input'),
+          decoration: InputDecoration(labelText: k == ItemKind.stick2D ? tr('Input trục ${y ? 'Y' : 'X'}', 'Input axis ${y ? 'Y' : 'X'}') : 'Input'),
           items: [
-            const DropdownMenuItem<String?>(value: null, child: Text('Chưa gắn')),
+            DropdownMenuItem<String?>(value: null, child: Text(tr('Chưa gắn', 'Not bound'))),
             for (final o in options)
               DropdownMenuItem<String?>(value: o.id, child: Text(inputOption(o), overflow: TextOverflow.ellipsis)),
-            const DropdownMenuItem<String?>(value: _newInput, child: Text('+ Tạo Input mới')),
+            DropdownMenuItem<String?>(value: _newInput, child: Text(tr('+ Tạo Input mới', '+ New Input'))),
           ],
           onChanged: (v) => _setInput(v, y: y),
         ),
@@ -143,7 +144,7 @@ class PropertiesPanel extends StatelessWidget {
                 ],
               ]),
             if (k == ItemKind.gauge)
-              section('Ô đồng hồ', [
+              section(tr('Ô đồng hồ', 'Gauge'), [
                 DropdownButtonFormField<String>(
                   key: ValueKey(item.gaugeKey),
                   initialValue: item.gaugeKey,
@@ -152,7 +153,7 @@ class PropertiesPanel extends StatelessWidget {
                   onChanged: (v) => _edit(() => item.gaugeKey = v),
                 ),
               ]),
-            section('Nhãn', [
+            section(tr('Nhãn', 'Label'), [
               TextFormField(
                 key: ValueKey('label-${item.id}'),
                 initialValue: item.style.labelText ?? '',
@@ -168,7 +169,7 @@ class PropertiesPanel extends StatelessWidget {
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
-                title: const Text('Hiện nhãn'),
+                title: Text(tr('Hiện nhãn', 'Show label')),
                 value: item.style.showLabel,
                 onChanged: (v) => _edit(() => item.style.showLabel = v),
               ),
@@ -177,7 +178,7 @@ class PropertiesPanel extends StatelessWidget {
               section('Icon', [
                 Wrap(spacing: Gap.xs, runSpacing: Gap.xs, children: [
                   ChoiceChip(
-                    label: const Text('Không'),
+                    label: Text(tr('Không', 'None')),
                     selected: item.style.iconName == null,
                     onSelected: (_) => _edit(() => item.style.iconName = null),
                   ),
@@ -189,8 +190,12 @@ class PropertiesPanel extends StatelessWidget {
                     ),
                 ]),
               ]),
+            if (k != ItemKind.statusBadge)
+              section(tr('Màu', 'Color'), [
+                _ColorPicker(value: item.style.color, onChanged: (a) => _edit(() => item.style.color = a)),
+              ]),
             if (hasValue)
-              section('Hiện giá trị', [
+              section(tr('Hiện giá trị', 'Show value'), [
                 SegmentedButton<ValueDisplay>(
                   showSelectedIcon: false,
                   segments: [for (final v in ValueDisplay.values) ButtonSegment(value: v, label: Text(v.label))],
@@ -199,7 +204,7 @@ class PropertiesPanel extends StatelessWidget {
                 ),
               ]),
             if (isStick)
-              section('Kích thước núm cầm', [
+              section(tr('Kích thước núm cầm', 'Knob size'), [
                 SegmentedButton<KnobSize>(
                   showSelectedIcon: false,
                   segments: [for (final v in KnobSize.values) ButtonSegment(value: v, label: Text(v.label))],
@@ -208,7 +213,7 @@ class PropertiesPanel extends StatelessWidget {
                 ),
               ]),
             if (isStick) ...[
-              section(k == ItemKind.stick2D ? 'Tự về · trục X' : 'Tự về', [
+              section(k == ItemKind.stick2D ? tr('Tự về · trục X', 'Return · X axis') : tr('Tự về', 'Return'), [
                 ReturnEditor(
                   cfg: item.returnCfg ??= ReturnConfig(),
                   isThrottle: profile.isThrottleInput(item.inputId),
@@ -218,7 +223,7 @@ class PropertiesPanel extends StatelessWidget {
                 ),
               ]),
               if (k == ItemKind.stick2D)
-                section('Tự về · trục Y', [
+                section(tr('Tự về · trục Y', 'Return · Y axis'), [
                   ReturnEditor(
                     cfg: item.returnCfgY ??= ReturnConfig(),
                     isThrottle: profile.isThrottleInput(item.inputIdY),
@@ -229,7 +234,7 @@ class PropertiesPanel extends StatelessWidget {
                 ]),
             ],
             if (hasValue)
-              section('Vùng chết: ${item.style.deadzonePct.round()}%', [
+              section(tr('Vùng chết: ${item.style.deadzonePct.round()}%', 'Deadzone: ${item.style.deadzonePct.round()}%'), [
                 Slider(
                   value: item.style.deadzonePct,
                   min: 0,
@@ -245,11 +250,11 @@ class PropertiesPanel extends StatelessWidget {
             if (k.isControl)
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Rung khi chạm'),
+                title: Text(tr('Rung khi chạm', 'Vibrate on touch')),
                 value: item.style.haptic,
                 onChanged: (v) => _edit(() => item.style.haptic = v),
               ),
-            section('Độ trong suốt: ${item.style.opacityPct.round()}%', [
+            section(tr('Độ trong suốt: ${item.style.opacityPct.round()}%', 'Opacity: ${item.style.opacityPct.round()}%'), [
               Slider(
                 value: item.style.opacityPct,
                 min: 30,
@@ -265,19 +270,76 @@ class PropertiesPanel extends StatelessWidget {
             if (isThrottle && k.isControl)
               Padding(
                 padding: const EdgeInsets.only(top: Gap.s),
-                child: Text('Phần tử này điều khiển kênh Ga — bố cục bắt buộc phải có.',
+                child: Text(tr('Phần tử này điều khiển kênh Ga — bố cục bắt buộc phải có.', 'This control drives the throttle channel — the layout must keep it.'),
                     style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
               ),
             const SizedBox(height: Gap.m),
             OutlinedButton.icon(
               onPressed: onDelete,
               icon: AppIcon(AppIcons.delete, color: t.bad, mini: true),
-              label: Text('Xoá khỏi màn', style: TextStyle(color: t.bad)),
+              label: Text(tr('Xoá khỏi màn', 'Remove from screen'), style: TextStyle(color: t.bad)),
             ),
           ],
         ),
       ),
     );
+  }
+}
+
+/// Màu riêng của phần tử: theo màu chủ đạo của app ("A") hoặc một màu nhấn, kể cả đỏ / vàng
+class _ColorPicker extends StatelessWidget {
+  const _ColorPicker({required this.value, required this.onChanged});
+
+  final AccentColor? value;
+  final ValueChanged<AccentColor?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    Widget dot(AccentColor? a) {
+      final on = value == a;
+      final label = a?.label ?? tr('Theo màu app', 'App color');
+      final onFill = a == null ? t.onAccentFill : AppTokens.of(a, Brightness.dark).onAccentFill;
+      return Tooltip(
+        message: label,
+        child: Semantics(
+          button: true,
+          selected: on,
+          label: label,
+          child: InkResponse(
+            onTap: () => onChanged(a),
+            radius: 22,
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: Center(
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: a?.fill ?? t.accentFill,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: on ? t.text : t.line, width: on ? 3 : 1),
+                  ),
+                  child: on
+                      ? AppIcon(AppIcons.check, mini: true, color: onFill)
+                      : a == null
+                          ? Text('A', style: AppText.label.copyWith(color: onFill, fontWeight: FontWeight.w700))
+                          : null,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Wrap(children: [dot(null), for (final a in AccentColor.values) dot(a)]),
+      Text(value?.label ?? tr('Theo màu chủ đạo của app', 'Follows the app accent color'),
+          style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
+    ]);
   }
 }
 
@@ -299,7 +361,7 @@ class _InputEditor extends StatelessWidget {
       TextFormField(
         initialValue: d.name,
         maxLength: 24,
-        decoration: const InputDecoration(labelText: 'Tên Input', isDense: true, counterText: ''),
+        decoration: InputDecoration(labelText: tr('Tên Input', 'Input name'), isDense: true, counterText: ''),
         onChanged: (v) {
           if (v.trim().isNotEmpty) edit(() => d.name = v.trim());
         },
@@ -315,7 +377,7 @@ class _InputEditor extends StatelessWidget {
       ],
       if (d.type == InputType.binary || d.type == InputType.ternary)
         NumberField(
-          label: 'Giá trị khi tắt',
+          label: tr('Giá trị khi tắt', 'Value when off'),
           unit: '%',
           value: d.levels.offPct.round(),
           min: -100,
@@ -330,9 +392,9 @@ class _InputEditor extends StatelessWidget {
           initialValue: profile.quickRoute(d.id),
           isDense: true,
           isExpanded: true,
-          decoration: const InputDecoration(labelText: 'Gửi tới kênh'),
+          decoration: InputDecoration(labelText: tr('Gửi tới kênh', 'Send to channel')),
           items: [
-            const DropdownMenuItem<int?>(value: null, child: Text('Không gửi (chỉ dùng trong luật mix)')),
+            DropdownMenuItem<int?>(value: null, child: Text(tr('Không gửi (chỉ dùng trong luật mix)', 'Do not send (use in mix rules only)'))),
             for (var i = 1; i <= 10; i++) DropdownMenuItem<int?>(value: i, child: Text(profile.chLabel(i))),
           ],
           onChanged: (v) => edit(() => profile.setQuickRoute(d.id, v)),
@@ -340,10 +402,10 @@ class _InputEditor extends StatelessWidget {
       else
         Row(children: [
           Expanded(
-            child: Text('Input này có luật mix riêng (${profile.rulesUsing(d.id).length} luật).',
+            child: Text(tr('Input này có luật mix riêng (${profile.rulesUsing(d.id).length} luật).', 'This Input has its own mix rules (${profile.rulesUsing(d.id).length}).'),
                 style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
           ),
-          TextButton(onPressed: onOpenMix, child: const Text('Dùng tab Mix')),
+          TextButton(onPressed: onOpenMix, child: Text(tr('Dùng tab Mix', 'Use the Mix tab'))),
         ]),
     ]);
   }
@@ -404,11 +466,12 @@ class _ReturnEditorState extends State<ReturnEditor> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Nhớ vị trí cần ga?'),
-          content: const Text('Mở lại màn Lái thì ga sẽ ở vị trí cũ. Xe có thể chạy ngay khi vào màn.'),
+          title: Text(tr('Nhớ vị trí cần ga?', 'Remember throttle position?')),
+          content: Text(tr('Mở lại màn Lái thì ga sẽ ở vị trí cũ. Xe có thể chạy ngay khi vào màn.',
+              'When you reopen the drive screen the throttle stays where it was. The car may move right away.')),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Huỷ')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Vẫn bật')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Huỷ', 'Cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Vẫn bật', 'Turn on anyway'))),
           ],
         ),
       );
@@ -428,9 +491,9 @@ class _ReturnEditorState extends State<ReturnEditor> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Wrap(spacing: Gap.xs, runSpacing: Gap.xs, children: [
-          ActionChip(label: const Text('Về 0% ngay'), onPressed: () => _preset(ReturnConfig.instant())),
-          ActionChip(label: const Text('Về 0% êm'), onPressed: () => _preset(ReturnConfig.smooth())),
-          ActionChip(label: const Text('Giữ vị trí'), onPressed: () => _preset(ReturnConfig.holdPosition())),
+          ActionChip(label: Text(tr('Về 0% ngay', 'To 0% instantly')), onPressed: () => _preset(ReturnConfig.instant())),
+          ActionChip(label: Text(tr('Về 0% êm', 'To 0% smoothly')), onPressed: () => _preset(ReturnConfig.smooth())),
+          ActionChip(label: Text(tr('Giữ vị trí', 'Hold position')), onPressed: () => _preset(ReturnConfig.holdPosition())),
         ]),
         const SizedBox(height: Gap.s),
         SegmentedButton<ReturnMode>(
@@ -440,7 +503,7 @@ class _ReturnEditorState extends State<ReturnEditor> {
           onSelectionChanged: (s) => _edit(() => c.mode = s.first),
         ),
         if (!hold) ...[
-          label('Vị trí về: ${c.targetPct.round()}%'),
+          label(tr('Vị trí về: ${c.targetPct.round()}%', 'Return to: ${c.targetPct.round()}%')),
           Slider(
             value: c.targetPct,
             min: -100,
@@ -449,7 +512,7 @@ class _ReturnEditorState extends State<ReturnEditor> {
             onChangeStart: (_) => widget.beforeChange(),
             onChanged: (v) => _slide(() => c.targetPct = v.roundToDouble()),
           ),
-          label('Trễ trước khi về: ${c.delayMs} ms'),
+          label(tr('Trễ trước khi về: ${c.delayMs} ms', 'Delay before return: ${c.delayMs} ms')),
           Slider(
             value: c.delayMs.toDouble(),
             min: 0,
@@ -458,7 +521,7 @@ class _ReturnEditorState extends State<ReturnEditor> {
             onChangeStart: (_) => widget.beforeChange(),
             onChanged: (v) => _slide(() => c.delayMs = v.round()),
           ),
-          label('Thời gian về: ${c.durationMs == 0 ? 'ngay lập tức' : '${c.durationMs} ms'}'),
+          label(tr('Thời gian về: ${c.durationMs == 0 ? 'ngay lập tức' : '${c.durationMs} ms'}', 'Return time: ${c.durationMs == 0 ? 'instant' : '${c.durationMs} ms'}')),
           Slider(
             value: c.durationMs.toDouble(),
             min: 0,
@@ -479,14 +542,14 @@ class _ReturnEditorState extends State<ReturnEditor> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: const Text('Chỉ tự về ở nửa dương'),
+            title: Text(tr('Chỉ tự về ở nửa dương', 'Return on positive half only')),
             value: c.positiveOnly,
             onChanged: (v) => _edit(() => c.positiveOnly = v),
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: const Text('Chỉ tự về ở nửa âm'),
+            title: Text(tr('Chỉ tự về ở nửa âm', 'Return on negative half only')),
             value: c.negativeOnly,
             onChanged: (v) => _edit(() => c.negativeOnly = v),
           ),
@@ -495,7 +558,7 @@ class _ReturnEditorState extends State<ReturnEditor> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: const Text('Nhớ vị trí khi thoát'),
+            title: Text(tr('Nhớ vị trí khi thoát', 'Remember position on exit')),
             value: c.rememberOnExit,
             onChanged: _setRemember,
           ),
@@ -506,11 +569,11 @@ class _ReturnEditorState extends State<ReturnEditor> {
             AppIcon(AppIcons.warning, color: t.warn, mini: true),
             const SizedBox(width: Gap.xs),
             Expanded(
-              child: Text('Xe có thể tiếp tục chạy sau khi thả tay',
+              child: Text(tr('Xe có thể tiếp tục chạy sau khi thả tay', 'The car may keep moving after you let go'),
                   style: AppText.label.copyWith(color: t.warn, fontSize: 12)),
             ),
           ]),
-        label('Xem trước: kéo rồi thả — ${_preview.round()}%'),
+        label(tr('Xem trước: kéo rồi thả — ${_preview.round()}%', 'Preview: drag and release — ${_preview.round()}%')),
         const SizedBox(height: Gap.xs),
         SizedBox(
           height: 44,

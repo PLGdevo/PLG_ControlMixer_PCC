@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/mixer_rule.dart';
 import '../theme/app_icons.dart';
@@ -67,7 +68,7 @@ class MixRuleCard extends StatelessWidget {
               ),
               Switch(value: on, onChanged: onEnabled),
               IconButton(
-                tooltip: 'Xoá',
+                tooltip: tr('Xoá', 'Delete'),
                 onPressed: onDelete,
                 icon: AppIcon(AppIcons.delete, color: t.textMuted),
               ),

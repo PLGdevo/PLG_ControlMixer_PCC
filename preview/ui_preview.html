@@ -7,7 +7,9 @@
 <!-- Bản xem trước app Flutter (app/lib) — chạy thẳng trong trình duyệt, dữ liệu giả lập, không kết nối xe thật.
      Logic được port từ: models/*, services/{input_manager, condition_engine, mixer_engine, output_pipeline, arm_controller, car_discovery}.dart,
      protocol/net_protocol.dart, layout/*, screens/*, widgets/{condition_builder, mix_preview, mix_rule_card}.dart. Sửa app thì sửa cả file này.
-     Xe giả lập có 3 chế độ mạng (AP / Router / Cấu hình) như firmware net_manager (dac_ta_wifi_3_che_do.md). -->
+     Xe giả lập có 3 chế độ mạng (AP / Router / Cấu hình) như firmware net_manager (dac_ta_wifi_3_che_do.md).
+     Phần tử màn Lái có màu riêng (ItemStyle.color); nút −/+ nhấn giữ để lặp (widgets/hold_repeat.dart).
+     Ngôn ngữ: app dịch đủ VN/EN (l10n/lang.dart); bản xem trước mới dịch màn chính và màn Cài đặt, màn khác giữ tiếng Việt. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -143,6 +145,18 @@ input[type=range]:disabled { cursor: default; opacity: .4; }
 .numfield.err .nv { border-color: var(--bad); color: var(--bad); }
 .numerr { color: var(--bad); font-size: 12px; font-weight: 500; margin-top: -2px; margin-bottom: 4px; }
 .divider { height: 1px; background: var(--line); margin: 12px 0; }
+.langbtn { height: 36px; margin: 0 2px; padding: 0 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text); font-size: 14px; font-weight: 700; cursor: pointer; flex: none; }
+.langbtn .ic { color: var(--textMuted); }
+.swatch { width: 76px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 0; font-size: 13px; font-weight: 500; color: var(--textMuted); text-align: center; cursor: pointer; }
+.swatch > span { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; }
+.swatch.on { color: var(--text); }
+.swatch.on > span { border: 3px solid var(--text); }
+.lprev { position: relative; aspect-ratio: 2; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+.lp-it { position: absolute; padding: 1.5px; }
+.cdot { width: 32px; height: 32px; margin: 6px; border-radius: 50%; border: 1px solid var(--line); display: inline-flex; align-items: center; justify-content: center; color: #191919; font-size: 14px; font-weight: 700; cursor: pointer; padding: 0; }
+.cdot.on { border: 3px solid var(--text); }
+.lp-it > span { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 2px; border-radius: 6px; background: var(--surface2); border: 1px solid var(--line); color: var(--textMuted); font-size: 10px; line-height: 1.1; text-align: center; overflow: hidden; }
+.lp-it.c > span { background: var(--accentContainer); border-color: var(--accent); color: var(--onAccentContainer); }
 .srow { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
 .srow .st { flex: 1; }
 .srow .st small { display: block; color: var(--textMuted); font-size: 13px; }
@@ -327,6 +341,7 @@ const P = {
   redo: 'm15 15 6-6m0 0-6-6m6 6H9a6 6 0 0 0 0 12h3',
   close: 'M6 18 18 6M6 6l12 12',
   delete: 'm14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0',
+  photo: 'm2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z',
   edit: 'm16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10',
   locked: 'M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z',
   unlocked: 'M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z',
@@ -348,6 +363,9 @@ const P = {
   eye: 'M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
   eyeSlash: 'M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88',
   chevronRight: 'm8.25 4.5 7.5 7.5-7.5 7.5',
+  language: 'M10.5 21l5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 0 1 6-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 0 1-3.827-5.802',
+  palette: 'M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008Z',
+  check: 'm4.5 12.75 6 6 9-13.5',
   truck: 'M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12',
   // Icon tự vẽ (app/assets/icons)
   bluetooth: 'M7 7.5 17 16.5 12 21V3l5 4.5-10 9',
@@ -915,7 +933,7 @@ const RM = {
   dz(v, d) { if (d <= 0) return v; const a = Math.abs(v); if (a < d) return 0; return Math.sign(v) * (a - d) / (100 - d) * 100; },
 };
 
-const newStyle = () => ({ label: null, showLabel: true, icon: null, valueDisplay: 'pct', knobSize: 'medium', deadzone: 0, haptic: true, opacity: 100 });
+const newStyle = () => ({ label: null, showLabel: true, icon: null, valueDisplay: 'pct', knobSize: 'medium', deadzone: 0, haptic: true, opacity: 100, color: null });
 function mkItem(kind, x, y, w, h, o = {}) {
   return { id: newId(), kind, input: null, inputY: null, gauge: null, x, y, w, h, style: newStyle(),
     ret: isStickK(kind) ? newRet() : null, retY: kind === 'stick2D' ? newRet() : null, saved: null, savedY: null, ...o };
@@ -1316,7 +1334,7 @@ function discover(id, done) {
 //  Trạng thái giả lập
 // ============================================================================
 const S = {
-  theme: 'dark', screen: 'garage', history: [], profiles: [],
+  theme: 'dark', accent: 'lime', lang: 'vi', screen: 'garage', history: [], profiles: [],
   connectedId: null, link: 'disconnected', connectingId: null, ping: {}, pinging: {}, carCfg: {},
   wizard: null, settings: null, chEdit: null, mixEdit: null, inEdit: null, net: null, ctl: null,
   pos: {}, swPos: {}, gear: 1, tel: null, overlay: null, raw: {}, cbGroup: {}, arm: new ArmController(),
@@ -1331,6 +1349,41 @@ const S = {
   S.profiles.push(p1, p2);
 }
 const DEMO_BLE = '24:6F:28:AA:10:3C';
+/** l10n/lang.dart: chuỗi theo ngôn ngữ đang chọn */
+const tr = (vi, en) => (S.lang === 'en' ? en : vi);
+// Màu nhấn (tokens.dart — AccentColor): [tên VN, tên EN, fill, deep, làm màu chủ đạo được?].
+// Đỏ / vàng chỉ dùng cho từng phần tử trên màn Lái, không làm màu chủ đạo để không lẫn với bad / warn.
+const ACCENTS = {
+  lime: ['Xanh chanh', 'Lime', '#9EFF00', '#3D6600'],
+  blue: ['Xanh dương', 'Blue', '#4DA3FF', '#0B5CAD'],
+  teal: ['Xanh ngọc', 'Teal', '#1DE9B6', '#00695C'],
+  purple: ['Tím', 'Purple', '#B388FF', '#6A3FC4'],
+  pink: ['Hồng', 'Pink', '#FF6FB5', '#B0206B'],
+  orange: ['Cam', 'Orange', '#FF9A1F', '#A34E00'],
+  red: ['Đỏ', 'Red', '#FF5A5F', '#B3261E', false],
+  yellow: ['Vàng', 'Yellow', '#FFD60A', '#7A5C00', false],
+};
+const ACCENT_VARS = ['--accent', '--accentFill', '--accentFillPressed', '--onAccentFill', '--accentContainer', '--onAccentContainer', '--bg', '--surface2'];
+const hexRgb = (h) => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+const mixHex = (a, b, t) => { const x = hexRgb(a), y = hexRgb(b); return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join(''); };
+const lum = (h) => hexRgb(h).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+  .reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
+const contrastHex = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+/** AppTokens.of: token nhấn theo màu; màu chủ đạo xanh chanh dùng bảng gốc trong CSS (trả về {}).
+ *  `always`: phần tử có màu riêng — luôn đặt biến, kể cả xanh chanh khi app đang dùng màu khác */
+/** Biến CSS inline cho phần tử có màu riêng (ItemStyle.color) */
+const itemVars = (it) => it.style.color ? Object.entries(accentVars(it.style.color, effectiveTheme(), true)).map(([k, v]) => `${k}:${v}`).join(';') + ';' : '';
+function accentVars(key, t, always = false) {
+  if (key === 'lime' && !always) return {};
+  const [, , fill, deep] = ACCENTS[key], dark = t === 'dark';
+  const v = {
+    '--accent': dark ? fill : deep, '--accentFill': fill, '--accentFillPressed': mixHex(fill, '#ffffff', 0.2),
+    '--onAccentFill': contrastHex(fill, '#191919') >= contrastHex(fill, '#ffffff') ? '#191919' : '#ffffff',
+    '--accentContainer': dark ? `${fill}1F` : mixHex('#ffffff', fill, 0.2), '--onAccentContainer': dark ? mixHex(fill, '#ffffff', 0.4) : '#191919',
+  };
+  if (!dark) Object.assign(v, { '--bg': mixHex('#ffffff', fill, 0.02), '--surface2': mixHex('#ffffff', fill, 0.06) });
+  return v;
+}
 const prof = (id) => S.profiles.find((p) => p.id === id);
 const isConnected = (p) => !!p && S.connectedId === p.id && (S.link === 'connected' || S.link === 'lost');
 /** CarController._onArmChanged: DISARM → hysteresis + khoá an toàn về ban đầu */
@@ -1397,7 +1450,8 @@ function renderOverlay() {
 // ---------- Thành phần dùng lại ----------
 const pill = (c, l) => `<span class="pill" style="color:${c};background:color-mix(in srgb, ${c} 14%, transparent)"><span class="dot"></span>${esc(l)}</span>`;
 function statusPill(state) {
-  const [c, l] = { connected: ['var(--ok)', 'Đã kết nối'], connecting: ['var(--warn)', 'Đang kết nối…'], lost: ['var(--bad)', 'Mất tín hiệu'], disconnected: ['var(--idle)', 'Chưa kết nối'] }[state];
+  const [c, l] = { connected: ['var(--ok)', tr('Đã kết nối', 'Connected')], connecting: ['var(--warn)', tr('Đang kết nối…', 'Connecting…')],
+    lost: ['var(--bad)', tr('Mất tín hiệu', 'Signal lost')], disconnected: ['var(--idle)', tr('Chưa kết nối', 'Not connected')] }[state];
   return pill(c, l);
 }
 const hint = (s) => `<div class="muted" style="font-size:13px;font-weight:500;margin-bottom:12px;white-space:pre-line">${esc(s)}</div>`;
@@ -1417,9 +1471,9 @@ function numField(label, value, o, set) {
   const { min, max, step = 1, unit = '', err } = o;
   const put = (v) => set(clamp(v, min, max));
   return `<div class="numfield${err ? ' err' : ''}"><div class="nl">${esc(label)}</div>
-    <button class="iconbtn outlined" ${value <= min ? 'disabled' : ''} data-act="${A(() => put(value - step))}" data-lp="${A(() => put(value - step * 10))}">${ic('minus', { mini: true })}</button>
+    <button class="iconbtn outlined" ${value <= min ? 'disabled' : ''} data-act="${A(() => put(value - step))}" data-fast="${A(() => put(value - step * 5))}" data-rep="nf:${esc(label)}:-">${ic('minus', { mini: true })}</button>
     <div class="nv">${value}${unit}</div>
-    <button class="iconbtn outlined" ${value >= max ? 'disabled' : ''} data-act="${A(() => put(value + step))}" data-lp="${A(() => put(value + step * 10))}">${ic('plus', { mini: true })}</button></div>
+    <button class="iconbtn outlined" ${value >= max ? 'disabled' : ''} data-act="${A(() => put(value + step))}" data-fast="${A(() => put(value + step * 5))}" data-rep="nf:${esc(label)}:+">${ic('plus', { mini: true })}</button></div>
     ${err ? `<div class="numerr">${esc(err)}</div>` : ''}`;
 }
 function switchRow(label, on, fn, o = {}) {
@@ -1440,12 +1494,12 @@ function connSeg(val, onPick) {
 }
 
 // ============================================================================
-//  Màn "Xe của tôi" (garage_screen.dart)
+//  Màn chính "PCC TX Control" (garage_screen.dart)
 // ============================================================================
 function lastConnected(p) {
-  if (!p.lastConnectedAt) return 'Chưa kết nối lần nào';
+  if (!p.lastConnectedAt) return tr('Chưa kết nối lần nào', 'Never connected');
   const d = new Date(p.lastConnectedAt), two = (n) => String(n).padStart(2, '0');
-  return `Kết nối lần cuối ${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+  return `${tr('Kết nối lần cuối', 'Last connected')} ${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 /** QuickPing giả lập: WiFi trả lời nếu đúng địa chỉ xe giả lập đang nghe, BLE trả lời nếu đúng MAC xe mẫu */
 const carReachable = (conn, ip, port, mac) => conn === 'wifi' ? carAnswers(ip, port) : carUp() && mac.toUpperCase() === DEMO_BLE;
@@ -1517,50 +1571,83 @@ function exportProfile(p) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   snack(`Đã xuất: exports/${safe}.json`);
 }
+/** Chọn ảnh từ máy, thu nhỏ còn tối đa 512 px như ImagePicker(maxWidth/maxHeight: 512) */
+function pickCarPhoto(p) {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = () => {
+    const f = inp.files[0];
+    if (!f) return;
+    const img = new Image(), url = URL.createObjectURL(f);
+    img.onload = () => {
+      const k = Math.min(1, 512 / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      p.photo = cv.toDataURL('image/jpeg', 0.85);
+      render();
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); snack('Không đặt được ảnh: file không phải ảnh'); render(); };
+    img.src = url;
+  };
+  inp.click();
+}
+/** Chưa có ảnh thì mở thẳng thư viện ảnh; có rồi thì hỏi chọn ảnh khác hay bỏ ảnh */
+function carPhoto(p) {
+  if (!p.photo) { pickCarPhoto(p); return; }
+  S.overlay = { type: 'sheet', html: () => `<div class="handle"></div>
+    <div class="row" data-act="${A(() => { S.overlay = null; pickCarPhoto(p); })}">${ic('photo')}Chọn ảnh khác</div>
+    <div class="row" data-act="${A(() => { S.overlay = null; p.photo = null; })}">${ic('delete')}Bỏ ảnh</div>` };
+}
 function garageMenu(ev, p) {
   openMenu(ev, [
-    { icon: 'edit', label: 'Đổi tên', run: () => { S.overlay = { type: 'rename', pid: p.id, value: p.name }; } },
-    { icon: 'duplicate', label: 'Nhân bản', run: () => {
+    { icon: 'edit', label: tr('Đổi tên', 'Rename'), run: () => { S.overlay = { type: 'rename', pid: p.id, value: p.name }; } },
+    { icon: 'photo', label: tr('Đổi ảnh', 'Change photo'), run: () => carPhoto(p) },
+    { icon: 'duplicate', label: tr('Nhân bản', 'Duplicate'), run: () => {
       const d = clone(p); d.id = newId('p'); d.name = uniqueName(`${p.name} (bản sao)`); d.lastConnectedAt = null;
       S.profiles.push(d); snack(`Đã tạo "${d.name}"`);
     } },
-    { icon: 'exportFile', label: 'Xuất', run: () => exportProfile(p) },
-    { icon: 'delete', label: 'Xoá', run: () => confirmDlg('Xoá hồ sơ xe?', `"${p.name}" cùng cấu hình và bố cục sẽ bị xoá khỏi máy. Cấu hình đã lưu trên xe không đổi.`, 'Xoá', () => {
+    { icon: 'exportFile', label: tr('Xuất', 'Export'), run: () => exportProfile(p) },
+    { icon: 'delete', label: tr('Xoá', 'Delete'), run: () => confirmDlg(tr('Xoá hồ sơ xe?', 'Delete car profile?'),
+      tr(`"${p.name}" cùng cấu hình và bố cục sẽ bị xoá khỏi máy. Cấu hình đã lưu trên xe không đổi.`,
+        `"${p.name}" and its settings and layout will be deleted from this phone. Settings stored on the car stay unchanged.`), tr('Xoá', 'Delete'), () => {
       if (S.connectedId === p.id) disconnect();
       S.profiles = S.profiles.filter((x) => x !== p);
     }) },
   ]);
 }
-function themeMenu(ev) {
+/** Nút VN / EN trên thanh tiêu đề màn chính */
+function langMenu(ev) {
   openMenu(ev, [
-    { icon: 'themeDark', label: 'Tối', checked: S.theme === 'dark', run: () => { S.theme = 'dark'; } },
-    { icon: 'themeLight', label: 'Sáng', checked: S.theme === 'light', run: () => { S.theme = 'light'; } },
-    { icon: 'themeSystem', label: 'Theo hệ thống', checked: S.theme === 'system', run: () => { S.theme = 'system'; } },
+    { icon: 'language', label: 'VN · Tiếng Việt', checked: S.lang === 'vi', run: () => { S.lang = 'vi'; } },
+    { icon: 'language', label: 'EN · English', checked: S.lang === 'en', run: () => { S.lang = 'en'; } },
   ]);
 }
 function renderGarage() {
   const list = document.getElementById('simEmpty').checked ? [] : S.profiles;
-  const themeIcon = { light: 'themeLight', dark: 'themeDark', system: 'themeSystem' }[S.theme];
   let body;
   if (!list.length) {
     body = `<div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;text-align:center"><div>
       ${ic('car', { size: 64, color: 'var(--textMuted)' })}
-      <div style="font-size:24px;font-weight:700;margin-top:16px">Chưa có xe nào</div>
-      <div style="color:var(--textBody);margin-top:8px">Tạo hồ sơ xe để lưu kết nối và cấu hình. Không cần bật xe khi tạo.</div>
-      <button class="btn filled" style="margin-top:24px" data-act="${A(openWizard)}">${ic('plus', { mini: true })}Tạo xe mới</button></div></div>`;
+      <div style="font-size:24px;font-weight:700;margin-top:16px">${tr('Chưa có xe nào', 'No cars yet')}</div>
+      <div style="color:var(--textBody);margin-top:8px">${tr('Tạo hồ sơ xe để lưu kết nối và cấu hình. Không cần bật xe khi tạo.', 'Create a car profile to store its connection and settings. The car does not need to be on.')}</div>
+      <button class="btn filled" style="margin-top:24px" data-act="${A(openWizard)}">${ic('plus', { mini: true })}${tr('Tạo xe mới', 'New car')}</button></div></div>`;
   } else {
     body = `<div class="body" data-scroll="garage" style="padding-bottom:96px">${list.map(garageCard).join('')}</div>
-      <button class="fab" data-act="${A(openWizard)}">${ic('plus')}Tạo xe mới</button>`;
+      <button class="fab" data-act="${A(openWizard)}">${ic('plus')}${tr('Tạo xe mới', 'New car')}</button>`;
   }
-  return `<div class="appbar"><div class="title">Xe của tôi</div>
-    <button class="iconbtn" title="Giao diện" data-menu="${A(themeMenu)}">${ic(themeIcon)}</button></div>${body}`;
+  return `<div class="appbar"><div class="title">PCC TX Control</div>
+    <button class="langbtn" title="${tr('Ngôn ngữ', 'Language')}" data-menu="${A(langMenu)}">${ic('language', { mini: true })}${S.lang === 'en' ? 'EN' : 'VN'}</button>
+    <button class="iconbtn" title="${tr('Cài đặt', 'Settings')}" data-act="${A(() => go('appSettings'))}">${ic('settings')}</button></div>${body}`;
 }
 function garageCard(p) {
   const connected = isConnected(p), connecting = S.connectingId === p.id, busy = S.link === 'connecting' || S.connectingId != null;
   const ping = S.ping[p.id], pinging = S.pinging[p.id];
   return `<div class="card${connected ? ' sel' : ''}" style="padding:12px 4px 12px 16px">
     <div style="display:flex;align-items:center;gap:12px">
-      <div style="width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:${connected ? 'var(--accentContainer)' : 'var(--surface2)'};color:${connected ? 'var(--onAccentContainer)' : 'var(--textMuted)'}">${ic('car')}</div>
+      <div title="${p.photo ? tr('Đổi ảnh xe', 'Change car photo') : tr('Chọn ảnh cho xe', 'Choose a car photo')}" data-act="${A(() => carPhoto(p))}" style="width:56px;height:56px;flex:none;border-radius:12px;overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;background:${connected ? 'var(--accentContainer)' : 'var(--surface2)'};color:${connected ? 'var(--onAccentContainer)' : 'var(--textMuted)'}">${p.photo
+        ? `<img src="${esc(p.photo)}" alt="" style="width:100%;height:100%;object-fit:cover">` : ic('car')}</div>
       <div style="flex:1;min-width:0">
         <div class="h-title">${esc(p.name)}</div>
         <div style="display:flex;align-items:center;gap:4px;color:var(--textMuted);font-size:13px;font-weight:500;margin-top:2px">${ic(p.conn === 'wifi' ? 'wifi' : 'bluetooth', { size: 16 })}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(connLabel(p))}</span></div>
@@ -1571,12 +1658,37 @@ function garageCard(p) {
     ${connected || ping ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${connected ? statusPill(S.link) : ''}${ping ? pill(ping.ok ? 'var(--ok)' : 'var(--bad)', ping.label) : ''}</div>` : ''}
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
       ${connected
-        ? `<button class="btn filled" data-act="${A(() => openControl(p.id))}">${ic('steering', { mini: true })}Lái</button>
-           <button class="btn outlined" data-act="${A(disconnect)}">${ic('disconnect', { mini: true })}Ngắt</button>`
-        : `<button class="btn filled" ${busy ? 'disabled' : ''} data-act="${A(() => connect(p))}">${connecting ? spinner : ic('connect', { mini: true })}${connecting ? 'Đang kết nối' : 'Kết nối'}</button>`}
-      <button class="btn outlined" data-act="${A(() => openSettings(p.id))}">${ic('config', { mini: true })}Sửa</button>
-      <button class="btn outlined" ${pinging ? 'disabled' : ''} data-act="${A(() => testPing(p))}">${pinging ? spinner : ic('signal', { mini: true })}Kiểm tra</button>
+        ? `<button class="btn filled" data-act="${A(() => openControl(p.id))}">${ic('steering', { mini: true })}${tr('Lái', 'Drive')}</button>
+           <button class="btn outlined" data-act="${A(disconnect)}">${ic('disconnect', { mini: true })}${tr('Ngắt', 'Disconnect')}</button>`
+        : `<button class="btn filled" ${busy ? 'disabled' : ''} data-act="${A(() => connect(p))}">${connecting ? spinner : ic('connect', { mini: true })}${connecting ? tr('Đang kết nối', 'Connecting') : tr('Kết nối', 'Connect')}</button>`}
+      <button class="btn outlined" data-act="${A(() => openSettings(p.id))}">${ic('config', { mini: true })}${tr('Sửa', 'Edit')}</button>
+      <button class="btn outlined" ${pinging ? 'disabled' : ''} data-act="${A(() => testPing(p))}">${pinging ? spinner : ic('signal', { mini: true })}${tr('Kiểm tra', 'Test')}</button>
     </div></div>`;
+}
+
+// ============================================================================
+//  Cài đặt chung (app_settings_screen.dart): ngôn ngữ, chế độ sáng/tối, màu chủ đạo — áp dụng ngay
+// ============================================================================
+function renderAppSettings() {
+  const seg = (items, cur, set) => `<div class="seg">${items.map(([v, l, icon]) =>
+    `<button class="${cur === v ? 'on' : ''}" data-act="${A(() => set(v))}">${icon ? ic(icon, { mini: true }) : ''}${l}</button>`).join('')}</div>`;
+  const head = (icon, s) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">${ic(icon, { mini: true, color: 'var(--textMuted)' })}<div class="h-title">${s}</div></div>`;
+  const swatches = Object.entries(ACCENTS).filter(([, a]) => a[4] !== false).map(([k, [vi, en, fill]]) => {
+    const on = S.accent === k;
+    return `<div class="swatch${on ? ' on' : ''}" title="${esc(tr(vi, en))}" data-act="${A(() => { S.accent = k; })}"><span style="background:${fill}">${on ? ic('check', { color: '#191919' }) : ''}</span>${esc(tr(vi, en))}</div>`;
+  }).join('');
+  return `<div class="appbar"><button class="iconbtn" data-act="${A(back)}">${ic('back')}</button><div class="title">${tr('Cài đặt', 'Settings')}</div></div>
+    <div class="body" data-scroll="appset">
+      ${head('language', tr('Ngôn ngữ', 'Language'))}
+      ${seg([['vi', 'VN · Tiếng Việt'], ['en', 'EN · English']], S.lang, (v) => { S.lang = v; })}
+      <div class="divider" style="margin:20px 0"></div>
+      ${head('themeDark', tr('Chế độ hiển thị', 'Appearance'))}
+      ${seg([['dark', tr('Tối', 'Dark'), 'themeDark'], ['light', tr('Sáng', 'Light'), 'themeLight'], ['system', tr('Hệ thống', 'System'), 'themeSystem']], S.theme, (v) => { S.theme = v; })}
+      <div class="divider" style="margin:20px 0"></div>
+      ${head('palette', tr('Màu chủ đạo', 'Accent color'))}
+      <div style="display:flex;flex-wrap:wrap;gap:12px">${swatches}</div>
+      <div class="muted" style="font-size:13px;font-weight:500;margin-top:12px">${tr('Màu của nút, công tắc và điểm nhấn trên mọi màn, kể cả màn Lái.', 'Color of buttons, switches and highlights on every screen, including the drive screen.')}</div>
+    </div>`;
 }
 
 // ============================================================================
@@ -1671,11 +1783,12 @@ function finishWizard() {
 }
 
 // ============================================================================
-//  Cấu hình — 6 tab: Ga · Lái · Input · Mix · Kênh · Chung (settings_screen.dart). Kênh Ga / Lái do người dùng chọn, có thể không có.
+//  Cấu hình — 5 tab: Input · Mix · Kênh · Chung · Bố cục (settings_screen.dart). Kênh Ga / Lái do người dùng chọn ở tab Chung,
+//  có thể không có. Tab Bố cục xem trước màn Lái và mở thẳng chế độ Sửa bố cục.
 // ============================================================================
 const draftJson = (d) => JSON.stringify(d);
-const SET_TABS = ['Ga', 'Lái', 'Input', 'Mix', 'Kênh', 'Chung'];
-const INPUT_TAB = 2, MIX_TAB = 3;
+const SET_TABS = ['Input', 'Mix', 'Kênh', 'Chung', 'Bố cục'];
+const INPUT_TAB = 0, MIX_TAB = 1, LAYOUT_TAB = 4;
 function openSettings(pid, tab = 0) {
   const d = clone(prof(pid));
   S.settings = { pid, tab, draft: d, saved: draftJson(d), portTxt: String(d.wifi.port) };
@@ -1686,20 +1799,8 @@ function settingsBack() {
   if (settingsDirty()) confirmDlg('Bỏ thay đổi?', 'Các thay đổi chưa lưu sẽ bị mất.', 'Bỏ', back);
   else back();
 }
-function servoTab(c, text) {
-  const e = chErrors(c);
-  return hint(text) +
-    numField('Min', c.min, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.min }, (v) => { c.min = v; }) +
-    numField('Center', c.center, { min: 500, max: 2500, step: 5, unit: ' µs', err: e.center }, (v) => { c.center = v; }) +
-    numField('Max', c.max, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.max }, (v) => { c.max = v; }) + '<div class="divider"></div>' +
-    numField('Trim', c.trim, { min: -200, max: 200, unit: ' µs', err: e.trim }, (v) => { c.trim = v; }) +
-    numField('Offset', c.offset, { min: -300, max: 300, unit: ' µs', err: e.offset }, (v) => { c.offset = v; }) +
-    switchRow('Đảo chiều (Reverse)', c.reverse, () => { c.reverse = !c.reverse; }) + '<div class="divider"></div>' +
-    numField('Failsafe', c.failsafe, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.failsafe }, (v) => { c.failsafe = v; }) +
-    '<div style="height:12px"></div>' + hint(`Tâm thực tế = Center + Trim + Offset = ${effCenter(c)} µs\nGiữ lâu nút −/+ để đổi nhanh gấp 10 lần.`);
-}
-/** Tab Ga / Lái: chọn kênh làm Ga / Lái (hoặc không có), rồi chỉnh servo của kênh đó */
-function roleTab(d, throttle) {
+/** Chọn kênh làm Ga / Lái (hoặc không có), kèm cảnh báo nếu kênh đã chọn chưa có luật / phần tử */
+function rolePicker(d, throttle) {
   const label = throttle ? 'Ga' : 'Lái', key = throttle ? 'throttleCh' : 'steeringCh';
   const cur = d[key], other = throttle ? d.steeringCh : d.throttleCh, warn = roleWarning(d, throttle);
   const pickCh = (v) => {
@@ -1711,16 +1812,9 @@ function roleTab(d, throttle) {
     if (c.name === `Kênh ${n}`) c.name = label;
   };
   const opts = [['0', 'Không có'], ...CHS.filter((n) => n !== other).map((n) => [String(n), profChLabel(d, n)])];
-  return hint(throttle
-      ? 'Kênh Ga chịu giới hạn của hộp số; muốn ARM hay sửa bố cục phải thả cần ga về vị trí nghỉ. Chọn "Không có" nếu xe không có kênh ga.'
-      : 'Kênh Lái là kênh ô Trim trên màn Lái chỉnh. Chọn "Không có" nếu không cần trim nhanh.') +
-    selectField(`Kênh ${label}`, String(cur ?? 0), opts, pickCh) +
-    (other != null ? `<div class="lbl muted" style="margin-top:4px">${esc(profChLabel(d, other))} đang là kênh ${throttle ? 'Lái' : 'Ga'}.</div>` : '') +
+  return selectField(`Kênh ${label}`, String(cur ?? 0), opts, pickCh) +
     (warn ? `<div style="display:flex;gap:8px;align-items:center;color:var(--warn);font-size:14px;font-weight:500;margin-top:8px">${ic('warning', { mini: true })}${esc(warn)}</div>` : '') +
-    '<div style="height:16px"></div>' +
-    (cur == null ? '' : servoTab(d.channels[cur - 1], throttle
-      ? 'Center là điểm trung tính của ESC (xe đứng yên). Failsafe thường đặt bằng Center, hoặc thấp hơn một chút nếu muốn xe phanh khi mất sóng.'
-      : 'Offset bù độ lệch cơ khí khi lắp servo (chỉnh một lần). Trim tinh chỉnh để xe chạy thẳng. Min/Max giới hạn góc lái để servo không bị kẹt.'));
+    '<div style="height:12px"></div>';
 }
 function toggleChannel(d, c) {
   const on = !c.enabled;
@@ -1799,6 +1893,32 @@ function mixTab(d) {
   return h;
 }
 /** Hàng đếm + nút thêm ở chân tab Input / Mix (nằm ngoài vùng cuộn) */
+/** Tab Bố cục: bản thu nhỏ màn Lái (chỉ để nhìn), Sửa bố cục, khoá bố cục */
+function layoutTab(d) {
+  const l = d.layout, controls = l.items.filter((i) => isControl(i.kind)).length;
+  const label = (it) => it.style.showLabel && it.style.label && it.style.label.trim() ? it.style.label
+    : it.kind === 'gauge' ? GAUGES[it.gauge] : (findInput(d, it.input)?.name ?? KIND[it.kind]);
+  const tiles = l.items.map((it) => `<div class="lp-it${isControl(it.kind) ? ' c' : ''}" style="${itemVars(it)}left:${it.x / COLS * 100}%;top:${it.y / ROWS * 100}%;width:${it.w / COLS * 100}%;height:${it.h / ROWS * 100}%"><span>${esc(label(it))}</span></div>`).join('');
+  return hint('Bố cục là cách cần gạt, nút, công tắc và đồng hồ được xếp trên màn Lái (màn ngang). Sửa bố cục để kéo thả, đổi cỡ, thêm phần tử, gắn Input và chỉnh kiểu hiển thị của từng phần tử.') +
+    `<div class="card" style="padding:12px;cursor:pointer" data-act="${A(editLayoutFromSettings)}"><div class="lprev">${tiles}</div></div>
+    <div class="muted" style="font-size:12px;font-weight:500;margin:4px 0 12px">${esc(l.name)} · ${l.items.length} phần tử, ${controls} điều khiển</div>
+    <button class="btn filled" data-act="${A(editLayoutFromSettings)}">${ic('edit', { mini: true })}Sửa bố cục</button>
+    <div class="divider" style="margin:16px 0"></div>` +
+    switchRow('Khoá bố cục', l.locked, () => { l.locked = !l.locked; }, { sub: 'Tắt mục Sửa bố cục trên màn Lái để không sửa nhầm khi đang lái. Ở đây vẫn sửa được.' });
+}
+/** SettingsScreen._editLayout: Sửa bố cục ghi thẳng vào hồ sơ đã lưu → bản nháp phải lưu trước, sửa xong nạp lại */
+function editLayoutFromSettings() {
+  const st = S.settings, d = st.draft;
+  const open = () => {
+    // Mở Cấu hình từ màn Lái: quay về màn Lái và vào chế độ sửa (kể cả khi bố cục đang khoá)
+    if (S.history[S.history.length - 1] === 'control' && S.ctl?.pid === st.pid) { back(); startEdit(true); return; }
+    openControl(st.pid, true);
+  };
+  if (!settingsDirty()) { open(); return; }
+  const errors = validateAll(d, namesExcept(d.id));
+  if (errors.length) { snack(`Sửa lỗi trước khi sửa bố cục: ${errors[0]}`); return; }
+  confirmDlg('Lưu thay đổi?', 'Cấu hình đang sửa cần được lưu trước khi mở Sửa bố cục.', 'Lưu', () => { saveSettings(); open(); });
+}
 function tabFoot(d, tab) {
   const row = (txt, dis, label, fn) => `<div style="display:flex;align-items:center;gap:8px;padding:8px 16px 12px">
     <div class="muted" style="flex:1;font-size:12px;font-weight:500">${txt}</div>
@@ -1825,15 +1945,28 @@ function generalTab(d) {
     '<div class="divider" style="margin:16px 0"></div>' +
     numField('Thời gian chờ failsafe', d.failsafeMs, { min: 100, max: 3000, step: 50, unit: ' ms', err: g.failsafeTimeout }, (v) => { d.failsafeMs = v; }) +
     hint('Xe chuyển sang failsafe nếu không nhận lệnh trong khoảng thời gian này.') +
+    '<div class="divider" style="margin:16px 0"></div><div class="h-title" style="margin-bottom:8px">Kênh Ga / Lái</div>' +
+    hint('Kênh Ga chịu giới hạn của hộp số; muốn ARM hay sửa bố cục phải thả cần ga về vị trí nghỉ. Kênh Lái là kênh ô Trim trên màn Lái chỉnh. Chọn "Không có" nếu xe không cần. Min/Center/Max, trim và failsafe của kênh chỉnh ở tab Kênh.') +
+    rolePicker(d, true) + rolePicker(d, false) +
     '<div class="divider" style="margin:16px 0"></div>' +
     numField('Số lượng số', d.gears.count, { min: 1, max: 5, err: g.gearCount }, (v) => { d.gears.count = v; }) +
     Array.from({ length: d.gears.count }, (_, i) => numField(`Ga tối đa số ${i + 1}`, d.gears.max[i], { min: 1, max: 100, step: 5, unit: '%', err: g['gear' + i] }, (v) => { d.gears.max[i] = v; })).join('') +
-    hint(d.throttleCh == null ? 'Chưa chọn kênh Ga (tab Ga) nên hộp số chưa có tác dụng.' : `Hộp số giới hạn kênh Ga (${profChLabel(d, d.throttleCh)}).`) +
+    hint(d.throttleCh == null ? 'Chưa chọn kênh Ga (ở trên) nên hộp số chưa có tác dụng.' : `Hộp số giới hạn kênh Ga (${profChLabel(d, d.throttleCh)}).`) +
     '<div class="divider" style="margin:16px 0"></div><div class="h-title" style="margin-bottom:8px">ARM</div>' +
     hint('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (có kênh Ga thì cần ga phải ở vị trí nghỉ).') +
     switchRow('Tự ARM sau khi kết nối', d.arm.autoArm, () => { d.arm.autoArm = !d.arm.autoArm; }, { sub: 'Tự ARM một lần khi đủ điều kiện; DISARM rồi thì phải bấm lại' }) +
     switchRow('Điều kiện ARM riêng', d.arm.armCondition != null, () => { d.arm.armCondition = d.arm.armCondition ? null : TRUE(); }, { sub: 'Chỉ ARM được khi điều kiện đúng; điều kiện sai thì tự DISARM' }) +
     (d.arm.armCondition ? condBuilder('arm', d.arm.armCondition, d, (e) => { d.arm.armCondition = e; }) : '') + '<div style="height:16px"></div>';
+}
+function saveSettings() {
+  const st = S.settings, d = st.draft;
+  const idx = S.profiles.findIndex((x) => x.id === st.pid);
+  S.profiles[idx] = clone(d);
+  st.saved = draftJson(d);
+  if (S.gear > d.gears.count) S.gear = d.gears.count;
+  // Cấu hình nằm trong app và có tác dụng ngay; chỉ phần xe cần giữ khi mất sóng mới ghi xuống xe
+  if (!isConnected(prof(st.pid))) snack('Đã lưu vào máy');
+  else snack(syncProfile(d) ? 'Đã lưu và đồng bộ failsafe với xe' : 'Đã lưu, có tác dụng ngay');
 }
 function renderSettings() {
   const st = S.settings, d = st.draft, p = prof(st.pid);
@@ -1841,18 +1974,9 @@ function renderSettings() {
   const errors = validateAll(d, namesExcept(d.id));
   const valid = !errors.length;
   const content = [
-    () => roleTab(d, true), () => roleTab(d, false),
-    () => inputsTab(d), () => mixTab(d), () => channelsTab(d), () => generalTab(d),
+    () => inputsTab(d), () => mixTab(d), () => channelsTab(d), () => generalTab(d), () => layoutTab(d),
   ][st.tab]();
-  const save = () => {
-    const idx = S.profiles.findIndex((x) => x.id === st.pid);
-    S.profiles[idx] = clone(d);
-    st.saved = draftJson(d);
-    if (S.gear > d.gears.count) S.gear = d.gears.count;
-    // Cấu hình nằm trong app và có tác dụng ngay; chỉ phần xe cần giữ khi mất sóng mới ghi xuống xe
-    if (!connected) snack('Đã lưu vào máy');
-    else snack(syncProfile(d) ? 'Đã lưu và đồng bộ failsafe với xe' : 'Đã lưu, có tác dụng ngay');
-  };
+  const save = saveSettings;
   const syncFs = () => { syncProfile(prof(st.pid), true); snack('Đã đồng bộ failsafe với xe'); };
   const reset = () => confirmDlg('Khôi phục mặc định?', 'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). Tên, kết nối, Input, bố cục và việc chọn kênh Ga/Lái được giữ lại. Chỉ ghi vào máy khi bấm Lưu.', 'Khôi phục', () => resetConfig(d));
   return `<div class="appbar" style="border-bottom:0"><button class="iconbtn" data-act="${A(settingsBack)}">${ic('back')}</button><div class="title">${esc(d.name.trim() || 'Cấu hình')}</div></div>
@@ -1962,7 +2086,7 @@ function netEnterSetup() {
     () => carReboot(true),
     () => {
       patchProfile(n.pid, (w) => { w.carId = st.id; w.ip = cf.apIp; w.port = cf.udpPort; });
-      netInfo('Xe đang vào chế độ cấu hình', `Nối điện thoại vào WiFi "${setupSsid(st.id)}", rồi ở màn Xe của tôi bấm Kết nối và mở lại Mạng của xe.`);
+      netInfo('Xe đang vào chế độ cấu hình', `Nối điện thoại vào WiFi "${setupSsid(st.id)}", rồi ở màn chính bấm Kết nối và mở lại Mạng của xe.`);
     }));
 }
 function netReset() {
@@ -2046,7 +2170,7 @@ function renderNetwork() {
   if (!connected) {
     body = center(`${ic('wifi', { size: 48, color: 'var(--textMuted)' })}
       <div style="font-size:24px;font-weight:700;margin-top:16px">Chưa kết nối xe</div>
-      <div style="color:var(--textBody);margin-top:8px">Cấu hình mạng lưu trên xe, không nằm trong hồ sơ. Kết nối xe (WiFi hoặc Bluetooth) ở màn Xe của tôi rồi mở lại màn này.</div>`);
+      <div style="color:var(--textBody);margin-top:8px">Cấu hình mạng lưu trên xe, không nằm trong hồ sơ. Kết nối xe (WiFi hoặc Bluetooth) ở màn chính rồi mở lại màn này.</div>`);
   } else if (!n.cfg) {
     body = center('<span class="spinner" style="display:inline-block;width:36px;height:36px;border-width:3px;color:var(--accent)"></span>'); // xe giả lập luôn trả lời
   } else {
@@ -2373,13 +2497,15 @@ function renderMix() {
 const ctlProfile = () => S.ctl && prof(S.ctl.pid);
 const ctlLayout = () => S.ctl && (S.ctl.editing ? S.ctl.draft : ctlProfile()?.layout);
 
-function openControl(pid) {
+/** editOnly: mở từ Cấu hình ▸ Bố cục — vào thẳng Sửa bố cục, Lưu / Huỷ thì về Cấu hình */
+function openControl(pid, editOnly = false) {
   const p = prof(pid);
-  S.ctl = { pid, editing: false, draft: null, sel: null, undo: [], redo: [], snap: null, pipe: null, armCond: null, errors: [] };
+  S.ctl = { pid, editOnly, editing: false, draft: null, sel: null, undo: [], redo: [], snap: null, pipe: null, armCond: null, errors: [] };
   if (S.gear > p.gears.count) S.gear = p.gears.count;
   loadPipe();
   initValues();
   go('control');
+  if (editOnly) startEdit(true);
 }
 /** CarController.loadProfile: nạp (hoặc nạp lại sau khi sửa) hồ sơ vào vòng gửi; vị trí Input giữ nguyên */
 function loadPipe() {
@@ -2583,9 +2709,9 @@ function renderItem(p, it) {
     }
     case 'gearBox': {
       const g = clamp(S.gear, 1, p.gears.count);
-      return frame(lbl, null, `<div class="rowctl"><button class="iconbtn outlined" ${S.gear > 1 ? '' : 'disabled'} data-act="${A(() => { S.gear--; })}">${ic('minus')}</button>
+      return frame(lbl, null, `<div class="rowctl"><button class="iconbtn outlined" ${S.gear > 1 ? '' : 'disabled'} data-rep="gear:-" data-slow data-act="${A(() => { S.gear--; })}">${ic('minus')}</button>
         <div class="mid"><div style="font-size:26px;font-weight:800;line-height:1.1">Số ${g}</div><div class="muted" style="font-size:12px;font-weight:500">Ga tối đa ${p.gears.max[g - 1]}%</div></div>
-        <button class="iconbtn outlined" ${S.gear < p.gears.count ? '' : 'disabled'} data-act="${A(() => { S.gear++; })}">${ic('plus')}</button></div>`, 'padding:4px');
+        <button class="iconbtn outlined" ${S.gear < p.gears.count ? '' : 'disabled'} data-rep="gear:+" data-slow data-act="${A(() => { S.gear++; })}">${ic('plus')}</button></div>`, 'padding:4px');
     }
     case 'trim': {
       // Trim nhanh cho kênh Lái đã chọn trong hồ sơ
@@ -2601,9 +2727,9 @@ function renderItem(p, it) {
         s.trim = nv;
         if (isConnected(p)) S.carCfg[p.id] = carConfigOf(p);
       };
-      return frame(lbl, null, `<div class="rowctl"><button class="btn outlined small" data-act="${A(() => trim(-5))}">◀</button>
+      return frame(lbl, null, `<div class="rowctl"><button class="btn outlined small" ${s.trim > -200 ? '' : 'disabled'} data-rep="trim:-" data-act="${A(() => trim(-5))}">◀</button>
         <div class="mid" style="font-size:18px;font-weight:700;white-space:nowrap">Trim ${s.trim} µs</div>
-        <button class="btn outlined small" data-act="${A(() => trim(5))}">▶</button></div>`, 'padding:4px');
+        <button class="btn outlined small" ${s.trim < 200 ? '' : 'disabled'} data-rep="trim:+" data-act="${A(() => trim(5))}">▶</button></div>`, 'padding:4px');
     }
     case 'statusBadge':
       return `<div style="height:100%;display:flex;align-items:center;justify-content:center">${statusPill(S.connectedId === p.id ? S.link : 'disconnected')}</div>`;
@@ -2653,16 +2779,27 @@ function driveMenu(ev) {
     { icon: l.locked ? 'locked' : 'unlocked', label: l.locked ? 'Mở khoá bố cục' : 'Khoá bố cục', run: () => { l.locked = !l.locked; snack(l.locked ? 'Đã khoá bố cục' : 'Đã mở khoá bố cục'); } },
   ]);
 }
-function startEdit() {
+/** force: bỏ qua khoá bố cục (mở từ Cấu hình) */
+function startEdit(force = false) {
   const p = ctlProfile(), c = S.ctl;
-  if (p.layout.locked) { snack('Bố cục đang khoá. Mở khoá trong menu trước.'); return; }
+  if (p.layout.locked && force !== true) { snack('Bố cục đang khoá. Mở khoá trong menu trước.'); return; }
   // Ga phải ở vị trí nghỉ (vị trí về đã cài, vd −28%), không bắt buộc đúng 0% (H5-1)
   if (c.pipe && !c.pipe.throttleAtRest(p.layout)) { snack('Thả cần ga trước khi sửa bố cục'); return; }
   resetSticks(false);
   S.arm.disarm('Đang sửa bố cục'); // chưa ARM → không gửi lệnh lái suốt thời gian sửa (H5, R3)
   Object.assign(c, { editing: true, draft: clone(p.layout), snap: JSON.stringify(p), sel: null, undo: [], redo: [] });
 }
-function endEdit() { Object.assign(S.ctl, { editing: false, draft: null, sel: null, snap: null }); loadPipe(); initValues(); }
+function endEdit() {
+  const c = S.ctl;
+  Object.assign(c, { editing: false, draft: null, sel: null, snap: null });
+  if (c.editOnly) {
+    const st = S.settings;
+    if (st?.pid === c.pid) { st.draft = clone(prof(st.pid)); st.saved = draftJson(st.draft); }
+    back();
+    return;
+  }
+  loadPipe(); initValues();
+}
 /** Huỷ: bỏ mọi thay đổi từ lúc vào chế độ sửa, kể cả Input / luật tạo từ bảng thuộc tính */
 function cancelEdit() {
   const c = S.ctl;
@@ -2779,6 +2916,15 @@ function renderPanel(p, it) {
     h += sec('Icon', `<div class="chips">${chip('Không', it.style.icon == null, () => { pushUndo(); it.style.icon = null; })}${Object.entries(PICK_ICONS).map(([key, name]) =>
       chip(ic(name, { mini: true }), it.style.icon === key, () => { pushUndo(); it.style.icon = key; })).join('')}</div>`);
   }
+  if (k !== 'statusBadge') {
+    const dot = (key) => {
+      const on = (it.style.color ?? null) === key, a = key && ACCENTS[key];
+      const fill = a ? a[2] : 'var(--accentFill)';
+      return `<button class="cdot${on ? ' on' : ''}" title="${esc(a ? a[0] : 'Theo màu app')}" style="background:${fill}" data-act="${A(() => { pushUndo(); it.style.color = key; })}">${on ? ic('check', { mini: true, color: '#191919' }) : key ? '' : 'A'}</button>`;
+    };
+    h += sec('Màu', `<div style="display:flex;flex-wrap:wrap">${dot(null)}${Object.keys(ACCENTS).map(dot).join('')}</div>
+      <div class="muted" style="font-size:12px;font-weight:500">${esc(it.style.color ? ACCENTS[it.style.color][0] : 'Theo màu chủ đạo của app')}</div>`);
+  }
   if (hasValue) h += sec('Hiện giá trị', segs(Object.entries(VALUE_DISPLAY), it.style.valueDisplay, (v) => { pushUndo(); it.style.valueDisplay = v; }, 'sm'));
   if (stick) h += sec('Kích thước núm cầm', segs(Object.entries(KNOB).map(([kk, [l]]) => [kk, l]), it.style.knobSize, (v) => { pushUndo(); it.style.knobSize = v; }, 'sm'));
   if (stick) {
@@ -2813,7 +2959,7 @@ function renderControl() {
        <button class="iconbtn" title="Tuỳ chọn" data-menu="${A(driveMenu)}">${ic('config')}</button>`;
   const items = l.items.map((it) => {
     const mixed = !c.editing && isControl(it.kind) && itemIns(it).some((id) => isMixed(p, id));
-    return `<div class="item${c.sel === it.id ? ' sel' : ''}" data-item="${it.id}" ${mixed ? 'data-mixitem="1"' : ''} style="left:${it.x / COLS * 100}%;top:${it.y / ROWS * 100}%;width:${it.w / COLS * 100}%;height:${it.h / ROWS * 100}%;opacity:${clamp(it.style.opacity / 100, 0.3, 1)}">
+    return `<div class="item${c.sel === it.id ? ' sel' : ''}" data-item="${it.id}" ${mixed ? 'data-mixitem="1"' : ''} style="${itemVars(it)}left:${it.x / COLS * 100}%;top:${it.y / ROWS * 100}%;width:${it.w / COLS * 100}%;height:${it.h / ROWS * 100}%;opacity:${clamp(it.style.opacity / 100, 0.3, 1)}">
       <div class="in">${renderItem(p, it)}${mixed ? '<span class="mixdot"></span>' : ''}</div><div class="rz" data-rz="${it.id}"></div></div>`;
   }).join('');
   const sel = c.editing ? l.items.find((i) => i.id === c.sel) : null;
@@ -2928,11 +3074,14 @@ function render() {
   const dev = document.getElementById('device');
   const t = effectiveTheme();
   dev.dataset.t = t;
+  const av = accentVars(S.accent, t);
+  for (const k of ACCENT_VARS) dev.style.removeProperty(k);
+  for (const [k, v] of Object.entries(av)) dev.style.setProperty(k, v);
   document.documentElement.dataset.theme = t;
   dev.className = 'device ' + (S.screen === 'control' ? 'landscape' : 'portrait');
   const keep = {};
   scr.querySelectorAll('[data-scroll]').forEach((el) => { keep[el.dataset.scroll] = el.scrollTop; });
-  const fn = { garage: renderGarage, wizard: renderWizard, settings: renderSettings, channel: renderChannel, input: renderInput, mix: renderMix, network: renderNetwork, control: renderControl }[S.screen];
+  const fn = { garage: renderGarage, appSettings: renderAppSettings, wizard: renderWizard, settings: renderSettings, channel: renderChannel, input: renderInput, mix: renderMix, network: renderNetwork, control: renderControl }[S.screen];
   scr.innerHTML = fn() + renderOverlay();
   scr.querySelectorAll('[data-scroll]').forEach((el) => { if (keep[el.dataset.scroll] != null) el.scrollTop = keep[el.dataset.scroll]; });
   drawAxes();
@@ -2942,7 +3091,7 @@ function render() {
   fit();
 }
 function renderNav() {
-  const nav = [['garage', 'Xe của tôi'], ['wizard', 'Tạo xe mới'], ['control', 'Màn Lái'], ['settings', 'Cấu hình']];
+  const nav = [['garage', 'Màn chính'], ['appSettings', 'Cài đặt'], ['wizard', 'Tạo xe mới'], ['control', 'Màn Lái'], ['settings', 'Cấu hình']];
   const cur = ['channel', 'input', 'mix', 'network'].includes(S.screen) ? 'settings' : S.screen;
   document.getElementById('nav').innerHTML = nav.map(([k, l]) => `<button class="tb${cur === k ? ' on' : ''}" data-nav="${k}">${l}</button>`).join('');
   document.getElementById('themeBtn').textContent = effectiveTheme() === 'dark' ? '☾ Tối' : '☀ Sáng';
@@ -2968,6 +3117,7 @@ document.getElementById('nav').addEventListener('click', (e) => {
   if (k === 'wizard') openWizard();
   else if (k === 'control') openControl(pid);
   else if (k === 'settings') openSettings(pid);
+  else if (k === 'appSettings') go('appSettings');
   else render();
 });
 document.getElementById('themeBtn').onclick = () => { S.theme = effectiveTheme() === 'dark' ? 'light' : 'dark'; render(); };
@@ -2987,7 +3137,21 @@ document.getElementById('migBtn').onclick = () => {
 window.addEventListener('resize', () => { fit(); drawAxes(); });
 
 // Nhấn giữ nút −/+ (đổi gấp 10 lần)
-let lpTimer = null, lpFired = false;
+let lpFired = false;
+// HoldRepeat: nhấn giữ nút −/+ thì lặp, càng giữ càng nhanh (data-slow: nhịp đều cho hộp số; data-fast: bước gộp khi giữ lâu).
+// Mỗi lần vẽ lại DOM mới nên tìm lại nút theo data-rep.
+let rep = null;
+function stopRep() { if (rep) clearTimeout(rep.timer); rep = null; }
+function repTick() {
+  const el = scr.querySelector(`[data-rep="${CSS.escape(rep.key)}"]`);
+  if (!el || el.disabled) { stopRep(); return; }
+  rep.n++;
+  lpFired = true; // thả tay không tính thêm một lần bấm
+  actions[rep.n > 15 && el.dataset.fast ? el.dataset.fast : el.dataset.act]?.();
+  render();
+  const ms = el.dataset.slow != null ? 350 : rep.n < 3 ? 250 : rep.n < 10 ? 110 : 55;
+  rep.timer = setTimeout(repTick, ms);
+}
 
 scr.addEventListener('click', (e) => {
   if (lpFired) { lpFired = false; return; }
@@ -3041,11 +3205,11 @@ const drags = new Map();
 let mixLp = null; // nhấn giữ phần tử có chấm mix → xem luật (U6)
 scr.addEventListener('pointerdown', (e) => {
   lpFired = false;
-  const lp = e.target.closest('[data-lp]');
-  if (lp && !lp.disabled) {
-    clearTimeout(lpTimer);
-    const k = lp.dataset.lp;
-    lpTimer = setTimeout(() => { lpFired = true; actions[k]?.(); render(); }, 500);
+  const rb = e.target.closest('[data-rep]');
+  if (rb && !rb.disabled) {
+    stopRep();
+    rep = { key: rb.dataset.rep, n: 0 };
+    rep.timer = setTimeout(repTick, 350);
   }
   if (S.overlay) return;
   const ro = e.target.closest('[data-reorder]');
@@ -3183,7 +3347,7 @@ window.addEventListener('pointermove', (e) => {
   }
 });
 function endPointer(e) {
-  clearTimeout(lpTimer);
+  stopRep();
   if (mixLp && mixLp.pid === e.pointerId) { clearTimeout(mixLp.timer); mixLp = null; }
   const d = drags.get(e.pointerId);
   if (!d) return;
