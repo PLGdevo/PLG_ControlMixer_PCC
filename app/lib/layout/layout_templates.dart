@@ -17,7 +17,7 @@ abstract final class LayoutTemplates {
         returnCfg: ret,
       );
 
-  /// Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, hộp số, trim người dùng tự thêm.
+  /// Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, trim người dùng tự thêm.
   static ControlLayout blank() => ControlLayout(id: ControlLayout.newId(), name: tr('Mặc định', 'Default'), items: [
         _it(ItemKind.statusBadge, 5, 0, 6, 2),
         _it(ItemKind.gauge, 5, 2, 4, 2, gauge: GaugeKey.battery.name),
@@ -31,7 +31,6 @@ abstract final class LayoutTemplates {
     // Input Ga vào cần gạt dọc, Lái vào cần gạt ngang; phần tử khác người dùng tự thêm rồi gắn Input
     return blank()
       ..items.addAll([
-        _it(ItemKind.gearBox, 5, 9, 8, 3),
         _it(ItemKind.trim, 14, 6, 10, 2),
         _it(ItemKind.stickV, 0, 1, 4, 11, input: throttleInput, ret: ReturnConfig()),
         _it(ItemKind.stickH, 14, 9, 10, 3, input: steerInput, ret: ReturnConfig()),
@@ -47,7 +46,7 @@ abstract final class LayoutTemplates {
         ItemKind.switch3 => (4, 2),
         ItemKind.knob => (3, 3),
         ItemKind.gauge || ItemKind.statusBadge => (4, 2),
-        ItemKind.gearBox || ItemKind.trim => (6, 2),
+        ItemKind.trim => (6, 2),
       };
 
   /// Thêm một phần tử điều khiển (cần gạt, nút, ...) vào chỗ trống, gắn sẵn Input nếu có.

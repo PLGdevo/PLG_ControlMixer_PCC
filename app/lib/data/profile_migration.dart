@@ -219,7 +219,6 @@ abstract final class ProfileMigration {
               'Mix rule $no reads CH$n ($role), which an earlier rule wrote to; '
                   'it now reads the value before mixing, results may differ.'));
         }
-        if (n == thr) warnings.add(tr('Luật mix $no đọc CH$thr (Ga): hộp số nay áp sau mix, kết quả có thể khác.', 'Mix rule $no reads CH$thr (throttle): gears now apply after mixing, results may differ.'));
       }
 
       void checkLevels(int n, String role) {
@@ -298,9 +297,6 @@ abstract final class ProfileMigration {
         r.enabled = enabled;
         if (!enabled) continue;
         if (r.combine == Combine.max) ensureBase(r.destCh);
-        if (r.destCh == thr) {
-          warnings.add(tr('Luật mix $no ghi vào CH$thr (Ga): hộp số nay áp sau mix, kết quả có thể khác.', 'Mix rule $no writes to CH$thr (throttle): gears now apply after mixing, results may differ.'));
-        }
         ch[r.destCh]!['enabled'] = true; // Sprint 4: kênh tắt ra failsafe; Sprint 3 vẫn xuất giá trị mix
       }
       rules.addAll(added);
@@ -309,6 +305,16 @@ abstract final class ProfileMigration {
 
     for (final c in ch.values) {
       c.remove('offValuePct');
+    }
+
+    // App không còn hộp số: Sprint 3 giới hạn ga theo số thì báo, ga nay lên đủ 100%
+    final gears = j.remove('gears') as Map<String, dynamic>?;
+    final limits = [...?(gears?['maxThrottle'] as List?)?.take(gears?['gearCount'] as int? ?? 3)];
+    if (limits.any((g) => (g as num) < 100)) {
+      warnings.add(tr(
+          'Đã bỏ hộp số: ga không còn bị giới hạn theo số (${limits.join('/')}%). Muốn giảm ga tối đa, hạ Max của kênh Ga.',
+          'Gears were removed: throttle is no longer limited per gear (${limits.join('/')}%). '
+              'To lower top throttle, reduce the throttle channel Max.'));
     }
     j
       ..['schemaVersion'] = 2

@@ -123,6 +123,15 @@ class _GarageScreenState extends State<GarageScreen> {
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
   }
 
+  /// Bấm vào thẻ xe: vào thẳng màn Lái; chưa nối thì kết nối trước (nối xong tự vào màn Lái)
+  void _open(CarProfile p) {
+    if (_isConnected(p)) {
+      _drive(p);
+    } else if (c.state != LinkState.connecting && _connectingId == null) {
+      _connect(p);
+    }
+  }
+
   Future<void> _drive(CarProfile p) async {
     await Navigator.push(
       context,
@@ -188,6 +197,13 @@ class _GarageScreenState extends State<GarageScreen> {
       // Không có bước "đọc từ xe": hồ sơ trong app luôn được đưa xuống xe (E6)
       try {
         await c.syncProfile(fresh);
+        final n = c.carChannels;
+        if (!c.multiChannel) {
+          _snack(tr('Firmware xe cũ: chỉ lái được CH1/CH2. Nạp firmware mới để dùng đủ kênh.',
+              'Old car firmware: only CH1/CH2 can be driven. Flash the new firmware to use every channel.'));
+        } else if (fresh.channels.any((ch) => ch.enabled && ch.index > n)) {
+          _snack(tr('Xe chỉ có $n kênh: các kênh sau CH$n không xuất ra', 'The car has only $n channels: channels after CH$n are not output'));
+        }
       } catch (e) {
         _snack(tr('Không đồng bộ được cấu hình với xe: ${e.toString().replaceFirst('Exception: ', '')}', 'Could not sync the configuration with the car: ${e.toString().replaceFirst('Exception: ', '')}'));
       }
@@ -486,103 +502,108 @@ class _GarageScreenState extends State<GarageScreen> {
     final ping = _ping[p.id];
     final pinging = _pinging.contains(p.id);
     return Card(
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(Radii.card),
         side: BorderSide(color: connected ? t.accent : t.line),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(Gap.l, Gap.m, Gap.xs, Gap.m),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                _avatar(p, connected),
-                const SizedBox(width: Gap.m),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(p.name, style: AppText.title.copyWith(color: t.text)),
-                      const SizedBox(height: 2),
-                      Row(children: [
-                        p.connType == ConnType.wifi
-                            ? AppIcon(AppIcons.wifi, size: 16, color: t.textMuted)
-                            : CustomIconView(CustomIcon.bluetooth, size: 16, color: t.textMuted),
-                        const SizedBox(width: Gap.xs),
-                        Flexible(
-                          child: Text(p.connLabel,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppText.label.copyWith(color: t.textMuted, fontSize: 13)),
-                        ),
-                      ]),
-                      Text(_lastConnected(p), style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
+      // Bấm vào thẻ (ngoài các nút) là vào màn Lái
+      child: InkWell(
+        onTap: () => _open(p),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(Gap.l, Gap.m, Gap.xs, Gap.m),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _avatar(p, connected),
+                  const SizedBox(width: Gap.m),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(p.name, style: AppText.title.copyWith(color: t.text)),
+                        const SizedBox(height: 2),
+                        Row(children: [
+                          p.connType == ConnType.wifi
+                              ? AppIcon(AppIcons.wifi, size: 16, color: t.textMuted)
+                              : CustomIconView(CustomIcon.bluetooth, size: 16, color: t.textMuted),
+                          const SizedBox(width: Gap.xs),
+                          Flexible(
+                            child: Text(p.connLabel,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppText.label.copyWith(color: t.textMuted, fontSize: 13)),
+                          ),
+                        ]),
+                        Text(_lastConnected(p), style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: AppIcon(AppIcons.more, color: t.textMuted),
+                    onSelected: (a) => _menu(p, a),
+                    itemBuilder: (_) => [
+                      for (final (value, icon, label) in [
+                        ('rename', AppIcons.edit, tr('Đổi tên', 'Rename')),
+                        ('photo', AppIcons.photo, tr('Đổi ảnh', 'Change photo')),
+                        ('duplicate', AppIcons.duplicate, tr('Nhân bản', 'Duplicate')),
+                        ('export', AppIcons.exportFile, tr('Xuất', 'Export')),
+                        ('delete', AppIcons.delete, tr('Xoá', 'Delete')),
+                      ])
+                        PopupMenuItem(value: value, child: ListTile(leading: AppIcon(icon), title: Text(label))),
                     ],
                   ),
-                ),
-                PopupMenuButton<String>(
-                  icon: AppIcon(AppIcons.more, color: t.textMuted),
-                  onSelected: (a) => _menu(p, a),
-                  itemBuilder: (_) => [
-                    for (final (value, icon, label) in [
-                      ('rename', AppIcons.edit, tr('Đổi tên', 'Rename')),
-                      ('photo', AppIcons.photo, tr('Đổi ảnh', 'Change photo')),
-                      ('duplicate', AppIcons.duplicate, tr('Nhân bản', 'Duplicate')),
-                      ('export', AppIcons.exportFile, tr('Xuất', 'Export')),
-                      ('delete', AppIcons.delete, tr('Xoá', 'Delete')),
-                    ])
-                      PopupMenuItem(value: value, child: ListTile(leading: AppIcon(icon), title: Text(label))),
-                  ],
-                ),
-              ],
-            ),
-            if (connected || ping != null)
-              Padding(
-                padding: const EdgeInsets.only(top: Gap.s),
-                child: Wrap(spacing: Gap.s, runSpacing: Gap.xs, children: [
-                  if (connected) StatusBadge(state: c.state),
-                  if (ping != null) Pill(color: ping.ok ? t.ok : t.bad, label: ping.label),
-                ]),
+                ],
               ),
-            const SizedBox(height: Gap.m),
-            Wrap(
-              spacing: Gap.s,
-              runSpacing: Gap.s,
-              children: [
-                if (connected) ...[
-                  FilledButton.icon(
-                    onPressed: () => _drive(p),
-                    icon: const CustomIconView(CustomIcon.steering, size: 20),
-                    label: Text(tr('Lái', 'Drive')),
+              if (connected || ping != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: Gap.s),
+                  child: Wrap(spacing: Gap.s, runSpacing: Gap.xs, children: [
+                    if (connected) StatusBadge(state: c.state),
+                    if (ping != null) Pill(color: ping.ok ? t.ok : t.bad, label: ping.label),
+                  ]),
+                ),
+              const SizedBox(height: Gap.m),
+              Wrap(
+                spacing: Gap.s,
+                runSpacing: Gap.s,
+                children: [
+                  if (connected) ...[
+                    FilledButton.icon(
+                      onPressed: () => _drive(p),
+                      icon: const CustomIconView(CustomIcon.steering, size: 20),
+                      label: Text(tr('Lái', 'Drive')),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: c.disconnect,
+                      icon: const AppIcon(AppIcons.disconnect, mini: true),
+                      label: Text(tr('Ngắt', 'Disconnect')),
+                    ),
+                  ] else
+                    FilledButton.icon(
+                      onPressed: busy ? null : () => _connect(p),
+                      icon: connecting
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const AppIcon(AppIcons.connect, mini: true),
+                      label: Text(connecting ? tr('Đang kết nối', 'Connecting') : tr('Kết nối', 'Connect')),
+                    ),
+                  OutlinedButton.icon(
+                    onPressed: () => _edit(p),
+                    icon: const AppIcon(AppIcons.config, mini: true),
+                    label: Text(tr('Sửa', 'Edit')),
                   ),
                   OutlinedButton.icon(
-                    onPressed: c.disconnect,
-                    icon: const AppIcon(AppIcons.disconnect, mini: true),
-                    label: Text(tr('Ngắt', 'Disconnect')),
-                  ),
-                ] else
-                  FilledButton.icon(
-                    onPressed: busy ? null : () => _connect(p),
-                    icon: connecting
+                    onPressed: pinging ? null : () => _test(p),
+                    icon: pinging
                         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const AppIcon(AppIcons.connect, mini: true),
-                    label: Text(connecting ? tr('Đang kết nối', 'Connecting') : tr('Kết nối', 'Connect')),
+                        : const AppIcon(AppIcons.signal, mini: true),
+                    label: Text(tr('Kiểm tra', 'Test')),
                   ),
-                OutlinedButton.icon(
-                  onPressed: () => _edit(p),
-                  icon: const AppIcon(AppIcons.config, mini: true),
-                  label: Text(tr('Sửa', 'Edit')),
-                ),
-                OutlinedButton.icon(
-                  onPressed: pinging ? null : () => _test(p),
-                  icon: pinging
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const AppIcon(AppIcons.signal, mini: true),
-                  label: Text(tr('Kiểm tra', 'Test')),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

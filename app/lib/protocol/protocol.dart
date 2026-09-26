@@ -7,12 +7,19 @@ import '../l10n/lang.dart';
 class PacketType {
   static const control = 0x01;
   static const telemetry = 0x02;
+  // Giao thức n kênh (đặc tả Sprint 3, 0.5 và C1–C2): app gửi µs cuối cùng của từng kênh, xe xuất thẳng.
+  // Firmware cũ không trả lời INFO_GET -> app lùi về CONTROL 2 kênh.
+  static const controlUs = 0x03;
+  static const infoGet = 0x04;
+  static const info = 0x05;
   static const configGet = 0x10;
   static const configData = 0x11;
   static const configSet = 0x12;
   static const configSave = 0x13;
   static const configReset = 0x14;
   static const ack = 0x20;
+  static const fsWrite = 0x21;
+  static const fsAck = 0x22;
   // Ping (F1). Đặc tả C1 đặt PING ở 0x10, nhưng khung v1 đã dùng 0x10–0x14 cho cấu hình,
   // nên tới khi có giao thức v2 (Sprint 4) ping dùng 0x30–0x32.
   static const ping = 0x30;
@@ -30,6 +37,9 @@ class PacketType {
 }
 
 const int frameHeader = 0xAA;
+
+/// Xe kẹp mọi xung xuất ra trong khoảng này (firmware US_MIN / US_MAX)
+const int usMin = 500, usMax = 2500;
 const _le = Endian.little;
 
 int crc8(List<int> data) {
@@ -79,6 +89,39 @@ Uint8List encodeControl({
     ..setUint8(4, gear)
     ..setUint8(5, seq & 0xFF);
   return encodeFrame(PacketType.control, b.buffer.asUint8List());
+}
+
+/// CONTROL_US: `seq:u16` · `us[n]:u16`. Danh sách rỗng = chỉ giữ kết nối, xe xuất failsafe của nó.
+Uint8List encodeControlUs(int seq, List<int> us) {
+  final b = ByteData(2 + us.length * 2)..setUint16(0, seq & 0xFFFF, _le);
+  for (var i = 0; i < us.length; i++) {
+    b.setUint16(2 + i * 2, us[i].clamp(usMin, usMax).toInt(), _le);
+  }
+  return encodeFrame(PacketType.controlUs, b.buffer.asUint8List());
+}
+
+/// FS_WRITE: `timeout_ms:u16` · `fs[n]:u16` — đúng [CarProfile.failsafeBytes]
+Uint8List encodeFsWrite(Uint8List failsafeBytes) => encodeFrame(PacketType.fsWrite, failsafeBytes);
+
+/// INFO: `proto:u8` · `channels:u8` (số kênh PWM xe có)
+class CarInfo {
+  final int proto, channels;
+  const CarInfo(this.proto, this.channels);
+
+  static CarInfo? parse(Uint8List p) => p.length < 2 || p[1] == 0 ? null : CarInfo(p[0], p[1]);
+}
+
+/// FS_ACK: `status:u8` · `hash:u32` (FNV-1a trên payload FS_WRITE xe nhận) · `channels:u8`
+class FsAck {
+  final bool ok;
+  final int hash, channels;
+  const FsAck(this.ok, this.hash, this.channels);
+
+  static FsAck? parse(Uint8List p) {
+    if (p.length < 6) return null;
+    final b = ByteData.sublistView(p);
+    return FsAck(p[0] == 1, b.getUint32(1, _le), p[5]);
+  }
 }
 
 class Telemetry {

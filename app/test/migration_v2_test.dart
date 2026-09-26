@@ -15,7 +15,7 @@ import 'package:rc_controller/services/mixer_engine.dart';
 import 'support/sprint3_reference.dart';
 
 /// Hồ sơ Sprint 3 thật: lái, ga, đèn (bật/tắt), còi (nhấn giữ, tắt = 0%), tời (3 nấc), ben (núm),
-/// 5 luật mix đủ 4 loại. Hộp số 100% mọi số (hộp số áp sau mix ở Sprint 4, so riêng).
+/// 5 luật mix đủ 4 loại. Hộp số 100% mọi số (app nay không còn hộp số, so riêng).
 Map<String, dynamic> fixture() =>
     jsonDecode(File('test/fixtures/sprint3_profile.json').readAsStringSync()) as Map<String, dynamic>;
 
@@ -146,7 +146,7 @@ void main() {
     expect(j['arm'], {'autoArm': false});
   });
 
-  test('cảnh báo: đọc kênh đã bị luật trước ghi, đọc/ghi CH2 (hộp số), đích chuyển kênh đang có phần tử', () {
+  test('cảnh báo: đọc kênh đã bị luật trước ghi, đích chuyển kênh đang có phần tử', () {
     final v1 = fixture()
       ..['mixes'] = [
         {'id': 'a', 'type': 'linear', 'sourceCh': 1, 'targetCh': 7},
@@ -156,9 +156,21 @@ void main() {
       ];
     final w = migrate(v1).warnings.join('\n');
     expect(w, contains('Luật mix 2 đọc CH7'));
-    expect(w, contains('Luật mix 3 đọc CH2 (Ga)'));
     expect(w, contains('Luật mix 4 (chuyển kênh)'));
-    expect(w, contains('Luật mix 4 ghi vào CH2 (Ga)'));
+    expect(w, isNot(contains('hộp số')));
+  });
+
+  test('hộp số đã bỏ: Sprint 3 giới hạn ga theo số thì cảnh báo, hồ sơ mới không còn khoá gears', () {
+    final v1 = fixture()
+      ..['gears'] = {
+        'gearCount': 2,
+        'maxThrottle': [40, 80, 100, 100, 100],
+      };
+    final m = migrate(v1);
+    expect(m.warnings.single, contains('Đã bỏ hộp số'));
+    expect(m.warnings.single, contains('40/80%'));
+    expect(m.json.containsKey('gears'), isFalse);
+    expect(migrate(fixture()).warnings, isEmpty, reason: 'hộp số 100% mọi số: không cần cảnh báo');
   });
 
   test('một kênh gán vào hai kiểu phần tử ở hai bố cục → Input thứ hai, không có luật, có cảnh báo', () {

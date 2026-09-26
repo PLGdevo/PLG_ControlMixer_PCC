@@ -18,14 +18,21 @@ constexpr size_t   MAX_FRAME      = MAX_PAYLOAD + 4;
 constexpr uint16_t DISCOVERY_PORT = 4211; // cổng cố định cho DISCOVER/HERE, không đổi theo cấu hình
 
 enum Type : uint8_t {
-  CONTROL      = 0x01,  // app -> xe : ControlPayload, gửi 30-50 Hz (cũng là heartbeat)
+  CONTROL      = 0x01,  // app -> xe : ControlPayload, gửi 30-50 Hz (cũng là heartbeat) — giao thức 2 kênh cũ
   TELEMETRY    = 0x02,  // xe -> app : TelemetryPayload, 10 Hz
+  // Giao thức n kênh: app tính mix/trim/reverse/Min-Max, xe xuất thẳng µs (đặc tả Sprint 3, 0.5 và C1–C2).
+  // Firmware cũ không trả lời INFO_GET -> app lùi về CONTROL 2 kênh.
+  CONTROL_US   = 0x03,  // app -> xe : seq:u16 · us[n]:u16, n = 0..MAX_CH (n = 0: giữ kết nối, xe xuất failsafe)
+  INFO_GET     = 0x04,  // app -> xe : không payload, trả INFO
+  INFO         = 0x05,  // xe -> app : InfoPayload
   CONFIG_GET   = 0x10,  // app -> xe : không payload
   CONFIG_DATA  = 0x11,  // xe -> app : CarConfig
   CONFIG_SET   = 0x12,  // app -> xe : CarConfig, áp dụng ngay (CHƯA lưu flash)
   CONFIG_SAVE  = 0x13,  // app -> xe : lưu cấu hình hiện tại vào flash
   CONFIG_RESET = 0x14,  // app -> xe : về mặc định + lưu, trả lời CONFIG_DATA
   ACK          = 0x20,  // xe -> app : [type được xác nhận][status: 1=ok, 0=lỗi, 2=xe đang chạy]
+  FS_WRITE     = 0x21,  // app -> xe : timeout_ms:u16 · fs[n]:u16 (µs), n = 1..MAX_CH; xe lưu NVS, trả FS_ACK
+  FS_ACK       = 0x22,  // xe -> app : FsAckPayload
   // Ping (F1/F2). Đặc tả v2 đặt PING ở 0x10 nhưng khung v1 đã dùng 0x10–0x14,
   // nên tới khi có giao thức v2 ping dùng 0x30–0x32.
   PING         = 0x30,  // app -> xe : PingPayload, trả PONG ngay trong vòng nhận
@@ -41,6 +48,12 @@ enum Type : uint8_t {
   DISCOVER     = 0x46,  // app -> broadcast:DISCOVERY_PORT : nonce:u16
   HERE         = 0x47,  // xe -> app : trả lời DISCOVER (net::encodeHere)
 };
+
+constexpr uint8_t  PROTO_N_CH = 2;     // phiên bản giao thức n kênh trả trong INFO
+constexpr size_t   MAX_CH     = 16;    // số kênh tối đa trong CONTROL_US / FS_WRITE
+constexpr uint16_t US_MIN     = 500;   // kẹp an toàn xung xuất ra (C2)
+constexpr uint16_t US_MAX     = 2500;
+constexpr uint16_t FS_TIMEOUT_MIN = 100, FS_TIMEOUT_MAX = 3000;
 
 enum TelemetryFlags : uint8_t {
   FLAG_FAILSAFE  = 1 << 0,
@@ -78,6 +91,17 @@ struct PongPayload {           // 10 byte
   uint32_t uptimeMs;           // millis() của xe
 };
 
+struct InfoPayload {           // 2 byte
+  uint8_t proto;               // PROTO_N_CH
+  uint8_t numCh;               // số kênh PWM xe có
+};
+
+struct FsAckPayload {          // 6 byte
+  uint8_t  status;             // 1 = đã lưu, 0 = dữ liệu sai
+  uint32_t hash;               // fnv1a() trên nguyên payload FS_WRITE nhận được
+  uint8_t  numCh;
+};
+
 struct ChannelConfig {         // 13 byte
   uint16_t minUs;              // giới hạn hành trình dưới
   uint16_t centerUs;           // điểm giữa / trung tính
@@ -103,6 +127,8 @@ static_assert(sizeof(ChannelConfig)    == 13, "ChannelConfig size");
 static_assert(sizeof(PingPayload)      == 6,  "PingPayload size");
 static_assert(sizeof(PongPayload)      == 10, "PongPayload size");
 static_assert(sizeof(CarConfig)        == 34, "CarConfig size");
+static_assert(sizeof(InfoPayload)      == 2,  "InfoPayload size");
+static_assert(sizeof(FsAckPayload)     == 6,  "FsAckPayload size");
 
 inline uint8_t crc8(const uint8_t* data, size_t len) {
   uint8_t crc = 0;
@@ -135,6 +161,45 @@ inline bool decode(const uint8_t* buf, size_t n, uint8_t& type,
   type = buf[1];
   payload = buf + 3;
   return true;
+}
+
+inline uint16_t u16le(const uint8_t* p) { return (uint16_t)(p[0] | p[1] << 8); }
+
+inline uint16_t clampUs(uint16_t us) { return us < US_MIN ? US_MIN : (us > US_MAX ? US_MAX : us); }
+
+// FNV-1a 32 bit — giống CarProfile.failsafeHash() trong app
+inline uint32_t fnv1a(const uint8_t* d, size_t n) {
+  uint32_t h = 0x811c9dc5u;
+  for (size_t i = 0; i < n; i++) {
+    h ^= d[i];
+    h *= 0x01000193u;
+  }
+  return h;
+}
+
+// CONTROL_US: trả về số kênh n (0..MAX_CH) hoặc -1 nếu sai độ dài.
+// Chép tối đa `outCh` kênh vào `us` (đã kẹp US_MIN..US_MAX).
+inline int parseControlUs(const uint8_t* p, uint8_t len, uint16_t& seq, uint16_t* us, size_t outCh) {
+  if (len < 2 || (len & 1) || (size_t)(len - 2) / 2 > MAX_CH) return -1;
+  seq = u16le(p);
+  size_t n = (len - 2) / 2;
+  for (size_t i = 0; i < n && i < outCh; i++) us[i] = clampUs(u16le(p + 2 + 2 * i));
+  return (int)n;
+}
+
+// FS_WRITE: kiểm tra timeout và mọi µs; chép tối đa `outCh` kênh vào `fs`. Trả về n, -1 nếu sai.
+inline int parseFsWrite(const uint8_t* p, uint8_t len, uint16_t& timeoutMs, uint16_t* fs, size_t outCh) {
+  if (len < 4 || (len & 1) || (size_t)(len - 2) / 2 > MAX_CH) return -1;
+  uint16_t t = u16le(p);
+  if (t < FS_TIMEOUT_MIN || t > FS_TIMEOUT_MAX) return -1;
+  size_t n = (len - 2) / 2;
+  for (size_t i = 0; i < n; i++) {
+    uint16_t v = u16le(p + 2 + 2 * i);
+    if (v < US_MIN || v > US_MAX) return -1;
+  }
+  timeoutMs = t;
+  for (size_t i = 0; i < n && i < outCh; i++) fs[i] = u16le(p + 2 + 2 * i);
+  return (int)n;
 }
 
 // Nếu buf là gói PING hợp lệ thì dựng gói PONG vào out; trả về số byte, 0 nếu không phải PING

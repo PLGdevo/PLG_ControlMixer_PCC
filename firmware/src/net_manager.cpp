@@ -8,6 +8,8 @@
 #include <esp_wifi.h>
 #include <lwip/sockets.h>
 
+#include "debug.h"
+
 namespace netm {
 using namespace net;
 
@@ -37,17 +39,11 @@ int       btnPin = -1;
 uint32_t  btnDownMs = 0;
 bool      btnResetDone = false;
 int       discSock = -1;
-char      serialLine[48];
-uint8_t   serialLen = 0;
 
 volatile bool    staAssoc  = false;
 volatile uint8_t staReason = 0;
 
 IPAddress toIp(const uint8_t* b) { return IPAddress(b[0], b[1], b[2], b[3]); }
-
-const char* modeName(uint8_t m) {
-  return m == MODE_STA ? "Router" : (m == MODE_SETUP ? "Cấu hình" : "AP");
-}
 
 const char* resultName(uint8_t r) {
   switch (r) {
@@ -84,6 +80,13 @@ void onWifiEvent(arduino_event_id_t e, arduino_event_info_t info) {
   } else if (e == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
     staAssoc = false;
     staReason = info.wifi_sta_disconnected.reason;
+  } else if (e == ARDUINO_EVENT_WIFI_AP_STACONNECTED || e == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+    bool join = e == ARDUINO_EVENT_WIFI_AP_STACONNECTED;
+    const uint8_t* m = join ? info.wifi_ap_staconnected.mac : info.wifi_ap_stadisconnected.mac;
+    dbg::log("NET", "Máy %02X:%02X:%02X:%02X:%02X:%02X %s WiFi của xe", m[0], m[1], m[2], m[3], m[4], m[5],
+             join ? "nối vào" : "rời");
+  } else if (e == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED) {
+    dbg::log("NET", "Cấp IP " IPSTR, IP2STR(&info.wifi_ap_staipassigned.ip));
   }
 }
 
@@ -128,15 +131,15 @@ void setupSsid(char* out) { snprintf(out, SSID_LEN + 1, "RC-SETUP-%02X%02X", car
 
 void printInfo() {
   NetStatus s = status();
-  Serial.printf("Mạng: %s%s  IP %u.%u.%u.%u  UDP %u  tên %s\n", modeName(s.mode), fellBack ? " (dự phòng)" : "",
-                s.ip[0], s.ip[1], s.ip[2], s.ip[3], cfg.udpPort, cfg.name);
+  dbg::log("NET", "Chế độ %s%s | IP %u.%u.%u.%u | UDP %u | tên \"%s\"", modeName(s.mode), fellBack ? " (dự phòng)" : "",
+           s.ip[0], s.ip[1], s.ip[2], s.ip[3], cfg.udpPort, cfg.name);
   if (curMode == MODE_STA) {
-    Serial.printf("  Router \"%s\" (%s)  RSSI %d dBm\n", cfg.staSsid, resultName(staResult), s.rssi);
+    dbg::log("NET", "  Router \"%s\" (%s) | RSSI %d dBm", cfg.staSsid, resultName(staResult), s.rssi);
   } else {
     char ssid[SSID_LEN + 1];
     if (curMode == MODE_SETUP) setupSsid(ssid); else snprintf(ssid, sizeof(ssid), "%s", cfg.apSsid);
-    Serial.printf("  Phát WiFi \"%s\" kênh %u  %u máy đang nối\n", ssid, cfg.apChannel, s.clients);
-    if (cfg.staSsid[0]) Serial.printf("  Router đã lưu \"%s\" (%s)\n", cfg.staSsid, resultName(staResult));
+    dbg::log("NET", "  Phát WiFi \"%s\" kênh %u | %u máy đang nối", ssid, cfg.apChannel, s.clients);
+    if (cfg.staSsid[0]) dbg::log("NET", "  Router đã lưu \"%s\" (%s)", cfg.staSsid, resultName(staResult));
   }
 }
 
@@ -177,40 +180,23 @@ void discPoll() {
   if (on) sendto(discSock, out, on, 0, (sockaddr*)&from, fromLen);  // trả thẳng về máy hỏi
 }
 
-// ---------------- Nút / Serial ----------------
+// ---------------- Nút ----------------
 void buttonPoll(uint32_t now) {
   if (btnPin < 0) return;
   bool down = digitalRead(btnPin) == LOW;
   if (down && !btnDownMs) btnDownMs = now | 1;
   if (down && !btnResetDone && now - btnDownMs >= BTN_RESET_MS) {
     btnResetDone = true;
-    Serial.println("Nút: mạng về mặc định");
+    dbg::log("NET", "Nút: giữ 10 s -> mạng về mặc định");
     resetToDefaults();
   }
   if (!down && btnDownMs) {
     uint32_t held = now - btnDownMs;
     btnDownMs = 0;
     if (held >= BTN_SETUP_MS && !btnResetDone) {
-      Serial.println("Nút: vào chế độ cấu hình");
+      dbg::log("NET", "Nút: giữ 3 s -> vào chế độ cấu hình");
       restartIntoSetup();
     }
-  }
-}
-
-void serialPoll() {
-  while (Serial.available()) {
-    char ch = (char)Serial.read();
-    if (ch == '\r') continue;
-    if (ch != '\n') {
-      if (serialLen < sizeof(serialLine) - 1) serialLine[serialLen++] = ch;
-      continue;
-    }
-    serialLine[serialLen] = 0;
-    serialLen = 0;
-    if (!strcmp(serialLine, "net info")) printInfo();
-    else if (!strcmp(serialLine, "net setup")) restartIntoSetup();
-    else if (!strcmp(serialLine, "net reset")) resetToDefaults();
-    else if (serialLine[0]) Serial.println("Lệnh: net info | net setup | net reset");
   }
 }
 
@@ -221,14 +207,15 @@ void staPoll(uint32_t now) {
     staResult = up ? STA_OK : STA_CONNECTING;
     if (up) {
       staStartMs = 0;  // từ giờ rớt router chỉ thử lại, không chuyển AP (IP sẽ đổi)
-      Serial.printf("Đã vào router  IP %s  RSSI %d dBm\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      dbg::log("NET", "Đã vào router | IP %s | RSSI %d dBm", WiFi.localIP().toString().c_str(), WiFi.RSSI());
     } else {
-      Serial.println("Mất router, đang thử lại");
+      dbg::log("NET", "!! Mất router (%s), đang thử lại", resultName(fromReason(staReason)));
     }
   }
   if (!staReady && staStartMs && now - staStartMs > STA_TIMEOUT_MS) {
     staResult = staAssoc ? STA_NO_IP : fromReason(staReason);
-    Serial.printf("Không vào được router \"%s\" (%s), chuyển sang AP\n", cfg.staSsid, resultName(staResult));
+    dbg::log("NET", "!! Không vào được router \"%s\" sau %lu s (%s), chuyển sang AP", cfg.staSsid,
+             (unsigned long)(STA_TIMEOUT_MS / 1000), resultName(staResult));
     staStartMs = 0;
     WiFi.setAutoReconnect(false);
     WiFi.disconnect(true);
@@ -294,14 +281,25 @@ void loop() {
       if (clientCount) {
         setupSeenMs = now;
       } else if (now - setupSeenMs > SETUP_IDLE_MS) {
-        Serial.println("Hết thời gian chế độ cấu hình, khởi động lại");
+        dbg::log("NET", "Hết thời gian chế độ cấu hình, khởi động lại");
         ESP.restart();
       }
     }
   }
   buttonPoll(now);
   discPoll();
-  serialPoll();
+}
+
+const char* modeName(uint8_t m) {
+  return m == MODE_STA ? "Router" : (m == MODE_SETUP ? "Cấu hình" : "AP");
+}
+
+bool command(const char* line) {
+  if (!strcmp(line, "net info")) printInfo();
+  else if (!strcmp(line, "net setup")) restartIntoSetup();
+  else if (!strcmp(line, "net reset")) resetToDefaults();
+  else return false;
+  return true;
 }
 
 Mode mode() { return curMode; }
@@ -336,13 +334,14 @@ NetStatus status() {
 bool applyPending() {
   if (!validConfig(pend)) return false;
   saveConfig(pend);  // cfg giữ nguyên tới khi khởi động lại
-  Serial.println("Đã lưu cấu hình mạng mới, khởi động lại");
+  dbg::log("NET", "Đã lưu cấu hình mạng mới, khởi động lại");
   scheduleRestart();
   return true;
 }
 
 void restartIntoSetup() {
   bootIntoSetup = SETUP_MAGIC;
+  dbg::log("NET", "Khởi động lại vào chế độ cấu hình");
   scheduleRestart();
 }
 
@@ -351,7 +350,7 @@ void resetToDefaults() {
   p.begin("rcnet", false);
   p.clear();
   p.end();
-  Serial.println("Mạng về mặc định, khởi động lại");
+  dbg::log("NET", "Mạng về mặc định, khởi động lại");
   scheduleRestart();
 }
 

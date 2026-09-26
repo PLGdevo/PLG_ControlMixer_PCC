@@ -1,5 +1,5 @@
 // Đường tính giá trị gửi đi (Sprint 4 — 0.2, O2), chạy trong app mỗi chu kỳ gửi:
-// Input → Condition → Mixer (%) → hộp số (kênh Ga) → reverse → µs quanh Center + trim + offset
+// Input → Condition → Mixer (%) → reverse → µs quanh Center + trim + offset
 // → kẹp [Min, Max]. Kênh tắt ra failsafeUs. Xe chỉ nhận kết quả cuối (0.5).
 import 'dart:typed_data';
 
@@ -45,29 +45,17 @@ class OutputPipeline {
   Float64List mixed() => mixer.run();
 
   /// Chạy một chu kỳ và đổi sang 10 kênh µs gửi xuống xe
-  List<int> run({required int gear}) => toUsList(mixed(), gear: gear);
+  List<int> run() => toUsList(mixed());
 
-  /// % sau mixer → µs (O2): hộp số áp lên kênh Ga sau mixer; kênh tắt ra failsafeUs
-  List<int> toUsList(List<double> pct, {required int gear}) => List<int>.generate(10, (i) {
+  /// % sau mixer → µs (O2); kênh tắt ra failsafeUs
+  List<int> toUsList(List<double> pct) => List<int>.generate(10, (i) {
         final ch = profile.channels[i];
         if (!ch.enabled) return ch.failsafeUs;
-        return toUs(ch, gearedPct(pct, i + 1, gear: gear));
+        return toUs(ch, pct[i]);
       });
-
-  /// % của kênh `ch` sau hộp số: chỉ kênh Ga đã chọn bị giới hạn, hồ sơ không có kênh Ga thì giữ nguyên
-  double gearedPct(List<double> pct, int ch, {required int gear}) {
-    final p = pct[ch - 1];
-    return ch == profile.throttleCh ? p * gearLimitPct(gear) / 100 : p;
-  }
 
   /// Failsafe của 10 kênh (READY gửi giá trị này — R1)
   List<int> failsafeUs() => [for (final c in profile.channels) c.failsafeUs];
-
-  double gearLimitPct(int gear) {
-    final g = profile.gears;
-    final n = gear.clamp(1, g.gearCount).toInt();
-    return g.maxThrottle[n - 1].toDouble();
-  }
 
   /// % (−100…+100) → µs: reverse, nội suy quanh tâm thực tế (Center + trim + offset), kẹp [Min, Max]
   static int toUs(ChannelConfig ch, double pct) {

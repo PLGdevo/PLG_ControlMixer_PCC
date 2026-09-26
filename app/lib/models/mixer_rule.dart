@@ -180,7 +180,8 @@ class MixRule {
     }
     if (!condition.isTrue) buf.write(tr(' · khi ${condition.describe(nm)}', ' · when ${condition.describe(nm)}'));
     if (combine != Combine.replace) buf.write(' · ${combine.label.toLowerCase()}');
-    if (requiresNeutral(src)) buf.write(tr(' · chờ về giữa', ' · waits for center'));
+    // Luật không điều kiện không bao giờ đổi trạng thái → khoá an toàn không có tác dụng
+    if (!condition.isTrue && requiresNeutral(src)) buf.write(tr(' · chờ về giữa', ' · waits for center'));
     return buf.toString();
   }
 

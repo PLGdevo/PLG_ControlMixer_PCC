@@ -15,6 +15,7 @@ import '../models/condition.dart';
 import '../models/control_layout.dart';
 import '../models/input_def.dart';
 import '../models/mixer_rule.dart';
+import '../services/quick_ping.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
@@ -62,6 +63,8 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   late String _savedJson;
   late String _savedKey;
   bool busy = false;
+  bool _pinging = false;
+  QuickPingResult? _pingResult;
 
   late final _name = TextEditingController(text: draft.name);
   late final _ip = TextEditingController(text: draft.wifi?.ip ?? '192.168.4.1');
@@ -79,8 +82,8 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     draft.wifi ??= WifiConn();
     draft.ble ??= BleConn();
     _markSaved();
-    // Màn cấu hình luôn đứng dọc, kể cả khi mở từ màn Lái (đang khoá ngang)
-    _portrait();
+    // Mở từ màn Lái (đang khoá ngang) thì bỏ khoá: cầm ngang hay dọc đều dùng được
+    _freeOrientation();
   }
 
   // Không khôi phục hướng trong dispose: màn nào mở màn này thì tự đặt lại sau khi push trả về.
@@ -94,11 +97,14 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     super.dispose();
   }
 
-  /// Hướng màn hình của màn này (đặt lại sau khi màn khác đổi hướng)
-  static void _portrait() {
-    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
+  /// Hướng màn hình của màn này: xoay tự do (đặt lại sau khi màn khác khoá hướng)
+  static void _freeOrientation() {
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
+
+  /// Điện thoại nằm ngang: màn thấp, dồn nút lên thanh tiêu đề để nội dung đủ chỗ
+  static bool _isCompact(BuildContext context) => MediaQuery.sizeOf(context).height < 500;
 
   void _markSaved() {
     _savedJson = jsonEncode(draft.toJson()..remove('updatedAt'));
@@ -158,9 +164,9 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     final ok = await _confirm(
         tr('Khôi phục mặc định?', 'Restore defaults?'),
         tr(
-            'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). '
+            'Kênh, luật mix, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). '
                 'Tên, kết nối, Input, bố cục và việc chọn kênh Ga/Lái được giữ lại. Chỉ ghi vào máy khi bấm Lưu.',
-            'Channels, mix rules, gears, failsafe and ARM go back to defaults (only rules into the chosen '
+            'Channels, mix rules, failsafe and ARM go back to defaults (only rules into the chosen '
                 'throttle/steering channels are kept). Name, connection, Inputs, layout and the throttle/steering '
                 'choice are kept. Nothing is written until you tap Save.'),
         tr('Khôi phục', 'Restore'));
@@ -241,7 +247,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
       ),
     );
     if (!mounted) return;
-    _portrait();
+    _freeOrientation();
     final fresh = widget.repo.get(widget.profileId);
     if (fresh == null) return;
     setState(() {
@@ -404,16 +410,19 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
       listenable: c,
       builder: (context, _) {
         final errors = _errors;
+        final compact = _isCompact(context);
         return PopScope(
           canPop: !_dirty,
           onPopInvokedWithResult: _onPop,
           child: Scaffold(
               appBar: AppBar(
+                toolbarHeight: compact ? 44 : null,
                 title: Text(draft.name.trim().isEmpty ? tr('Cấu hình', 'Car settings') : draft.name),
+                actions: compact ? _compactActions(errors) : null,
                 bottom: PreferredSize(
-                  preferredSize: const Size.fromHeight(52),
+                  preferredSize: Size.fromHeight(compact ? 40 : 52),
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(Gap.m, 0, Gap.m, Gap.s),
+                    padding: EdgeInsets.fromLTRB(Gap.m, 0, Gap.m, compact ? 0 : Gap.s),
                     child: TabBar(
                       controller: _tabs,
                       isScrollable: true,
@@ -429,20 +438,73 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
                   ),
                 ),
               ),
-              body: TabBarView(
-                controller: _tabs,
-                children: [
-                  _inputsTab(),
-                  _mixTab(),
-                  _channelsTab(),
-                  _generalTab(),
-                  _layoutTab(),
-                ],
+              // Nằm ngang: tránh tai thỏ / camera ở hai cạnh bên
+              body: SafeArea(
+                top: false,
+                bottom: false,
+                child: TabBarView(
+                  controller: _tabs,
+                  children: [
+                    _inputsTab(),
+                    _mixTab(),
+                    _channelsTab(),
+                    _generalTab(),
+                    _layoutTab(),
+                  ],
+                ),
               ),
-              bottomNavigationBar: _bottomBar(errors),
+              bottomNavigationBar: compact ? _compactErrorBar(errors) : _bottomBar(errors),
             ),
         );
       },
+    );
+  }
+
+  /// Nằm ngang: Lưu / Đồng bộ failsafe / Mặc định trên thanh tiêu đề (cùng việc với [_bottomBar])
+  List<Widget> _compactActions(List<String> errors) {
+    final connected = _connectedHere;
+    return [
+      IconButton(
+        tooltip: tr('Mặc định', 'Defaults'),
+        onPressed: busy ? null : _reset,
+        icon: const AppIcon(AppIcons.reset),
+      ),
+      IconButton(
+        tooltip: connected ? tr('Đồng bộ failsafe', 'Sync failsafe') : tr('Đồng bộ failsafe: cần kết nối xe', 'Sync failsafe: connect the car first'),
+        onPressed: connected && !busy ? _syncFailsafe : null,
+        icon: const AppIcon(AppIcons.syncFailsafe),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(left: Gap.xs, right: Gap.m),
+        child: FilledButton.icon(
+          onPressed: errors.isEmpty && !busy ? _save : null,
+          icon: busy
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const AppIcon(AppIcons.save, mini: true),
+          label: Text(tr('Lưu', 'Save')),
+        ),
+      ),
+    ];
+  }
+
+  /// Nằm ngang: chỉ hiện một dòng lỗi (lý do nút Lưu bị mờ), không chiếm chỗ khi hồ sơ hợp lệ
+  Widget? _compactErrorBar(List<String> errors) {
+    if (errors.isEmpty) return null;
+    final t = context.tokens;
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(color: t.surface, border: Border(top: BorderSide(color: t.line))),
+        padding: const EdgeInsets.symmetric(horizontal: Gap.m, vertical: Gap.xs),
+        child: Row(children: [
+          AppIcon(AppIcons.warning, color: t.bad, mini: true),
+          const SizedBox(width: Gap.s),
+          Expanded(
+            child: Text(errors.first,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.label.copyWith(color: t.bad)),
+          ),
+        ]),
+      ),
     );
   }
 
@@ -573,11 +635,15 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
         _hint(tr(
             'Kênh đầu ra CH1–CH10 nhận giá trị từ luật mix. Bấm vào kênh để chỉnh Min/Center/Max, trim, '
                 'đảo chiều và failsafe. Kênh tắt luôn ra failsafe. '
-                'Lưu ý: firmware xe hiện tại mới nhận CH1 (chân lái) và CH2 (chân ga); 10 kênh cần firmware giao thức v2.',
+                'Xe xuất được bao nhiêu kênh tuỳ firmware (xe ESP32-S3: CH1–CH8); firmware cũ chỉ nhận CH1 (chân lái) và CH2 (chân ga).',
             'Output channels CH1–CH10 get their values from mix rules. Tap a channel to set Min/Center/Max, trim, '
                 'reverse and failsafe. A disabled channel always outputs failsafe. '
-                'Note: the current car firmware only takes CH1 (steering pin) and CH2 (throttle pin); '
-                '10 channels need protocol v2 firmware.')),
+                'How many channels the car outputs depends on its firmware (ESP32-S3 car: CH1–CH8); '
+                'old firmware only takes CH1 (steering pin) and CH2 (throttle pin).')),
+        if (_connectedHere)
+          _hint(c.multiChannel
+              ? tr('Xe đang nối có ${c.carChannels} kênh.', 'The connected car has ${c.carChannels} channels.')
+              : tr('Xe đang nối dùng firmware cũ: chỉ CH1/CH2.', 'The connected car runs old firmware: CH1/CH2 only.')),
         for (final ch in draft.channels)
           ChannelTile(
             channel: ch,
@@ -801,6 +867,49 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     );
   }
 
+  /// Ping thử xe theo kết nối đang nhập (chưa cần Lưu). Đang nối đúng xe thì ping qua kết nối đó.
+  Widget _pingCard() {
+    final t = context.tokens;
+    final isWifi = draft.connType == ConnType.wifi;
+    final target = isWifi ? '${draft.wifi!.ip}:${draft.wifi!.port}' : draft.ble!.mac;
+    final r = _pingResult;
+    return Card(
+      child: ListTile(
+        leading: AppIcon(r == null || r.ok ? AppIcons.signal : AppIcons.signalOff,
+            color: r == null ? null : (r.ok ? t.ok : t.bad)),
+        title: Text(tr('Ping xe', 'Ping the car')),
+        subtitle: Text(
+          r == null ? tr('Gửi 3 gói ping tới $target', 'Send 3 pings to $target') : '${r.label} · $target',
+          style: r == null ? null : AppText.label.copyWith(color: r.ok ? t.ok : t.bad),
+        ),
+        trailing: _pinging
+            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+            : TextButton(onPressed: _ping, child: const Text('Ping')),
+        onTap: _pinging ? null : _ping,
+      ),
+    );
+  }
+
+  Future<void> _ping() async {
+    setState(() {
+      _pinging = true;
+      _pingResult = null;
+    });
+    final r = await QuickPing.run(
+      ble: draft.connType == ConnType.ble,
+      ip: draft.wifi?.ip,
+      port: draft.wifi?.port,
+      bleId: draft.ble?.mac,
+      controller: c,
+      connectedKey: c.connectedKey,
+    );
+    if (!mounted) return;
+    setState(() {
+      _pinging = false;
+      _pingResult = r;
+    });
+  }
+
   Widget _generalTab() {
     final g = draft.validateGeneral(otherNames: widget.repo.namesExcept(draft.id));
     final isWifi = draft.connType == ConnType.wifi;
@@ -862,6 +971,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
           ),
         ],
         const SizedBox(height: Gap.m),
+        _pingCard(),
         Card(
           child: ListTile(
             leading: const AppIcon(AppIcons.wifi),
@@ -888,57 +998,49 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
         const Divider(height: 32),
         Text(tr('Kênh Ga / Lái', 'Throttle / steering channels'), style: AppText.title.copyWith(color: context.tokens.text)),
         _hint(tr(
-            'Kênh Ga chịu giới hạn của hộp số; muốn ARM hay sửa bố cục phải thả cần ga về vị trí nghỉ. '
+            'Muốn ARM (hoặc bắt đầu lái khi tắt ARM) hay sửa bố cục phải thả cần của kênh Ga về vị trí nghỉ. '
                 'Kênh Lái là kênh ô Trim trên màn Lái chỉnh. Chọn "Không có" nếu xe không cần. '
                 'Min/Center/Max, trim và failsafe của kênh chỉnh ở tab Kênh.',
-            'The throttle channel is limited by the gears; to ARM or edit the layout the throttle must be at rest. '
+            'To ARM (or start driving with ARM off) or edit the layout, the throttle channel control must be at rest. '
                 'The steering channel is the one the Trim box on the drive screen adjusts. Choose "None" if the car '
                 'does not need it. Min/Center/Max, trim and failsafe are set in the Channels tab.')),
         _rolePicker(throttle: true),
         _rolePicker(throttle: false),
         const Divider(height: 32),
-        NumberField(
-          label: tr('Số lượng số', 'Number of gears'),
-          value: draft.gears.gearCount,
-          min: 1,
-          max: 5,
-          error: g['gearCount'],
-          onChanged: (v) => setState(() => draft.gears.gearCount = v),
-        ),
-        for (var i = 0; i < draft.gears.gearCount; i++)
-          NumberField(
-            label: tr('Ga tối đa số ${i + 1}', 'Max throttle in gear ${i + 1}'),
-            unit: '%',
-            value: draft.gears.maxThrottle[i],
-            min: 1,
-            max: 100,
-            step: 5,
-            error: g['gear$i'],
-            onChanged: (v) => setState(() => draft.gears.maxThrottle[i] = v),
-          ),
-        _hint(draft.throttleCh == null
-            ? tr('Chưa chọn kênh Ga (ở trên) nên hộp số chưa có tác dụng.', 'No throttle channel chosen (above), so the gears have no effect.')
-            : tr('Hộp số giới hạn kênh Ga (${draft.chLabel(draft.throttleCh!)}).', 'The gears limit the throttle channel (${draft.chLabel(draft.throttleCh!)}).')),
-        const Divider(height: 32),
         Text('ARM', style: AppText.title.copyWith(color: context.tokens.text)),
-        _hint(tr('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (có kênh Ga thì cần ga phải ở vị trí nghỉ).', 'Right after connecting, the car ignores drive commands. Hold the ARM button for 1 second on the drive screen (with a throttle channel, the throttle must be at rest).')),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
-          title: Text(tr('Tự ARM sau khi kết nối', 'Auto-ARM after connecting')),
-          subtitle: Text(tr('Tự ARM một lần khi đủ điều kiện; DISARM rồi thì phải bấm lại',
-              'ARMs once when conditions are met; after a DISARM you must ARM again')),
-          value: draft.arm.autoArm,
-          onChanged: (v) => setState(() => draft.arm.autoArm = v),
+          title: Text(tr('Dùng cơ chế ARM', 'Use ARM')),
+          subtitle: Text(draft.arm.enabled
+              ? tr('Vừa kết nối xe chưa nhận lệnh lái: nhấn giữ nút ARM 1 giây trên màn Lái mới lái được.',
+                  'Right after connecting, the car ignores drive commands: hold the ARM button for 1 second on the drive screen to drive.')
+              : tr('Vào màn Lái là lái được ngay, không có nút ARM. Xe chỉ nhận lệnh khi cần ga ở vị trí nghỉ; '
+                      'mở Cấu hình, sửa bố cục, app xuống nền hay mất tín hiệu thì tạm dừng, xong tự lái lại.',
+                  'Driving starts as soon as you open the drive screen, no ARM button. The car only takes commands '
+                      'once the throttle is at rest; opening settings, editing the layout, leaving the app or losing '
+                      'the signal pauses it, then it resumes by itself.')),
+          value: draft.arm.enabled,
+          onChanged: (v) => setState(() => draft.arm.enabled = v),
         ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(tr('Điều kiện ARM riêng', 'Custom ARM condition')),
-          subtitle: Text(tr('Chỉ ARM được khi điều kiện đúng; điều kiện sai thì tự DISARM',
-              'ARM only while the condition is true; DISARMs when it turns false')),
-          value: draft.arm.armCondition != null,
-          onChanged: (v) => setState(() => draft.arm.armCondition = v ? const ExprTrue() : null),
-        ),
-        if (draft.arm.armCondition != null)
+        if (draft.arm.enabled) ...[
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr('Tự ARM sau khi kết nối', 'Auto-ARM after connecting')),
+            subtitle: Text(tr('Tự ARM một lần khi đủ điều kiện; DISARM rồi thì phải bấm lại',
+                'ARMs once when conditions are met; after a DISARM you must ARM again')),
+            value: draft.arm.autoArm,
+            onChanged: (v) => setState(() => draft.arm.autoArm = v),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr('Điều kiện ARM riêng', 'Custom ARM condition')),
+            subtitle: Text(tr('Chỉ ARM được khi điều kiện đúng; điều kiện sai thì tự DISARM',
+                'ARM only while the condition is true; DISARMs when it turns false')),
+            value: draft.arm.armCondition != null,
+            onChanged: (v) => setState(() => draft.arm.armCondition = v ? const ExprTrue() : null),
+          ),
+        ],
+        if (draft.arm.enabled && draft.arm.armCondition != null)
           ConditionBuilder(
             value: draft.arm.armCondition!,
             inputs: draft.inputs,

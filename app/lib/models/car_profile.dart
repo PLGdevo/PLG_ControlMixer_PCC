@@ -49,39 +49,24 @@ class BleConn {
       BleConn(mac: j['mac'] as String? ?? '', deviceName: j['deviceName'] as String? ?? '');
 }
 
-class GearConfig {
-  static const maxGears = 5;
-  int gearCount;
-  List<int> maxThrottle; // % cho từng số, luôn 5 phần tử
-
-  GearConfig({this.gearCount = 3, List<int>? maxThrottle})
-      : maxThrottle = maxThrottle ?? [30, 60, 100, 100, 100];
-
-  Map<String, dynamic> toJson() => {'gearCount': gearCount, 'maxThrottle': maxThrottle};
-
-  factory GearConfig.fromJson(Map<String, dynamic>? j) {
-    if (j == null) return GearConfig();
-    final list = (j['maxThrottle'] as List?)?.map((e) => e as int).toList() ?? [30, 60, 100, 100, 100];
-    while (list.length < maxGears) {
-      list.add(100);
-    }
-    return GearConfig(gearCount: j['gearCount'] as int? ?? 3, maxThrottle: list.take(maxGears).toList());
-  }
-}
-
 /// Cài đặt ARM (R2)
 class ArmConfig {
+  /// false = không dùng cơ chế ARM: vào màn Lái là tự lái được (vẫn cần thả ga), không có nút ARM,
+  /// bỏ qua autoArm và điều kiện ARM riêng
+  bool enabled;
   bool autoArm;
   Expr? armCondition; // null = không có điều kiện riêng
 
-  ArmConfig({this.autoArm = false, this.armCondition});
+  ArmConfig({this.enabled = true, this.autoArm = false, this.armCondition});
 
   Map<String, dynamic> toJson() => {
+        'enabled': enabled,
         'autoArm': autoArm,
         if (armCondition != null) 'armCondition': armCondition!.toJson(),
       };
 
   factory ArmConfig.fromJson(Map<String, dynamic>? j) => ArmConfig(
+        enabled: j?['enabled'] as bool? ?? true,
         autoArm: j?['autoArm'] as bool? ?? false,
         armCondition: j?['armCondition'] == null ? null : Expr.fromJson(j!['armCondition']),
       );
@@ -112,11 +97,10 @@ class CarProfile {
   ConnType connType;
   WifiConn? wifi;
   BleConn? ble;
-  GearConfig gears;
   int failsafeTimeoutMs;
   List<ChannelConfig> channels; // đúng 10 phần tử
 
-  /// Kênh Ga do người dùng chọn (null = không có): hộp số, kiểm tra thả ga khi ARM, cảnh báo cần ga
+  /// Kênh Ga do người dùng chọn (null = không có): kiểm tra thả ga khi ARM, cảnh báo cần ga
   int? throttleCh;
 
   /// Kênh Lái do người dùng chọn (null = không có): ô trim nhanh trên màn Lái
@@ -144,7 +128,6 @@ class CarProfile {
     required this.connType,
     this.wifi,
     this.ble,
-    GearConfig? gears,
     this.failsafeTimeoutMs = 400,
     List<ChannelConfig>? channels,
     this.throttleCh,
@@ -161,8 +144,7 @@ class CarProfile {
     this.lastSyncedAt,
     this.lastSyncedHash,
     this.lastConnectedAt,
-  })  : gears = gears ?? GearConfig(),
-        channels = channels ?? ChannelConfig.defaultList(),
+  })  : channels = channels ?? ChannelConfig.defaultList(),
         inputs = inputs ?? [],
         conditions = conditions ?? [],
         mixer = mixer ?? [],
@@ -318,7 +300,7 @@ class CarProfile {
     if (a != null) arm.armCondition = a.renameInput(from, to);
   }
 
-  /// Đưa cấu hình (kênh, mix, hộp số, failsafe) về mặc định; giữ tên, kết nối, Input, bố cục và
+  /// Đưa cấu hình (kênh, mix, failsafe, ARM) về mặc định; giữ tên, kết nối, Input, bố cục và
   /// kênh Ga/Lái đã chọn. Luật mix về dạng tối thiểu: Input đang điều khiển kênh Lái / Ga → kênh đó.
   void resetConfig() {
     final steer = steeringInputs.firstOrNull, thr = throttleInputs.firstOrNull;
@@ -328,7 +310,6 @@ class CarProfile {
       if (steer != null) MixRule(id: 'r_steer', source: steer, destCh: steeringCh!),
       if (thr != null) MixRule(id: 'r_throttle', source: thr, destCh: throttleCh!),
     ];
-    gears = GearConfig();
     failsafeTimeoutMs = 400;
     arm = ArmConfig();
   }
@@ -356,16 +337,16 @@ class CarProfile {
   }
 
   /// Gói cấu hình firmware v1 (2 kênh): CH1 → chân lái, CH2 → chân ga của xe, bất kể kênh Ga/Lái
-  /// chọn trong hồ sơ. Hộp số do app áp lên kênh Ga đã chọn nên xe nhận giới hạn 100% mọi số.
+  /// chọn trong hồ sơ. App không có hộp số: gửi 1 số, giới hạn ga 100% để xe không cắt ga.
   CarConfig toCarConfig() => CarConfig(
         throttle: _servo(ch(2)),
         steering: _servo(ch(1)),
         failsafeTimeoutMs: failsafeTimeoutMs,
-        gearCount: gears.gearCount,
-        gearLimit: List<int>.filled(GearConfig.maxGears, 100),
+        gearCount: 1,
+        gearLimit: List<int>.filled(5, 100),
       );
 
-  /// Nạp cấu hình kiểu cũ (đọc từ xe) vào CH1/CH2. Hộp số không nạp: xe chỉ giữ giới hạn 100%.
+  /// Nạp cấu hình kiểu cũ (đọc từ xe) vào CH1/CH2. Hộp số của xe không nạp (app không dùng).
   void applyCarConfig(CarConfig c) {
     _fromServo(ch(1), c.steering);
     _fromServo(ch(2), c.throttle);
@@ -373,7 +354,7 @@ class CarProfile {
   }
 
   // ---------------- Kiểm tra (E7, V) ----------------
-  /// Lỗi của các trường chung (tên, kết nối, hộp số, failsafe). `otherNames` để chống trùng tên.
+  /// Lỗi của các trường chung (tên, kết nối, failsafe, kênh Ga/Lái). `otherNames` để chống trùng tên.
   Map<String, String> validateGeneral({Iterable<String> otherNames = const []}) {
     final e = <String, String>{};
     final n = name.trim();
@@ -403,11 +384,6 @@ class CarProfile {
       if (c != null && (c < 1 || c > 10)) e[k] = tr('Kênh phải trong CH1–CH10', 'Channel must be CH1–CH10');
     }
     if (throttleCh != null && throttleCh == steeringCh) e['steeringCh'] = tr('Kênh Lái trùng kênh Ga', 'Steering channel is the same as the throttle channel');
-    if (gears.gearCount < 1 || gears.gearCount > GearConfig.maxGears) e['gearCount'] = tr('Số lượng số 1–5', 'Gear count must be 1–5');
-    for (var i = 0; i < gears.gearCount; i++) {
-      final g = gears.maxThrottle[i];
-      if (g < 1 || g > 100) e['gear$i'] = tr('Ga tối đa số ${i + 1} phải 1–100%', 'Max throttle in gear ${i + 1} must be 1–100%');
-    }
     return e;
   }
 
@@ -440,7 +416,7 @@ class CarProfile {
     final ids = inputMap;
     final condIds = {for (final c in conditions) c.id};
     final a = arm.armCondition;
-    if (a != null) {
+    if (a != null && arm.enabled) {
       final e = a.validate(ids, condIds);
       if (e != null) r.errors.add(tr('Điều kiện ARM: $e', 'ARM condition: $e'));
     }
@@ -505,7 +481,7 @@ class CarProfile {
   }
 
   /// FNV-1a 32 bit trên [failsafeBytes]; xe tính giống hệt để trả trong FS_ACK.
-  /// Chỉ failsafe: sửa trim, Min/Max, mix, hộp số, bố cục không làm hồ sơ thành "chưa đồng bộ".
+  /// Chỉ failsafe: sửa trim, Min/Max, mix, bố cục không làm hồ sơ thành "chưa đồng bộ".
   int failsafeHash() {
     var h = 0x811c9dc5;
     for (final b in failsafeBytes()) {
@@ -525,7 +501,6 @@ class CarProfile {
         'connType': connType.name,
         'wifi': wifi?.toJson(),
         'ble': ble?.toJson(),
-        'gears': gears.toJson(),
         'failsafeTimeoutMs': failsafeTimeoutMs,
         'channels': channels.map((c) => c.toJson()).toList(),
         'throttleCh': throttleCh,
@@ -562,7 +537,6 @@ class CarProfile {
       connType: ConnType.values.asNameMap()[j['connType']] ?? ConnType.wifi,
       wifi: j['wifi'] == null ? null : WifiConn.fromJson(j['wifi'] as Map<String, dynamic>),
       ble: j['ble'] == null ? null : BleConn.fromJson(j['ble'] as Map<String, dynamic>),
-      gears: GearConfig.fromJson(j['gears'] as Map<String, dynamic>?),
       failsafeTimeoutMs: j['failsafeTimeoutMs'] as int? ?? 400,
       channels: channels,
       // Hồ sơ lưu trước khi chọn được kênh Ga/Lái (không có khoá): Lái CH1, Ga CH2 như cũ
@@ -593,8 +567,8 @@ enum ProfileTemplate {
   basic('Xe cơ bản 2 kênh', 'Basic 2-channel car', 'Lái (CH1) và Ga (CH2)', 'Steering (CH1) and throttle (CH2)'),
   lightsHorn('Xe có đèn/còi', 'Car with lights/horn', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)',
       'Adds Lights (CH3, on/off) and Horn (CH4, push)'),
-  copy('Sao chép từ xe khác', 'Copy from another car', 'Lấy Input, mix, kênh, hộp số và bố cục của một xe có sẵn',
-      'Takes Inputs, mix, channels, gears and layout from an existing car');
+  copy('Sao chép từ xe khác', 'Copy from another car', 'Lấy Input, mix, kênh, ARM và bố cục của một xe có sẵn',
+      'Takes Inputs, mix, channels, ARM and layout from an existing car');
 
   const ProfileTemplate(this._vi, this._en, this._descVi, this._descEn);
   final String _vi, _en, _descVi, _descEn;
@@ -617,7 +591,6 @@ enum ProfileTemplate {
         ..mixer = c.mixer
         ..arm = c.arm
         ..output = c.output
-        ..gears = c.gears
         ..failsafeTimeoutMs = c.failsafeTimeoutMs
         ..ping = c.ping
         ..layouts = c.layouts

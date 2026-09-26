@@ -4,7 +4,10 @@ Nói đúng giao thức trong app/lib/protocol/protocol.dart và firmware/src/pr
   khung = [0xAA, type, len, payload..., crc8(type..payload)]
 
 Cần cài:  pip install -r tools/requirements.txt   (chỉ cần gói "rich")
-Chạy:     python tools/fake_car.py
+Chạy:     python tools/fake_car.py [--channels 8] [--legacy] [--no-ack]
+  --channels N : số kênh của xe (firmware n kênh), mặc định 8
+  --legacy     : giả firmware cũ 2 kênh (không trả lời INFO_GET / FS_WRITE / CONTROL_US)
+  --no-ack     : nhận FS_WRITE nhưng không trả FS_ACK (thử nhánh lỗi đồng bộ failsafe, E6)
 Trong app điền IP:
   - Android emulator : 10.0.2.2   (10.0.2.2 = máy tính chủ, nhìn từ trong emulator)
   - Điện thoại thật  : IP LAN của máy tính, cùng WiFi
@@ -16,6 +19,7 @@ Xe giả chạy trên máy tính trong mạng LAN nên giống xe ở chế đ�
     xe giả không đổi port hay chế độ thật.
 """
 
+import argparse
 import math
 import re
 import socket
@@ -34,6 +38,10 @@ HEADER = 0xAA
 
 # Loại gói
 CONTROL, TELEMETRY = 0x01, 0x02
+# Giao thức n kênh (firmware/src/protocol.h): app gửi µs từng kênh, xe xuất thẳng
+CONTROL_US, INFO_GET, INFO = 0x03, 0x04, 0x05
+FS_WRITE, FS_ACK = 0x21, 0x22
+PROTO_N_CH, MAX_CH = 2, 16
 CONFIG_GET, CONFIG_DATA, CONFIG_SET, CONFIG_SAVE, CONFIG_RESET = 0x10, 0x11, 0x12, 0x13, 0x14
 ACK = 0x20
 PING, PONG = 0x30, 0x31  # ping (F1): PING seq:u16 t_send:u32 -> PONG seq:u16 t_send:u32 uptime:u32
@@ -98,6 +106,25 @@ def decode(buf: bytes):
     if crc8(body) != buf[3 + length]:
         return None
     return buf[1], buf[3:3 + length]
+
+
+def fnv1a(data: bytes) -> int:
+    """FNV-1a 32 bit — giống fnv1a() trong protocol.h và CarProfile.failsafeHash()."""
+    h = 0x811C9DC5
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def parse_fs_write(p: bytes):
+    """(timeout_ms, [µs...]) nếu hợp lệ, None nếu sai — cùng điều kiện với parseFsWrite()."""
+    if len(p) < 4 or len(p) % 2 or (len(p) - 2) // 2 > MAX_CH:
+        return None
+    to = struct.unpack_from("<H", p)[0]
+    fs = list(struct.unpack_from(f"<{(len(p) - 2) // 2}H", p, 2))
+    if not 100 <= to <= 3000 or not all(500 <= v <= 2500 for v in fs):
+        return None
+    return to, fs
 
 
 def default_config() -> dict:
@@ -261,8 +288,15 @@ def valid_config(c: dict) -> bool:
 
 
 class FakeCar:
-    def __init__(self, console: Console):
+    def __init__(self, console: Console, channels: int = 8, legacy: bool = False, no_ack: bool = False):
         self.console = console
+        self.channels = channels
+        self.legacy = legacy
+        self.no_ack = no_ack
+        self.multi = False               # app đang gửi CONTROL_US
+        self.us: list[int] = []          # µs app gửi (đã cắt còn self.channels kênh)
+        self.fs = [1500] * channels      # failsafe từng kênh (FS_WRITE)
+        self.fs_timeout = 400
         self.live: Live | None = None   # gán sau khi main() mở khung Live
         self.cfg = default_config()
         self.saved = pack_config(self.cfg)
@@ -308,14 +342,21 @@ class FakeCar:
             f"[bold]Client[/]   {self.client[0]}:{self.client[1]}",
             f"[bold]Seq[/]      {self.last_seq}",
         )
-        table.add_row(
-            f"[bold]Ga[/]       {self.throttle:+5d}",
-            f"[bold]Lái[/]      {self.steering:+5d}",
-        )
-        table.add_row(
-            f"[bold]Số[/]       {self.gear} ({limit}% ga)",
-            "",
-        )
+        if self.multi:
+            idle = time.monotonic() - self.last_cmd_at > self.fs_timeout / 1000
+            us = self.fs if idle or not self.us else self.us + self.fs[len(self.us):]
+            table.add_row(f"[bold]Kênh[/]     {len(self.us)}/{self.channels} app gửi", "")
+            table.add_row("  ".join(f"CH{i + 1} {v}" for i, v in enumerate(us[:4])), "")
+            table.add_row("  ".join(f"CH{i + 1} {v}" for i, v in enumerate(us[4:], 5)), "")
+        else:
+            table.add_row(
+                f"[bold]Ga[/]       {self.throttle:+5d}",
+                f"[bold]Lái[/]      {self.steering:+5d}",
+            )
+            table.add_row(
+                f"[bold]Số[/]       {self.gear} ({limit}% ga)",
+                "",
+            )
 
         if self.tele is None:
             return Panel(table, title="Xe giả — chờ telemetry", border_style="yellow")
@@ -336,6 +377,11 @@ class FakeCar:
 
     def banner(self):
         self.console.print(f"[bold]Xe giả đang nghe UDP {HOST}:{PORT}[/] (tìm xe: {DISCOVERY_PORT})")
+        if self.legacy:
+            self.console.print("  Firmware CŨ 2 kênh (--legacy): app sẽ chỉ lái CH1/CH2")
+        else:
+            self.console.print(f"  Firmware n kênh: {self.channels} kênh"
+                               + (" · không trả FS_ACK (--no-ack)" if self.no_ack else ""))
         self.console.print("  Emulator  -> điền IP 10.0.2.2")
         ips = lan_ips()
         if ips:
@@ -408,6 +454,37 @@ class FakeCar:
             self.throttle, self.steering = thr, steer
             self.gear, self.last_seq = gear, seq
             self.last_cmd_at = time.monotonic()
+            self.multi = False
+
+        elif ptype == CONTROL_US and not self.legacy:
+            if len(payload) < 2 or len(payload) % 2 or (len(payload) - 2) // 2 > MAX_CH:
+                return
+            n = (len(payload) - 2) // 2
+            seq = struct.unpack_from("<H", payload)[0]
+            self.us = [min(2500, max(500, v)) for v in struct.unpack_from(f"<{n}H", payload, 2)][: self.channels]
+            self.multi = True
+            self.last_seq = seq & 0xFF
+            self.last_cmd_at = time.monotonic()
+
+        elif ptype == INFO_GET and not self.legacy:
+            self.sock.sendto(encode(INFO, bytes([PROTO_N_CH, self.channels])), addr)
+            self.log(f"-> INFO: giao thức n kênh, {self.channels} kênh")
+
+        elif ptype == FS_WRITE and not self.legacy:
+            parsed = parse_fs_write(payload)
+            if parsed:
+                self.fs_timeout, fs = parsed
+                self.fs = (fs + [1500] * self.channels)[: self.channels]
+                self.multi = True
+                self.log(f"-> nhận failsafe {len(fs)} kênh, sau {self.fs_timeout} ms: "
+                         + " ".join(str(v) for v in self.fs), style="green")
+            else:
+                self.log(f"-> failsafe KHÔNG hợp lệ: {payload.hex()}", style="red")
+            if self.no_ack:
+                self.log("   (--no-ack: không trả FS_ACK)", style="yellow")
+                return
+            ack = struct.pack("<BIB", 1 if parsed else 0, fnv1a(payload), self.channels)
+            self.sock.sendto(encode(FS_ACK, ack), addr)
 
         elif ptype == CONFIG_GET:
             self.sock.sendto(encode(CONFIG_DATA, pack_config(self.cfg)), addr)
@@ -477,11 +554,15 @@ class FakeCar:
                 if addr is None:
                     continue
                 idle = time.monotonic() - self.last_cmd_at
-                failsafe = idle > FAILSAFE_AFTER
+                failsafe = idle > (self.fs_timeout / 1000 if self.multi else FAILSAFE_AFTER)
 
-                # Ga hiệu dụng sau khi qua giới hạn số
-                limit = self.cfg["gear_limit"][max(0, min(self.gear, 5) - 1)]
-                eff = 0 if failsafe else self.throttle * limit / 100 / 1000  # -1..1
+                if self.multi:
+                    # n kênh: xe không biết kênh nào là ga; mô phỏng tốc độ theo CH2 (mẫu mặc định)
+                    eff = 0 if failsafe or len(self.us) < 2 else (self.us[1] - self.fs[1]) / 500
+                else:
+                    # Ga hiệu dụng sau khi qua giới hạn số
+                    limit = self.cfg["gear_limit"][max(0, min(self.gear, 5) - 1)]
+                    eff = 0 if failsafe else self.throttle * limit / 100 / 1000  # -1..1
 
                 # Tốc độ bám theo ga với quán tính nhẹ (1 km/h = 27.78 cm/s)
                 target = abs(eff) * 42.0 * 27.78  # ~42 km/h khi ga hết cỡ
@@ -519,8 +600,14 @@ def main():
     except (AttributeError, OSError):
         pass
 
+    ap = argparse.ArgumentParser(description="Xe RC giả lập qua UDP")
+    ap.add_argument("--channels", type=int, default=8, help="số kênh của xe (1..16), mặc định 8")
+    ap.add_argument("--legacy", action="store_true", help="giả firmware cũ 2 kênh")
+    ap.add_argument("--no-ack", action="store_true", help="không trả FS_ACK")
+    args = ap.parse_args()
+
     console = Console()
-    car = FakeCar(console)
+    car = FakeCar(console, channels=max(1, min(MAX_CH, args.channels)), legacy=args.legacy, no_ack=args.no_ack)
     car.banner()
 
     with Live(car.render_status(), console=console, refresh_per_second=12, transient=False) as live:

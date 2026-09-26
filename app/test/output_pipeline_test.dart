@@ -9,11 +9,11 @@ import 'package:rc_controller/services/output_pipeline.dart';
 void main() {
   CarProfile profile() => CarProfile(id: 'p', name: 'p', connType: ConnType.wifi);
 
-  List<int> run(OutputPipeline pipe, {double steer = 0, double thr = 0, int gear = 3}) {
+  List<int> run(OutputPipeline pipe, {double steer = 0, double thr = 0}) {
     pipe.inputs
       ..setPosition('steer', steer)
       ..setPosition('throttle', thr);
-    return pipe.run(gear: gear);
+    return pipe.run();
   }
 
   test('kênh không có luật ra Center, kênh tắt ra failsafe', () {
@@ -47,33 +47,22 @@ void main() {
     expect(run(pipe, thr: -100)[1], 1000);
   });
 
-  test('hộp số giới hạn kênh Ga sau mixer, không đụng kênh khác', () {
-    final pipe = OutputPipeline(profile()); // số 1 = 30%
-    final out = run(pipe, steer: 100, thr: 100, gear: 1);
-    expect(out[1], 1650);
+  test('không có hộp số: kênh Ga ra đủ hành trình', () {
+    final pipe = OutputPipeline(profile());
+    final out = run(pipe, steer: 100, thr: 100);
+    expect(out[1], 2000);
     expect(out[0], 1900);
-    expect(run(pipe, thr: -100, gear: 1)[1], 1350);
-    expect(run(pipe, thr: 100, gear: 9)[1], 2000); // số vượt gearCount → số cao nhất
+    expect(run(pipe, thr: -100)[1], 1000);
   });
 
-  test('hộp số đi theo kênh Ga người dùng chọn; không có kênh Ga thì không giới hạn', () {
-    final p = profile()
-      ..throttleCh = 3
-      ..mixer.add(MixRule(id: 'r3', source: 'throttle', destCh: 3));
-    p.ch(3).enabled = true;
+  test('hồ sơ không có kênh Ga: cần ga luôn coi là ở vị trí nghỉ', () {
+    final p = profile()..throttleCh = null;
     final pipe = OutputPipeline(p);
-    final out = run(pipe, thr: 100, gear: 1);
-    expect(out[2], 1650); // CH3 là Ga: 30%
-    expect(out[1], 2000); // CH2 không còn là Ga
-    expect(pipe.gearedPct(pipe.mixed(), 2, gear: 1), 100);
-
-    p.throttleCh = null;
-    expect(run(pipe, thr: 100, gear: 1)[2], 2000);
     pipe.inputs.setPosition('throttle', 80);
     expect(pipe.throttleAtRest(p.activeLayout), isTrue); // không có kênh Ga để kiểm tra
   });
 
-  test('luật mix: ga (trước hộp số) vào CH4; điều kiện có trễ vào CH3; reset trạng thái', () {
+  test('luật mix: ga vào CH4; điều kiện có trễ vào CH3; reset trạng thái', () {
     final p = profile()
       ..inputs.add(InputDef(id: 'k100', name: '100', type: InputType.constant, constPct: 100))
       ..mixer.addAll([
@@ -84,13 +73,13 @@ void main() {
     p.ch(3).enabled = true;
     p.ch(4).enabled = true;
     final pipe = OutputPipeline(p);
-    final out = run(pipe, steer: 90, thr: 100, gear: 1);
+    final out = run(pipe, steer: 90, thr: 100);
     expect(out[2], 2000); // steer ≥ 80 → CH3 = 100%
-    expect(out[3], 2000); // CH4 lấy ga trước hộp số
-    expect(out[1], 1650); // CH2 qua hộp số (30%)
-    expect(run(pipe, steer: 75, gear: 1)[2], 2000); // vùng giữ
+    expect(out[3], 2000); // CH4 lấy ga
+    expect(out[1], 2000); // CH2 (Ga)
+    expect(run(pipe, steer: 75)[2], 2000); // vùng giữ
     pipe.reset();
-    expect(run(pipe, steer: 75, gear: 1)[2], 1500); // reset hysteresis → không tác động → Center
+    expect(run(pipe, steer: 75)[2], 1500); // reset hysteresis → không tác động → Center
   });
 
   test('sửa hồ sơ có tác dụng ngay ở chu kỳ tiếp theo, giữ vị trí Input', () {
@@ -101,7 +90,7 @@ void main() {
       ..ch(3).enabled = true
       ..mixer.add(MixRule(id: 'c', source: 'steer', destCh: 3, offsetPct: 10));
     pipe.update(q);
-    expect(pipe.run(gear: 1)[2], 1750); // steer 40 giữ nguyên + 10 = 50%
+    expect(pipe.run()[2], 1750); // steer 40 giữ nguyên + 10 = 50%
   });
 
   test('vị trí nghỉ của Ga theo vị trí về đã cài (R2, H5-1)', () {

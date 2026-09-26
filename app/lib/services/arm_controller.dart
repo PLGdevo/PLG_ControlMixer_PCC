@@ -1,5 +1,6 @@
 // Trạng thái kết nối và ARM (Sprint 4 — R1–R3). Chỉ khi ARMED mới gửi kết quả mixer;
-// READY gửi failsafeUs của từng kênh.
+// READY gửi failsafeUs của từng kênh. Hồ sơ tắt cơ chế ARM (`enabled` = false) thì tự ARM
+// mỗi khi đủ điều kiện, không cần người dùng nhấn giữ nút ARM.
 import 'package:flutter/foundation.dart';
 
 import '../l10n/lang.dart';
@@ -22,13 +23,23 @@ class ArmCheck {
     this.throttleAtRest = true,
     this.editing = false,
     this.armConditionOk = true,
+    this.paused = false,
+    this.linkOk = true,
   });
   final bool profileValid, throttleAtRest, editing, armConditionOk;
+
+  /// Màn Lái đang bị che (mở Cấu hình) hoặc app xuống nền
+  final bool paused;
+
+  /// Đang nhận telemetry của xe (không ở trạng thái mất tín hiệu)
+  final bool linkOk;
 }
 
 class ArmController extends ChangeNotifier {
   ArmController({this.autoArm = false});
 
+  /// false = không dùng cơ chế ARM: tự ARM mỗi khi đủ điều kiện, kể cả sau khi bị DISARM
+  bool enabled = true;
   bool autoArm;
   ArmState state = ArmState.disconnected;
 
@@ -83,7 +94,13 @@ class ArmController extends ChangeNotifier {
     if (state != ArmState.ready) return syncFailed ? tr('Không đồng bộ được failsafe với xe', 'Could not sync failsafe with the car') : tr('Chưa sẵn sàng (${state.label})', 'Not ready (${state.label})');
     if (!c.profileValid) return tr('Hồ sơ còn lỗi, sửa trong Cấu hình trước', 'Profile has errors, fix them in Settings first');
     if (c.editing) return tr('Đang sửa bố cục', 'Editing layout');
-    if (!c.throttleAtRest) return tr('Thả cần ga trước khi ARM', 'Release the throttle before arming');
+    if (c.paused) return tr('Màn Lái đang ẩn', 'Drive screen hidden');
+    if (!c.linkOk) return tr('Mất tín hiệu', 'Signal lost');
+    if (!c.throttleAtRest) {
+      return enabled
+          ? tr('Thả cần ga trước khi ARM', 'Release the throttle before arming')
+          : tr('Thả cần ga để bắt đầu lái', 'Release the throttle to start driving');
+    }
     if (!c.armConditionOk) return tr('Điều kiện ARM chưa đúng', 'ARM condition not met');
     return null;
   }
@@ -107,13 +124,15 @@ class ArmController extends ChangeNotifier {
     _set(ArmState.ready);
   }
 
-  /// Gọi mỗi chu kỳ: tự DISARM khi `armCondition` sai hoặc đang sửa bố cục;
-  /// bật `autoArm` thì tự ARM lần đầu sau khi kết nối, khi đủ điều kiện (R2, R3)
+  /// Gọi mỗi chu kỳ: tự DISARM khi `armCondition` sai, đang sửa bố cục hoặc màn Lái bị che;
+  /// bật `autoArm` thì tự ARM lần đầu sau khi kết nối, khi đủ điều kiện (R2, R3).
+  /// Tắt cơ chế ARM thì tự ARM lại mỗi khi đủ điều kiện.
   void tick(ArmCheck c) {
     if (state == ArmState.armed) {
       if (!c.armConditionOk) disarm(tr('Điều kiện ARM chuyển sai', 'ARM condition became false'));
       if (c.editing) disarm(tr('Đang sửa bố cục', 'Editing layout'));
-    } else if (_autoPending && state == ArmState.ready && canArm(c) == null) {
+      if (c.paused) disarm(tr('Màn Lái đang ẩn', 'Drive screen hidden'));
+    } else if ((_autoPending || !enabled) && state == ArmState.ready && canArm(c) == null) {
       arm(c);
     }
   }

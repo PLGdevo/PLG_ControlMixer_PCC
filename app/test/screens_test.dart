@@ -17,15 +17,20 @@ import 'package:rc_controller/models/condition.dart';
 import 'package:rc_controller/models/control_layout.dart';
 import 'package:rc_controller/models/input_def.dart';
 import 'package:rc_controller/models/mixer_rule.dart';
+import 'package:rc_controller/screens/channel_detail_screen.dart';
 import 'package:rc_controller/screens/control_screen.dart';
 import 'package:rc_controller/screens/garage_screen.dart';
 import 'package:rc_controller/screens/input_screen.dart';
 import 'package:rc_controller/screens/mix_rule_screen.dart';
 import 'package:rc_controller/screens/settings_screen.dart';
+import 'package:rc_controller/services/arm_controller.dart';
 import 'package:rc_controller/theme/app_theme.dart';
 import 'package:rc_controller/theme/theme_controller.dart';
 import 'package:rc_controller/theme/tokens.dart';
+import 'package:rc_controller/widgets/channel_tile.dart';
 import 'package:rc_controller/widgets/layout_preview.dart';
+
+import 'support/fake_car.dart';
 
 /// Hồ sơ có đủ loại luật: gắn nhanh, có điều kiện + khoá an toàn, hằng số có trễ
 CarProfile sample() {
@@ -278,6 +283,100 @@ void main() {
     expect(find.byTooltip('Tuỳ chọn'), findsOneWidget);
   });
 
+  testWidgets('Cấu hình nằm ngang: nút Lưu / Đồng bộ / Mặc định lên thanh tiêu đề, 5 tab không tràn, tab Chung có Ping xe', (tester) async {
+    setSize(tester, const Size(800, 360));
+    final repo = await repoWith(tester, sample());
+    await tester.pumpWidget(app(SettingsScreen(controller: CarController(), repo: repo, profileId: 'p1')));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: find.byType(AppBar), matching: find.text('Lưu')), findsOneWidget);
+    expect(find.byTooltip('Mặc định'), findsOneWidget);
+    expect(find.text('Đồng bộ failsafe'), findsNothing, reason: 'nằm ngang chỉ còn nút biểu tượng');
+    Future<void> tab(String name) async {
+      await tester.ensureVisible(find.widgetWithText(Tab, name));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, name));
+      await tester.pumpAndSettle();
+    }
+
+    for (final name in ['Input', 'Mix', 'Kênh', 'Chung', 'Bố cục']) {
+      await tab(name);
+      expect(tester.takeException(), isNull, reason: name);
+    }
+    await tab('Chung');
+    final vertical = find.descendant(
+        of: find.byType(TabBarView),
+        matching: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down));
+    await tester.scrollUntilVisible(find.text('Ping xe'), 150, scrollable: vertical.first);
+    expect(find.text('Ping xe'), findsOneWidget);
+    expect(find.textContaining('Gửi 3 gói ping tới 192.168.4.1:4210'), findsOneWidget);
+
+    await tab('Kênh');
+    await tester.tap(find.byType(ChannelTile).first);
+    await tester.pumpAndSettle();
+    expect(find.byType(ChannelDetailScreen), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: 'chi tiết kênh khi nằm ngang');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // Xoay dọc: thanh nút dưới trở lại
+    setSize(tester, const Size(420, 900));
+    await tester.pumpAndSettle();
+    expect(find.text('Đồng bộ failsafe'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Nằm ngang: sửa luật mix và sửa Input không tràn', (tester) async {
+    setSize(tester, const Size(800, 360));
+    final p = sample();
+    await tester.pumpWidget(app(MixRuleScreen(rule: p.mixer.firstWhere((r) => r.id == 'r_hi').copy(), profile: p)));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'sửa luật mix');
+    for (final ty in InputType.values) {
+      await tester.pumpWidget(app(InputScreen(input: InputDef(id: 'x', name: 'X', type: ty), takenIds: const {}, idLocked: false)));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'sửa Input ${ty.name}');
+    }
+  });
+
+  testWidgets('Màn Lái: nút Sửa riêng ở góc phải mở Sửa bố cục; bố cục khoá thì nút mờ', (tester) async {
+    setSize(tester, const Size(900, 420));
+    final p = sample();
+    expect(p.activeLayout.locked, isTrue);
+    final repo = await repoWith(tester, p);
+    await tester.pumpWidget(app(ControlScreen(controller: CarController(), repo: repo, profileId: 'p1')));
+    await tester.pump(const Duration(milliseconds: 100));
+    final edit = find.widgetWithText(TextButton, 'Sửa');
+    expect(tester.widget<TextButton>(edit).onPressed, isNull, reason: 'bố cục đang khoá');
+    // Nút Sửa nằm ngay trước menu ⚙, sát mép phải
+    final editRight = tester.getTopRight(edit).dx, menuLeft = tester.getTopLeft(find.byTooltip('Tuỳ chọn')).dx;
+    expect(menuLeft - editRight, lessThan(16));
+    expect(tester.getTopRight(find.byTooltip('Tuỳ chọn')).dx, greaterThan(900 - 48));
+
+    await tester.tap(find.byTooltip('Tuỳ chọn'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sửa bố cục'), findsNothing, reason: 'menu ⚙ không còn mục Sửa bố cục');
+    await tester.tap(find.text('Mở khoá bố cục'));
+    await settleIo(tester);
+    await tester.tap(find.widgetWithText(TextButton, 'Sửa'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sửa bố cục · kéo để di chuyển'), findsOneWidget);
+  });
+
+  testWidgets('Xe của tôi: bấm vào thẻ xe đang nối là vào thẳng màn Lái', (tester) async {
+    setSize(tester, const Size(900, 420)); // màn Lái luôn nằm ngang
+    mockWakelock();
+    final p = sample();
+    final repo = await repoWith(tester, p);
+    final c = CarController();
+    await tester.runAsync(() => c.connect(FakeCarTransport(), key: p.connKey));
+    await tester.pumpWidget(app(GarageScreen(controller: c, repo: repo, theme: ThemeController())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Xe thử'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ControlScreen), findsOneWidget);
+    await tester.runAsync(c.disconnect);
+  });
+
   testWidgets('Sửa luật mix: điều kiện, curve, xem trước chạy khoá an toàn', (tester) async {
     setSize(tester, const Size(420, 900));
     final p = sample();
@@ -384,6 +483,105 @@ void main() {
     expect(c.pipeline!.mixed()[0], 60);
     await tester.pumpWidget(const SizedBox());
     expect(c.pipeline, isNull); // rời màn Lái: bỏ hồ sơ khỏi vòng gửi
+  });
+
+  testWidgets('Cấu hình ▸ Chung: không còn hộp số; tắt "Dùng cơ chế ARM" thì ẩn Tự ARM và điều kiện ARM riêng', (tester) async {
+    setSize(tester, const Size(420, 2400));
+    final repo = await repoWith(tester, sample());
+    await tester.pumpWidget(app(SettingsScreen(
+      controller: CarController(),
+      repo: repo,
+      profileId: 'p1',
+      initialTab: SettingsScreen.generalTab,
+    )));
+    await tester.pumpAndSettle();
+    expect(find.text('Số lượng số'), findsNothing);
+    expect(find.textContaining('Ga tối đa số'), findsNothing);
+    expect(find.text('Tự ARM sau khi kết nối'), findsOneWidget);
+    await tester.tap(find.text('Dùng cơ chế ARM'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tự ARM sau khi kết nối'), findsNothing);
+    expect(find.text('Điều kiện ARM riêng'), findsNothing);
+    expect(find.textContaining('không có nút ARM'), findsOneWidget);
+    await tester.tap(find.text('Lưu'));
+    await settleIo(tester); // Lưu ghi file thật
+    expect(repo.get('p1')!.arm.enabled, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Màn Lái tắt ARM: không có nút "Giữ để ARM", ô trạng thái báo lý do; thêm phần tử không còn Hộp số', (tester) async {
+    setSize(tester, const Size(900, 420));
+    final p = sample()..arm.enabled = false;
+    p.activeLayout.locked = false;
+    final repo = await repoWith(tester, p);
+    final c = CarController();
+    await tester.pumpWidget(app(ControlScreen(controller: c, repo: repo, profileId: 'p1')));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Giữ để ARM'), findsNothing);
+    expect(find.text('Chưa sẵn sàng (Chưa kết nối)'), findsOneWidget);
+    c.arm
+      ..onConnected()
+      ..onFailsafeSync(true);
+    c.arm.tick(c.currentArmCheck()!); // chưa kết nối thật: coi như mất tín hiệu
+    await tester.pump();
+    expect(c.arm.armed, isFalse);
+    expect(find.text('Mất tín hiệu'), findsOneWidget);
+    expect(c.arm.arm(const ArmCheck()), isNull);
+    await tester.pump();
+    expect(find.text('Đang lái'), findsOneWidget);
+    c.arm.disarm();
+
+    await tester.tap(find.byTooltip('Sửa bố cục'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Thêm'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cần gạt ngang'), findsOneWidget);
+    expect(find.text('Hộp số'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Màn Lái: nhấn giữ cần có luật mix xem luật, trạng thái tự cập nhật; đang ARM thì không bật bảng', (tester) async {
+    setSize(tester, const Size(900, 420));
+    final repo = await repoWith(tester, sample());
+    final c = CarController();
+    await tester.pumpWidget(app(ControlScreen(controller: c, repo: repo, profileId: 'p1')));
+    await tester.pump(const Duration(milliseconds: 100));
+    final rulesHold = find.byWidgetPredicate((w) => w is GestureDetector && w.onLongPress != null);
+    final steer = find.descendant(of: rulesHold, matching: find.byType(StickAxis)); // cần Lái: có luật r_hi theo Lái ≥ 80
+    final steerAt = tester.getCenter(steer);
+
+    // DISARM: nhấn giữ Lái → bảng luật
+    await tester.longPress(steer);
+    await tester.pump(const Duration(milliseconds: 500)); // cần tự về giữa xong
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.text('Luôn áp dụng'), findsOneWidget); // Lái → CH1 không điều kiện: không phải "đang lái"
+    expect(find.text('Điều kiện chưa đúng'), findsOneWidget);
+    // Lái ≥ 80 rồi thả: bảng đang mở đổi theo mixer, không cần mở lại
+    c.setPosition('steer', 90);
+    c.pipeline!.mixed();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Điều kiện đúng · đang tác động'), findsOneWidget);
+    c.setPosition('steer', 0);
+    c.pipeline!.mixed();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Điều kiện chưa đúng'), findsOneWidget);
+    await tester.tap(find.text('Đóng'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300)); // bảng có Timer nên không pumpAndSettle được
+    expect(find.byType(AlertDialog), findsNothing);
+
+    // ARMED = đang lái: giữ yên cần không được bật bảng che màn Lái
+    c.arm
+      ..onConnected()
+      ..onFailsafeSync(true);
+    expect(c.arm.arm(const ArmCheck()), isNull);
+    await tester.pump();
+    expect(rulesHold, findsNothing);
+    await tester.longPressAt(steerAt);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(AlertDialog), findsNothing);
+    c.arm.disarm();
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('Màn Lái: phần tử có màu riêng dựng bằng màu đó, phần tử khác theo màu app; giữ Trim đổi liên tục, lưu một lần', (tester) async {

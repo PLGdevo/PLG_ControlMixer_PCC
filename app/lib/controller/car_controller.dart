@@ -31,6 +31,7 @@ class CarController extends ChangeNotifier {
   Timer? _controlTimer, _watchdog;
   bool _sending = false;
   int _seq = 0;
+  int? _syncedHash; // failsafeHash đã được xe xác nhận trong lần kết nối này (E6)
   final Map<int, Completer<Frame>> _waiters = {};
 
   LinkState state = LinkState.disconnected;
@@ -52,16 +53,22 @@ class CarController extends ChangeNotifier {
   /// Vị trí nút bật/tắt (0/1) và công tắc 3 nấc (0/1/2) theo mã Input — giữ nguyên khi thoát màn Lái
   final Map<String, int> switchPos = {};
 
-  /// Số lượng số theo hồ sơ đang lái (null = theo cấu hình đọc từ xe)
-  int? gearCountOverride;
-
   /// Khoá nhận diện kết nối hiện tại (vd "wifi:192.168.4.1:4210"), để ping nhanh dùng lại kết nối
   String? connectedKey;
 
-  int gear = 1;
   Telemetry? telemetry;
   DateTime? lastTelemetryAt;
   CarConfig? config;
+
+  /// Xe có firmware n kênh (trả lời INFO_GET); null = firmware cũ, chỉ lái CH1/CH2
+  CarInfo? carInfo;
+  bool get multiChannel => carInfo != null;
+
+  /// Số kênh xe xuất ra được
+  int get carChannels => carInfo?.channels ?? 2;
+
+  /// µs từng kênh vừa gửi xuống xe (n kênh), rỗng khi chưa ARM / chưa vào màn Lái
+  List<int> lastSentUs = const [];
 
   /// Kết quả mixer gần nhất (10 kênh %), null nếu chưa nạp hồ sơ
   List<double>? get channelPct => pipeline?.lastPct;
@@ -69,7 +76,6 @@ class CarController extends ChangeNotifier {
   CarTransport? get transport => _transport;
   String? get transportName => _transport?.name;
   bool get isConnected => state == LinkState.connected || state == LinkState.lost;
-  int get gearCount => gearCountOverride ?? config?.gearCount ?? 3;
 
   // ---------------- Kết nối ----------------
   Future<void> connect(CarTransport t, {String? key}) async {
@@ -84,8 +90,8 @@ class CarController extends ChangeNotifier {
 
       // Bắt tay: xe phải trả lời cấu hình thì mới coi là kết nối thành công
       config = await _fetchConfig();
+      carInfo = await _probeInfo();
 
-      gear = 1;
       connectedKey = key;
       arm.onConnected();
       lastTelemetryAt = DateTime.now();
@@ -103,10 +109,10 @@ class CarController extends ChangeNotifier {
   Future<void> disconnect() async {
     final t = _transport;
     if (t != null && isConnected) {
-      // Gửi lệnh trung tính vài lần trước khi ngắt
+      // Gửi lệnh trung tính (n kênh: 0 kênh = xe xuất failsafe) vài lần trước khi ngắt
       for (var i = 0; i < 3; i++) {
         try {
-          await t.send(_controlFrame(0, 0));
+          await t.send(multiChannel ? _controlUsFrame(const []) : _controlFrame(0, 0));
         } catch (_) {}
       }
     }
@@ -139,6 +145,9 @@ class CarController extends ChangeNotifier {
     _transport = null;
     connectedKey = null;
     telemetry = null;
+    carInfo = null;
+    _syncedHash = null;
+    lastSentUs = const [];
     _sending = false;
     arm.onDisconnected();
     WakelockPlus.disable();
@@ -158,8 +167,10 @@ class CarController extends ChangeNotifier {
     } else {
       pl.update(p);
     }
+    arm.enabled = p.arm.enabled;
     arm.autoArm = p.arm.autoArm;
-    final a = p.arm.armCondition;
+    // Tắt cơ chế ARM thì bỏ qua điều kiện ARM riêng
+    final a = p.arm.enabled ? p.arm.armCondition : null;
     _armCond = a == null ? null : pipeline!.mixer.conditions.compile(a);
     final im = pipeline!.inputs;
     positions.forEach(im.setPosition);
@@ -179,6 +190,22 @@ class CarController extends ChangeNotifier {
     final n = _armCond, pl = pipeline;
     if (n == null || pl == null) return true;
     return pl.mixer.conditions.eval(n, pl.inputs.state);
+  }
+
+  /// Điều kiện ARM đầy đủ: phần màn Lái đưa vào ([armCheck]) + điều kiện ARM riêng + tín hiệu xe.
+  /// Tín hiệu ổn = đang nhận telemetry và xe không báo failsafe (xe nhận được lệnh của app).
+  /// null khi chưa vào màn Lái.
+  ArmCheck? currentArmCheck() {
+    final s = armCheck?.call();
+    if (s == null) return null;
+    return ArmCheck(
+      profileValid: s.profileValid,
+      throttleAtRest: s.throttleAtRest,
+      editing: s.editing,
+      paused: s.paused,
+      armConditionOk: armConditionOk,
+      linkOk: state == LinkState.connected && !(telemetry?.failsafe ?? false),
+    );
   }
 
   /// Cần gạt / núm gắn Input `id`: vị trí −100…+100
@@ -203,56 +230,50 @@ class CarController extends ChangeNotifier {
   /// Báo giao diện vẽ lại sau khi sửa trực tiếp vị trí Input
   void refresh() => notifyListeners();
 
-  void gearUp() {
-    if (gear < gearCount) {
-      gear++;
-      notifyListeners();
-    }
-  }
-
-  void gearDown() {
-    if (gear > 1) {
-      gear--;
-      notifyListeners();
-    }
-  }
-
   Uint8List _controlFrame(double thr, double steer) {
     _seq = (_seq + 1) & 0xFF;
     return encodeControl(
       throttle: (thr * 1000).round(),
       steering: (steer * 1000).round(),
-      gear: gear,
+      gear: 1, // app không có hộp số; xe giữ giới hạn ga 100% (toCarConfig)
       seq: _seq,
     );
+  }
+
+  Uint8List _controlUsFrame(List<int> us) {
+    _seq = (_seq + 1) & 0xFFFF;
+    return encodeControlUs(_seq, us);
   }
 
   void _sendControl() {
     final t = _transport;
     if (t == null || _sending) return; // bỏ gói nếu gói trước chưa gửi xong (tránh dồn trễ)
     final pl = pipeline;
-    var thr = 0.0, steer = 0.0;
+    List<double>? pct;
     if (pl != null) {
-      final pct = pl.mixed();
-      final check = armCheck?.call();
-      if (check != null) {
-        arm.tick(ArmCheck(
-          profileValid: check.profileValid,
-          throttleAtRest: check.throttleAtRest,
-          editing: check.editing,
-          armConditionOk: armConditionOk,
-        ));
+      pct = pl.mixed();
+      final check = currentArmCheck();
+      if (check != null) arm.tick(check);
+    }
+    final Uint8List frame;
+    if (multiChannel) {
+      // n kênh: app áp servo (O2), xe xuất thẳng µs. READY gửi failsafeUs (R1);
+      // chưa vào màn Lái thì gửi 0 kênh để giữ kết nối, xe xuất failsafe của nó.
+      final all = pl == null ? const <int>[] : (arm.armed ? pl.toUsList(pct!) : pl.failsafeUs());
+      lastSentUs = all.length > carChannels ? all.sublist(0, carChannels) : all;
+      frame = _controlUsFrame(lastSentUs);
+    } else {
+      // Firmware cũ (2 kênh): xe tự áp servo, chỉ nhận CH1 (chân lái) và CH2 (chân ga).
+      // Chưa ARM → gửi trung tính.
+      var thr = 0.0, steer = 0.0;
+      if (pl != null && arm.armed) {
+        steer = pct![0] / 100;
+        thr = pct[1] / 100;
       }
-      // Giao thức v1 (cầu nối Sprint 3): xe tự áp servo, chỉ nhận CH1 (chân lái) và CH2 (chân ga).
-      // Hộp số app đã áp lên kênh Ga người dùng chọn; xe giữ giới hạn 100% (toCarConfig).
-      // Chưa ARM → gửi trung tính (giao thức v2 sẽ gửi failsafeUs — R1).
-      if (arm.armed) {
-        steer = pl.gearedPct(pct, 1, gear: gear) / 100;
-        thr = pl.gearedPct(pct, 2, gear: gear) / 100;
-      }
+      frame = _controlFrame(thr, steer);
     }
     _sending = true;
-    t.send(_controlFrame(thr, steer)).catchError((_) {}).whenComplete(() => _sending = false);
+    t.send(frame).catchError((_) {}).whenComplete(() => _sending = false);
   }
 
   void _checkLink() {
@@ -314,6 +335,17 @@ class CarController extends ChangeNotifier {
   }
 
   // ---------------- Cấu hình ----------------
+  /// Firmware n kênh trả INFO; firmware cũ không trả lời → null (lái 2 kênh như cũ)
+  Future<CarInfo?> _probeInfo() async {
+    try {
+      final f = await _request(encodeFrame(PacketType.infoGet), PacketType.info,
+          retries: 2, timeout: const Duration(milliseconds: 400));
+      return CarInfo.parse(f.payload);
+    } on TimeoutException {
+      return null;
+    }
+  }
+
   Future<CarConfig> _fetchConfig() async {
     final f = await _request(encodeFrame(PacketType.configGet), PacketType.configData);
     final c = CarConfig.parse(f.payload);
@@ -331,7 +363,6 @@ class CarController extends ChangeNotifier {
     );
     if (f.payload.length < 2 || f.payload[1] != 1) throw Exception(tr('Xe từ chối cấu hình', 'The car rejected the configuration'));
     config = c;
-    if (gear > c.gearCount) gear = c.gearCount;
     notifyListeners();
   }
 
@@ -345,7 +376,6 @@ class CarController extends ChangeNotifier {
     final c = CarConfig.parse(f.payload);
     if (c == null) throw Exception(tr('Dữ liệu cấu hình không hợp lệ', 'Invalid configuration data'));
     config = c;
-    if (gear > c.gearCount) gear = c.gearCount;
     notifyListeners();
   }
 
@@ -355,11 +385,35 @@ class CarController extends ChangeNotifier {
     if (persist) await saveConfig();
   }
 
-  /// App là nguồn đúng (0.5): đưa cấu hình hồ sơ xuống xe nếu khác cấu hình xe đang có.
-  /// Firmware v1 tự áp servo/failsafe nên phải ghi cả CH1/CH2; khi có giao thức v2
-  /// (Sprint 4) hàm này chỉ còn gửi FS_WRITE. Trả về true nếu đã ghi.
+  /// App là nguồn đúng (0.5): đưa phần xe cần giữ khi mất sóng xuống xe. Trả về true nếu đã ghi.
+  /// - n kênh: gửi FS_WRITE (failsafe từng kênh + thời gian), xe lưu NVS và trả hash để so (E6).
+  /// - firmware cũ: xe tự áp servo/failsafe nên ghi cả cấu hình CH1/CH2 (CONFIG_SET + SAVE).
   /// Kết quả được báo cho ArmController: đồng bộ được thì READY, lỗi thì không cho ARM (E6, R1).
   Future<bool> syncProfile(CarProfile p, {bool force = false}) async {
+    if (!multiChannel) return _syncLegacy(p, force: force);
+    final hash = p.failsafeHash();
+    if (!force && _syncedHash == hash) {
+      arm.onFailsafeSync(true);
+      return false;
+    }
+    try {
+      final f = await _request(encodeFsWrite(p.failsafeBytes()), PacketType.fsAck,
+          timeout: const Duration(seconds: 1));
+      final a = FsAck.parse(f.payload);
+      if (a == null || !a.ok) throw Exception(tr('Xe từ chối failsafe', 'The car rejected the failsafe'));
+      if (a.hash != hash) {
+        throw Exception(tr('Xe nhận failsafe bị sai (hash không khớp)', 'The car received a corrupted failsafe (hash mismatch)'));
+      }
+    } catch (_) {
+      arm.onFailsafeSync(false);
+      rethrow;
+    }
+    _syncedHash = hash;
+    arm.onFailsafeSync(true);
+    return true;
+  }
+
+  Future<bool> _syncLegacy(CarProfile p, {required bool force}) async {
     final want = p.toCarConfig();
     final have = config;
     if (!force && have != null && listEquals(have.toBytes(), want.toBytes())) {

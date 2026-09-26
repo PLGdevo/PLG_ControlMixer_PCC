@@ -73,9 +73,11 @@ void main() {
     expect(p.throttleCh, 2);
   });
 
-  test('xe (firmware v1) nhận CH1/CH2 và giới hạn hộp số 100%: app tự áp hộp số', () {
+  test('xe (firmware v1) nhận CH1/CH2, 1 số, giới hạn ga 100% (app không có hộp số)', () {
     final cfg = sample().toCarConfig();
+    expect(cfg.gearCount, 1);
     expect(cfg.gearLimit, [100, 100, 100, 100, 100]);
+    expect(cfg.validate(), isNull);
     expect(cfg.steering.minUs, 1100);
   });
 
@@ -100,8 +102,25 @@ void main() {
     expect(p.ch(1).offsetUs, -30);
     expect(p.ch(1).reverse, isTrue);
     expect(p.failsafeTimeoutMs, 500);
-    expect(p.gears.gearCount, 2);
-    expect(p.gears.maxThrottle.take(2), [40, 80]);
+    expect(p.toJson().containsKey('gears'), isFalse); // hộp số đã bỏ
+  });
+
+  test('ARM: hồ sơ cũ không có khoá enabled thì vẫn dùng ARM; tắt ARM lưu lại được', () {
+    final j = sample().toJson();
+    (j['arm'] as Map).remove('enabled');
+    expect(CarProfile.fromJson(j).arm.enabled, isTrue);
+    final p = sample()..arm.enabled = false;
+    expect(CarProfile.fromJson(p.toJson()).arm.enabled, isFalse);
+    p.resetConfig();
+    expect(p.arm.enabled, isTrue);
+  });
+
+  test('bố cục cũ có ô hộp số: bỏ khi đọc, không biến thành nút', () {
+    final j = sample().activeLayout.toJson();
+    (j['items'] as List).add({'id': 'g', 'kind': 'gearBox', 'x': 5, 'y': 9, 'w': 8, 'h': 3});
+    final l = ControlLayout.fromJson(j);
+    expect(l.items.length, sample().activeLayout.items.length);
+    expect(l.items.any((i) => i.id == 'g'), isFalse);
   });
 
   test('từ chối schemaVersion mới hơn app', () {
@@ -349,7 +368,6 @@ void main() {
     expect(p.failsafeBytes().length, 22);
     p.ch(1).trimUs = 30;
     p.ch(2).maxUs = 1900;
-    p.gears.gearCount = 2;
     p.mixer.add(MixRule(id: 'm', source: 'steer', destCh: 5));
     expect(p.failsafeHash(), h0);
     p.channels[4].failsafeUs = 1000;

@@ -1,4 +1,5 @@
-// Xe giả trong bộ nhớ cho test CarController / màn Mạng của xe: trả lời CONFIG_GET và NET_*.
+// Xe giả trong bộ nhớ cho test CarController / màn Mạng của xe: trả lời CONFIG_*, NET_* và
+// (firmware n kênh) INFO_GET / FS_WRITE.
 import 'dart:async';
 
 import 'package:flutter/services.dart';
@@ -38,7 +39,8 @@ void mockWakelock() {
 }
 
 class FakeCarTransport implements CarTransport {
-  FakeCarTransport({Map<int, Uint8List>? sections})
+  /// `channels` = số kênh của firmware n kênh; null = firmware cũ (không trả lời INFO_GET / FS_WRITE)
+  FakeCarTransport({Map<int, Uint8List>? sections, this.channels = 8})
       : sections = sections ??
             {
               NetSection.status: FirmwareVectors.status,
@@ -48,7 +50,16 @@ class FakeCarTransport implements CarTransport {
             };
 
   final Map<int, Uint8List> sections;
+  final int? channels;
   final netSets = <Uint8List>[];
+  final fsWrites = <Uint8List>[];
+  final configSets = <Uint8List>[];
+
+  /// Gói lệnh lái nhận được (CONTROL hoặc CONTROL_US)
+  final controls = <Frame>[];
+
+  /// Hash xe trả trong FS_ACK; null = tính đúng trên payload nhận được
+  int? fsAckHash;
   int applied = 0, setups = 0, resets = 0;
   int ackStatus = NetAck.ok;
 
@@ -76,9 +87,24 @@ class FakeCarTransport implements CarTransport {
   Future<void> send(Uint8List data) async {
     final f = decodeFrame(data);
     if (f == null) return;
+    final n = channels;
     switch (f.type) {
+      case PacketType.control:
+      case PacketType.controlUs:
+        controls.add(f);
+      case PacketType.infoGet when n != null:
+        _reply(PacketType.info, [2, n]);
+      case PacketType.fsWrite when n != null:
+        fsWrites.add(f.payload);
+        final h = fsAckHash ?? fnv1a(f.payload);
+        _reply(PacketType.fsAck, [1, h & 0xFF, h >> 8 & 0xFF, h >> 16 & 0xFF, h >> 24 & 0xFF, n]);
       case PacketType.configGet:
         _reply(PacketType.configData, _config);
+      case PacketType.configSet:
+        configSets.add(f.payload);
+        _ack(f.type);
+      case PacketType.configSave:
+        _ack(f.type);
       case PacketType.netGet:
         final s = sections[f.payload[0]];
         if (s != null) _reply(PacketType.netData, s);
@@ -95,6 +121,16 @@ class FakeCarTransport implements CarTransport {
         resets++;
         _ack(f.type);
     }
+  }
+
+  /// FNV-1a 32 bit như firmware (protocol.h)
+  static int fnv1a(List<int> data) {
+    var h = 0x811c9dc5;
+    for (final b in data) {
+      h ^= b;
+      h = (h * 0x01000193) & 0xFFFFFFFF;
+    }
+    return h;
   }
 
   void _ack(int type) => _reply(PacketType.ack, [type, ackStatus]);

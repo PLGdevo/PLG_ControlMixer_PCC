@@ -20,6 +20,7 @@ import '../layout/properties_panel.dart';
 import '../layout/return_motion.dart';
 import '../models/car_profile.dart';
 import '../models/control_layout.dart';
+import '../models/mixer_rule.dart';
 import '../protocol/protocol.dart';
 import '../services/arm_controller.dart';
 import '../services/output_pipeline.dart';
@@ -68,6 +69,9 @@ class _ControlScreenState extends State<ControlScreen> {
   /// Trim nhấn giữ đổi liên tục: gom lại, ghi hồ sơ / gửi xe khi ngừng bấm
   Timer? _trimCommit;
 
+  /// Màn Lái đang bị che (mở Cấu hình) hoặc app xuống nền: không ARM, kể cả khi tắt cơ chế ARM
+  bool _away = false;
+
   CarController get c => widget.controller;
   ControlLayout get layout => editing ? draft! : profile.activeLayout;
   bool get _connectedHere => c.isConnected && c.connectedKey == profile.connKey;
@@ -76,18 +80,20 @@ class _ControlScreenState extends State<ControlScreen> {
   void initState() {
     super.initState();
     profile = widget.repo.get(widget.profileId)!;
-    c.gearCountOverride = profile.gears.gearCount;
-    if (c.gear > profile.gears.gearCount) c.gear = profile.gears.gearCount;
     _enterDriveMode();
     _loadProfile();
     _initValues();
     c.armCheck = _armCheck;
     // App xuống nền → DISARM, cần gạt về vị trí an toàn (H3b, R3)
-    _lifecycle = AppLifecycleListener(onHide: () {
-      c.arm.disarm(tr('App xuống nền', 'App went to background'));
-      _resetSticks();
-      c.refresh();
-    });
+    _lifecycle = AppLifecycleListener(
+      onHide: () {
+        _away = true;
+        c.arm.disarm(tr('App xuống nền', 'App went to background'));
+        _resetSticks();
+        c.refresh();
+      },
+      onShow: () => _away = false,
+    );
     if (widget.editOnly) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_startEdit(force: true)) Navigator.pop(context);
@@ -104,7 +110,6 @@ class _ControlScreenState extends State<ControlScreen> {
     }
     _resetSticks(remember: true);
     c.unloadProfile();
-    c.gearCountOverride = null;
     // Mở từ Cấu hình thì màn Cấu hình tự đặt lại hướng dọc khi quay về
     if (!widget.editOnly) {
       SystemChrome.setPreferredOrientations(DeviceOrientation.values);
@@ -138,6 +143,7 @@ class _ControlScreenState extends State<ControlScreen> {
         profileValid: _errors.isEmpty,
         throttleAtRest: c.pipeline?.throttleAtRest(profile.activeLayout) ?? true,
         editing: editing,
+        paused: _away,
       );
 
   /// Vị trí ban đầu khi vào màn (H3b); nút nhấn giữ về tắt, nút bật/tắt và công tắc giữ trạng thái
@@ -187,6 +193,7 @@ class _ControlScreenState extends State<ControlScreen> {
 
   // ---------------- Cấu hình / trim ----------------
   Future<void> _openSettings({int tab = 0}) async {
+    _away = true;
     c.arm.disarm(tr('Mở Cấu hình', 'Opened settings'));
     await _flushTrim(); // Cấu hình đọc hồ sơ đã lưu
     if (!mounted) return;
@@ -198,11 +205,10 @@ class _ControlScreenState extends State<ControlScreen> {
       ),
     );
     if (!mounted) return;
+    _away = false;
     _enterDriveMode();
     setState(() {
       profile = widget.repo.get(widget.profileId)!;
-      c.gearCountOverride = profile.gears.gearCount;
-      if (c.gear > profile.gears.gearCount) c.gear = profile.gears.gearCount;
       _loadProfile();
       _initValues();
     });
@@ -225,7 +231,8 @@ class _ControlScreenState extends State<ControlScreen> {
   Future<void> _commitTrim() async {
     _trimCommit = null;
     await widget.repo.save(profile);
-    if (!_connectedHere) return;
+    // n kênh: trim đã áp trong app ở chu kỳ gửi tiếp theo, không ghi xuống xe
+    if (!_connectedHere || c.multiChannel) return;
     try {
       await c.applyConfig(profile.toCarConfig());
     } catch (e) {
@@ -360,7 +367,7 @@ class _ControlScreenState extends State<ControlScreen> {
     final d = draft!;
     final controls = ItemKind.controls;
     final gauges = GaugeKey.values.where((g) => !d.items.any((i) => i.gaugeKey == g.name)).toList();
-    final extras = [ItemKind.gearBox, ItemKind.trim, ItemKind.statusBadge]
+    final extras = [ItemKind.trim, ItemKind.statusBadge]
         .where((k) => !d.items.any((i) => i.kind == k))
         .toList();
     final t = context.tokens;
@@ -516,15 +523,19 @@ class _ControlScreenState extends State<ControlScreen> {
     final disconnected = c.state == LinkState.disconnected;
     final alarm = disconnected || c.state == LinkState.lost || (tel?.failsafe ?? false);
     final l = profile.activeLayout;
+    final width = MediaQuery.sizeOf(context).width;
     return Row(
       children: [
         IconButton(icon: const AppIcon(AppIcons.back), onPressed: () => Navigator.pop(context)),
-        Flexible(
+        // Không dùng Flexible cho tên: phần chỗ Flexible được chia mà tên ngắn không dùng hết sẽ bị bỏ trống
+        // ở cuối hàng, đẩy nút Sửa / ⚙ khỏi góc phải. Ô cảnh báo (Expanded) bên dưới chiếm hết phần còn lại.
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: width * 0.22),
           child: Text(profile.name,
               maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.title.copyWith(color: t.text)),
         ),
         const SizedBox(width: Gap.s),
-        _ArmButton(controller: c, check: _armCheck, onMessage: _snack),
+        _ArmButton(controller: c, onMessage: _snack),
         const SizedBox(width: Gap.s),
         Expanded(
           child: alarm
@@ -553,6 +564,23 @@ class _ControlScreenState extends State<ControlScreen> {
                 )
               : const SizedBox.shrink(),
         ),
+        const SizedBox(width: Gap.s),
+        // Sửa bố cục: nút riêng ở góc phải, cạnh menu ⚙
+        Tooltip(
+          message: l.locked
+              ? tr('Bố cục đang khoá: mở khoá trong menu ⚙', 'Layout is locked: unlock it in the ⚙ menu')
+              : tr('Sửa bố cục', 'Edit layout'),
+          child: width < 600
+              ? IconButton(
+                  onPressed: l.locked ? null : () => _startEdit(),
+                  icon: AppIcon(l.locked ? AppIcons.locked : AppIcons.edit),
+                )
+              : TextButton.icon(
+                  onPressed: l.locked ? null : () => _startEdit(),
+                  icon: AppIcon(l.locked ? AppIcons.locked : AppIcons.edit, mini: true),
+                  label: Text(tr('Sửa', 'Edit')),
+                ),
+        ),
         PopupMenuButton<String>(
           tooltip: tr('Tuỳ chọn', 'Options'),
           icon: const AppIcon(AppIcons.config),
@@ -562,8 +590,6 @@ class _ControlScreenState extends State<ControlScreen> {
                 _openSettings();
               case 'mix':
                 _openSettings(tab: SettingsScreen.mixTab);
-              case 'edit':
-                _startEdit();
               case 'lock':
                 _toggleLock();
             }
@@ -576,15 +602,6 @@ class _ControlScreenState extends State<ControlScreen> {
             PopupMenuItem(
               value: 'mix',
               child: ListTile(leading: const AppIcon(AppIcons.mix), title: Text(tr('Luật mix', 'Mix rules'))),
-            ),
-            PopupMenuItem(
-              value: 'edit',
-              enabled: !l.locked,
-              child: ListTile(
-                leading: const AppIcon(AppIcons.edit),
-                title: Text(tr('Sửa bố cục', 'Edit layout')),
-                subtitle: l.locked ? Text(tr('Đang khoá', 'Locked')) : null,
-              ),
             ),
             PopupMenuItem(
               value: 'lock',
@@ -688,7 +705,8 @@ class _ControlScreenState extends State<ControlScreen> {
     }
   }
 
-  /// Input có luật có điều kiện hoặc đi vào nhiều kênh → chấm `accent`; nhấn giữ xem luật (U6)
+  /// Input có luật có điều kiện hoặc đi vào nhiều kênh → chấm `accent`; nhấn giữ xem luật (U6).
+  /// Chỉ khi DISARM: đang lái mà giữ yên cần nửa giây thì bảng không được bật lên che màn Lái.
   bool _mixed(String id) {
     final rs = profile.rulesUsing(id);
     return rs.length > 1 || rs.any((r) => !r.condition.isTrue);
@@ -696,39 +714,16 @@ class _ControlScreenState extends State<ControlScreen> {
 
   void _showRules(ControlItem it) {
     final ids = it.inputIds;
-    if (ids.isEmpty) return;
-    final mixer = c.pipeline?.mixer;
+    if (ids.isEmpty || c.arm.armed) return;
     final inputs = profile.inputMap;
-    final rules = {for (final id in ids) ...profile.rulesUsing(id)}.toList();
     showDialog<void>(
       context: context,
-      builder: (ctx) {
-        final t = ctx.tokens;
-        return AlertDialog(
-          title: Text(ids.map((i) => inputs[i]?.name ?? i).join(' · ')),
-          content: SizedBox(
-            width: 420,
-            child: rules.isEmpty
-                ? Text(tr('Input này chưa đi vào kênh nào.', 'This Input does not drive any channel yet.'))
-                : ListView(shrinkWrap: true, children: [
-                    for (final r in rules)
-                      ListTile(
-                        dense: true,
-                        leading: Icon(Icons.circle,
-                            size: 10,
-                            color: mixer?.isPending(r.id) == true
-                                ? t.warn
-                                : (mixer?.isActive(r.id) == true ? t.accent : t.disabled)),
-                        title: Text(r.describe(inputs, chName: profile.chLabel)),
-                        subtitle: Text(mixer?.isPending(r.id) == true
-                            ? tr('Chờ về giữa', 'Waiting for center')
-                            : (mixer?.isActive(r.id) == true ? tr('Đang tác động', 'Active') : tr('Không tác động', 'Inactive'))),
-                      ),
-                  ]),
-          ),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Đóng', 'Close')))],
-        );
-      },
+      builder: (_) => _RulesDialog(
+        controller: c,
+        title: ids.map((i) => inputs[i]?.name ?? i).join(' · '),
+        rules: {for (final id in ids) ...profile.rulesUsing(id)}.toList(),
+        describe: (r) => r.describe(inputs, chName: profile.chLabel),
+      ),
     );
   }
 
@@ -737,7 +732,7 @@ class _ControlScreenState extends State<ControlScreen> {
     if (!it.kind.isControl || editing || !it.inputIds.any(_mixed)) return w;
     final t = context.tokens;
     return GestureDetector(
-      onLongPress: () => _showRules(it),
+      onLongPress: c.arm.armed ? null : () => _showRules(it),
       child: Stack(children: [
         Positioned.fill(child: w),
         Positioned(
@@ -833,8 +828,6 @@ class _ControlScreenState extends State<ControlScreen> {
         );
       case ItemKind.gauge:
         return _gauge(it);
-      case ItemKind.gearBox:
-        return _gearBox(lbl);
       case ItemKind.trim:
         return _trimBox(lbl);
       case ItemKind.statusBadge:
@@ -917,46 +910,6 @@ class _ControlScreenState extends State<ControlScreen> {
     );
   }
 
-  Widget _gearBox(String? label) {
-    final t = context.tokens;
-    final g = c.gear.clamp(1, profile.gears.gearCount).toInt();
-    final limit = profile.gears.maxThrottle[g - 1];
-    return ItemFrame(
-      label: label,
-      padding: const EdgeInsets.symmetric(horizontal: Gap.xs, vertical: Gap.xs),
-      child: Row(
-        children: [
-          // Nhấn giữ đổi số liên tục, nhịp đều chậm để kịp dừng đúng số
-          HoldRepeat(
-            onStep: c.gear > 1 ? (_) => c.gearDown() : null,
-            accelerate: false,
-            child: IconButton.outlined(
-              onPressed: c.gear > 1 ? c.gearDown : null,
-              icon: const AppIcon(AppIcons.minus),
-            ),
-          ),
-          Expanded(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Text(tr('Số $g', 'Gear $g'), style: AppText.display.copyWith(fontSize: 26, color: t.text)),
-                Text(tr('Ga tối đa $limit%', 'Max throttle $limit%'), style: AppText.caption.copyWith(color: t.textMuted, letterSpacing: 0)),
-              ]),
-            ),
-          ),
-          HoldRepeat(
-            onStep: c.gear < profile.gears.gearCount ? (_) => c.gearUp() : null,
-            accelerate: false,
-            child: IconButton.outlined(
-              onPressed: c.gear < profile.gears.gearCount ? c.gearUp : null,
-              icon: const AppIcon(AppIcons.plus),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _trimBox(String? label) {
     final t = context.tokens;
     final s = profile.steering;
@@ -988,12 +941,76 @@ class _ControlScreenState extends State<ControlScreen> {
   }
 }
 
-/// Nút ARM / DISARM (R1–R3): nhấn giữ 1 s để ARM (có vòng tiến trình), bấm một lần để DISARM
-class _ArmButton extends StatefulWidget {
-  const _ArmButton({required this.controller, required this.check, required this.onMessage});
+/// Các luật dùng Input của một phần tử (U6). Mixer chạy trong vòng gửi và không báo giao diện,
+/// nên trạng thái được đọc lại mỗi 100 ms: thả tay khỏi cần là dòng trạng thái đổi theo.
+class _RulesDialog extends StatefulWidget {
+  const _RulesDialog({required this.controller, required this.title, required this.rules, required this.describe});
 
   final CarController controller;
-  final ArmCheck Function() check;
+  final String title;
+  final List<MixRule> rules;
+  final String Function(MixRule r) describe;
+
+  @override
+  State<_RulesDialog> createState() => _RulesDialogState();
+}
+
+class _RulesDialogState extends State<_RulesDialog> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  /// Luật không điều kiện luôn tác động — không nói gì về việc cần có đang được gạt hay không
+  (Color, String) _status(MixRule r, AppTokens t) {
+    final mixer = widget.controller.pipeline?.mixer;
+    if (!r.enabled) return (t.disabled, tr('Luật đang tắt', 'Rule is off'));
+    if (r.condition.isTrue) return (t.accent, tr('Luôn áp dụng', 'Always applied'));
+    if (mixer?.isPending(r.id) == true) return (t.warn, tr('Chờ về giữa', 'Waiting for center'));
+    if (mixer?.isActive(r.id) == true) return (t.accent, tr('Điều kiện đúng · đang tác động', 'Condition met · active'));
+    return (t.disabled, tr('Điều kiện chưa đúng', 'Condition not met'));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 420,
+        child: widget.rules.isEmpty
+            ? Text(tr('Input này chưa đi vào kênh nào.', 'This Input does not drive any channel yet.'))
+            : ListView(shrinkWrap: true, children: [
+                for (final r in widget.rules)
+                  if (_status(r, t) case (final color, final label))
+                    ListTile(
+                      dense: true,
+                      leading: Icon(Icons.circle, size: 10, color: color),
+                      title: Text(widget.describe(r)),
+                      subtitle: Text(label),
+                    ),
+              ]),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Đóng', 'Close')))],
+    );
+  }
+}
+
+/// Nút ARM / DISARM (R1–R3): nhấn giữ 1 s để ARM (có vòng tiến trình), bấm một lần để DISARM.
+/// Hồ sơ tắt cơ chế ARM thì chỉ là ô trạng thái: "Đang lái" hoặc lý do chưa lái được.
+class _ArmButton extends StatefulWidget {
+  const _ArmButton({required this.controller, required this.onMessage});
+
+  final CarController controller;
   final ValueChanged<String> onMessage;
 
   @override
@@ -1015,23 +1032,18 @@ class _ArmButtonState extends State<_ArmButton> with SingleTickerProviderStateMi
     super.dispose();
   }
 
+  ArmCheck get _check => widget.controller.currentArmCheck() ?? const ArmCheck();
+
   void _arm() {
     _hold.reset();
-    final c = widget.controller;
-    final chk = widget.check();
-    final err = arm.arm(ArmCheck(
-      profileValid: chk.profileValid,
-      throttleAtRest: chk.throttleAtRest,
-      editing: chk.editing,
-      armConditionOk: c.armConditionOk,
-    ));
+    final err = arm.arm(_check);
     if (err != null) widget.onMessage(err);
     HapticFeedback.mediumImpact();
   }
 
   void _down() {
     if (arm.armed) return;
-    final err = arm.canArm(widget.check());
+    final err = arm.canArm(_check);
     if (err != null) {
       widget.onMessage(err);
       return;
@@ -1043,12 +1055,44 @@ class _ArmButtonState extends State<_ArmButton> with SingleTickerProviderStateMi
     if (_hold.isAnimating) _hold.reset();
   }
 
+  /// Không dùng ARM: ô trạng thái, bấm vào (khi chưa lái được) thì báo lý do
+  Widget _status(BuildContext context) {
+    final t = context.tokens;
+    final armed = arm.armed;
+    final text = armed ? tr('Đang lái', 'Live') : (arm.canArm(_check) ?? arm.state.label);
+    final color = armed ? t.onAccentFill : t.textMuted;
+    return GestureDetector(
+      onTap: armed ? null : () => widget.onMessage(text),
+      child: Container(
+        height: 36,
+        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.3),
+        padding: const EdgeInsets.symmetric(horizontal: Gap.m),
+        decoration: BoxDecoration(
+          color: armed ? t.accentFill : t.surface2,
+          border: Border.all(color: armed ? t.accentFill : t.line),
+          borderRadius: BorderRadius.circular(Radii.pill),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          CustomIconView(CustomIcon.steering, size: 16, color: color),
+          const SizedBox(width: Gap.xs),
+          Flexible(
+            child: Text(text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.label.copyWith(color: color, fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     return ListenableBuilder(
       listenable: arm,
       builder: (context, _) {
+        if (!arm.enabled) return _status(context);
         final armed = arm.armed;
         final ready = arm.state == ArmState.ready;
         final color = armed ? t.onAccentFill : (ready ? t.text : t.disabled);

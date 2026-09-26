@@ -81,4 +81,42 @@ void main() {
     final a = ready()..tick(const ArmCheck());
     expect(a.state, ArmState.ready);
   });
+
+  test('màn Lái ẩn thì tự DISARM; mất tín hiệu hay màn Lái ẩn thì không ARM được', () {
+    final a = ready()..arm(const ArmCheck());
+    a.tick(const ArmCheck(paused: true));
+    expect((a.state, a.disarmReason), (ArmState.ready, 'Màn Lái đang ẩn'));
+    expect(a.arm(const ArmCheck(paused: true)), contains('ẩn'));
+    expect(a.arm(const ArmCheck(linkOk: false)), contains('tín hiệu'));
+    expect(a.state, ArmState.ready);
+  });
+
+  test('tắt cơ chế ARM: tick tự ARM mỗi khi đủ điều kiện, cả sau khi bị DISARM', () {
+    final a = ready()..enabled = false;
+    for (final bad in const [ArmCheck(throttleAtRest: false), ArmCheck(paused: true), ArmCheck(linkOk: false)]) {
+      a.tick(bad);
+      expect(a.state, ArmState.ready);
+    }
+    expect(a.canArm(const ArmCheck(throttleAtRest: false)), 'Thả cần ga để bắt đầu lái');
+    a.tick(const ArmCheck());
+    expect(a.state, ArmState.armed);
+
+    a.tick(const ArmCheck(paused: true)); // mở Cấu hình / app xuống nền
+    expect(a.state, ArmState.ready);
+    a.tick(const ArmCheck());
+    expect(a.state, ArmState.armed);
+
+    a.onCarFailsafe();
+    a.tick(const ArmCheck());
+    expect(a.state, ArmState.armed);
+    a
+      ..onDisconnected()
+      ..onConnected()
+      ..tick(const ArmCheck());
+    expect(a.state, ArmState.connected, reason: 'chưa đồng bộ failsafe thì chưa lái');
+    a
+      ..onFailsafeSync(true)
+      ..tick(const ArmCheck());
+    expect(a.state, ArmState.armed);
+  });
 }

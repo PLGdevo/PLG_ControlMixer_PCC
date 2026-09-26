@@ -704,7 +704,7 @@ function describeRule(r, p, withCh = true) {
   }
   if (r.condition.op !== 'true') s += ` · khi ${describeExpr(r.condition, nm)}`;
   if (r.combine !== 'replace') s += ` · ${COMBINE[r.combine].toLowerCase()}`;
-  if (requiresNeutral(r, src)) s += ' · chờ về giữa';
+  if (r.condition.op !== 'true' && requiresNeutral(r, src)) s += ' · chờ về giữa'; // luật không điều kiện không đổi trạng thái
   return s;
 }
 /** validateMixer + CarProfile.validateMixerPart: Input / Condition / luật / điều kiện ARM / bố cục (V) */
@@ -730,7 +730,7 @@ function validateMixer(p) {
     const ch = p.channels[r.destCh - 1];
     if (r.enabled && ch && !ch.enabled) warnings.push(`Luật ${i + 1} ghi vào CH${r.destCh} đang tắt`);
   });
-  if (p.arm.armCondition) { const e = exprValidate(p.arm.armCondition, byId, condIds); if (e) errors.push(`Điều kiện ARM: ${e}`); }
+  if (p.arm.armCondition && p.arm.enabled !== false) { const e = exprValidate(p.arm.armCondition, byId, condIds); if (e) errors.push(`Điều kiện ARM: ${e}`); }
   for (const it of p.layout.items) for (const id of itemIns(it)) {
     const d = byId[id];
     if (!d) errors.push(`Bố cục "${p.layout.name}": phần tử gắn Input "${id}" không tồn tại`);
@@ -795,7 +795,7 @@ class MixerEngine {
   /** Hysteresis + khoá an toàn về ban đầu (M4, K2) */
   reset() { this.conditions.reset(); for (const c of this.rules) { c.latched = -1; c.active = false; c.pending = false; } }
 }
-/** services/output_pipeline.dart: Input → Condition → Mixer (%) → hộp số (kênh Ga) → µs; kênh tắt ra failsafe */
+/** services/output_pipeline.dart: Input → Condition → Mixer (%) → µs; kênh tắt ra failsafe */
 class OutputPipeline {
   constructor(p) {
     this.profile = p;
@@ -811,14 +811,9 @@ class OutputPipeline {
   get lastPct() { return this.mixer.out; }
   reset() { this.mixer.reset(); }
   mixed() { return this.mixer.run(); }
-  /** % sau mixer → µs (O2): hộp số áp lên kênh Ga sau mixer; kênh tắt ra failsafe */
-  toUsList(pct, gear) {
-    return this.profile.channels.map((c, i) => !c.enabled ? c.failsafe : toUs(c, this.gearedPct(pct, i + 1, gear)));
-  }
-  /** % của kênh `ch` sau hộp số: chỉ kênh Ga đã chọn bị giới hạn, hồ sơ không có kênh Ga thì giữ nguyên */
-  gearedPct(pct, ch, gear) {
-    const g = this.profile.gears;
-    return ch === this.profile.throttleCh ? pct[ch - 1] * g.max[clamp(gear, 1, g.count) - 1] / 100 : pct[ch - 1];
+  /** % sau mixer → µs (O2); kênh tắt ra failsafe */
+  toUsList(pct) {
+    return this.profile.channels.map((c, i) => !c.enabled ? c.failsafe : toUs(c, pct[i]));
   }
   /** % của kênh `ch` khi mọi cần gạt ở vị trí nghỉ; nút/công tắc giữ trạng thái, nút nhấn giữ coi như đã thả (R2, H5) */
   restPct(ch, layout) {
@@ -842,10 +837,11 @@ class OutputPipeline {
 // ============================================================================
 //  ARM (services/arm_controller.dart)
 // ============================================================================
-// Chỉ khi ARMED mới gửi kết quả mixer; READY gửi failsafe (R1–R3)
+// Chỉ khi ARMED mới gửi kết quả mixer; READY gửi failsafe (R1–R3).
+// Hồ sơ tắt cơ chế ARM (enabled = false) thì tự ARM mỗi khi đủ điều kiện, không có nút ARM.
 const ARM_LABEL = { disconnected: 'Chưa kết nối', connected: 'Đang đồng bộ…', ready: 'Sẵn sàng', armed: 'ARMED' };
 class ArmController {
-  constructor() { this.state = 'disconnected'; this.autoArm = false; this.autoPending = false; this.syncFailed = false; this.disarmReason = null; this.onChange = null; }
+  constructor() { this.state = 'disconnected'; this.enabled = true; this.autoArm = false; this.autoPending = false; this.syncFailed = false; this.disarmReason = null; this.onChange = null; }
   get armed() { return this.state === 'armed'; }
   set(s) { if (s === this.state) return; this.state = s; this.onChange?.(); }
   onConnected() { this.syncFailed = false; this.disarmReason = null; this.set('connected'); }
@@ -862,7 +858,8 @@ class ArmController {
     if (this.state !== 'ready') return this.syncFailed ? 'Không đồng bộ được failsafe với xe' : `Chưa sẵn sàng (${ARM_LABEL[this.state]})`;
     if (!c.profileValid) return 'Hồ sơ còn lỗi, sửa trong Cấu hình trước';
     if (c.editing) return 'Đang sửa bố cục';
-    if (!c.throttleAtRest) return 'Thả cần ga trước khi ARM';
+    if (c.linkOk === false) return 'Mất tín hiệu';
+    if (!c.throttleAtRest) return this.enabled ? 'Thả cần ga trước khi ARM' : 'Thả cần ga để bắt đầu lái';
     if (!c.armConditionOk) return 'Điều kiện ARM chưa đúng';
     return null;
   }
@@ -873,12 +870,13 @@ class ArmController {
   }
   /** DISARM về READY (R3); reason = null khi người dùng tự bấm */
   disarm(reason = null) { this.autoPending = false; if (!this.armed) return; this.disarmReason = reason; this.set('ready'); }
-  /** Mỗi chu kỳ: tự DISARM khi điều kiện ARM sai / đang sửa bố cục; tự ARM lần đầu nếu bật autoArm (R2, R3) */
+  /** Mỗi chu kỳ: tự DISARM khi điều kiện ARM sai / đang sửa bố cục; tự ARM lần đầu nếu bật autoArm (R2, R3).
+   *  Tắt cơ chế ARM thì tự ARM lại mỗi khi đủ điều kiện. */
   tick(c) {
     if (this.armed) {
       if (!c.armConditionOk) this.disarm('Điều kiện ARM chuyển sai');
       if (c.editing) this.disarm('Đang sửa bố cục');
-    } else if (this.autoPending && this.state === 'ready' && !this.canArm(c)) this.arm(c);
+    } else if ((this.autoPending || !this.enabled) && this.state === 'ready' && !this.canArm(c)) this.arm(c);
   }
 }
 
@@ -886,13 +884,13 @@ class ArmController {
 //  Bố cục màn Lái (models/control_layout.dart, layout/*)
 // ============================================================================
 // Phần tử gắn vào Input (I3), không gắn thẳng vào kênh
-const KIND = { stickH: 'Cần gạt ngang', stickV: 'Cần gạt dọc', stick2D: 'Cần 2 trục', button: 'Nút nhấn giữ', toggle: 'Nút bật/tắt', switch3: 'Công tắc 3 nấc', knob: 'Núm xoay', gauge: 'Ô đồng hồ', gearBox: 'Hộp số', trim: 'Trim lái', statusBadge: 'Trạng thái' };
+const KIND = { stickH: 'Cần gạt ngang', stickV: 'Cần gạt dọc', stick2D: 'Cần 2 trục', button: 'Nút nhấn giữ', toggle: 'Nút bật/tắt', switch3: 'Công tắc 3 nấc', knob: 'Núm xoay', gauge: 'Ô đồng hồ', trim: 'Trim lái', statusBadge: 'Trạng thái' };
 const isControl = (k) => ['stickH', 'stickV', 'stick2D', 'button', 'toggle', 'switch3', 'knob'].includes(k);
 const isStickK = (k) => k === 'stickH' || k === 'stickV' || k === 'stick2D';
 const isSwitchLike = (k) => k === 'button' || k === 'toggle' || k === 'switch3';
 const GAUGES = { battery: 'Pin', current: 'Dòng', speed: 'Tốc độ', ping: 'Ping', rssi: 'RSSI', channels: 'Kênh đầu ra' };
-const LIMITS = { stickH: [6, 2, 24, 4], stickV: [2, 6, 4, 12], stick2D: [5, 5, 12, 12], button: [2, 2, 6, 4], toggle: [2, 2, 6, 4], switch3: [3, 2, 8, 4], knob: [3, 3, 6, 6], gauge: [3, 2, 8, 4], statusBadge: [3, 2, 8, 4], gearBox: [4, 2, 12, 4], trim: [4, 2, 12, 4] };
-const DEF_SIZE = { stickH: [8, 3], stickV: [3, 8], stick2D: [6, 6], button: [3, 2], toggle: [3, 2], switch3: [4, 2], knob: [3, 3], gauge: [4, 2], statusBadge: [4, 2], gearBox: [6, 2], trim: [6, 2] };
+const LIMITS = { stickH: [6, 2, 24, 4], stickV: [2, 6, 4, 12], stick2D: [5, 5, 12, 12], button: [2, 2, 6, 4], toggle: [2, 2, 6, 4], switch3: [3, 2, 8, 4], knob: [3, 3, 6, 6], gauge: [3, 2, 8, 4], statusBadge: [3, 2, 8, 4], trim: [4, 2, 12, 4] };
+const DEF_SIZE = { stickH: [8, 3], stickV: [3, 8], stick2D: [6, 6], button: [3, 2], toggle: [3, 2], switch3: [4, 2], knob: [3, 3], gauge: [4, 2], statusBadge: [4, 2], trim: [6, 2] };
 const KNOB = { small: ['Nhỏ', 0.28], medium: ['Vừa', 0.38], large: ['Lớn', 0.5] };
 const VALUE_DISPLAY = { pct: '%', us: 'µs', hidden: 'Ẩn' };
 const RET_MODE = { spring: 'Tự về', hold: 'Giữ vị trí', halfSpring: 'Về một nửa' };
@@ -947,7 +945,7 @@ function returnFor(it, id) {
   if (it.kind === 'stick2D' && it.inputY === id) return it.retY || newRet();
   return it.input === id ? it.ret || newRet() : null;
 }
-const touchable = (it) => isControl(it.kind) || it.kind === 'gearBox' || it.kind === 'trim';
+const touchable = (it) => isControl(it.kind) || it.kind === 'trim';
 /** SizeLimits.forCell: vùng chạm tối thiểu 48 dp */
 function limitsFor(kind, cw, chh, touch) {
   const [a, b, c, d] = LIMITS[kind];
@@ -978,7 +976,7 @@ function addControl(layout, kind, inputId = null) {
   if (it && inputId != null) bindInput(layout, it, inputId);
   return it;
 }
-/** Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, hộp số, trim người dùng tự thêm */
+/** Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, trim người dùng tự thêm */
 function blankLayout() {
   return { id: newId('lay'), name: 'Mặc định', locked: true, items: [
     mkItem('statusBadge', 5, 0, 6, 2),
@@ -989,7 +987,7 @@ function blankLayout() {
 /** "Mặc định": Input Ga vào cần gạt dọc trái, Lái vào cần gạt ngang phải, đồng hồ ở giữa */
 function standardLayout(steer = 'steer', thr = 'throttle') {
   const l = blankLayout();
-  l.items.push(mkItem('gearBox', 5, 9, 8, 3), mkItem('trim', 14, 6, 10, 2),
+  l.items.push(mkItem('trim', 14, 6, 10, 2),
     mkItem('stickV', 0, 1, 4, 11, { input: thr }), mkItem('stickH', 14, 9, 10, 3, { input: steer }));
   return l;
 }
@@ -1070,8 +1068,6 @@ function validateGeneral(p, others = []) {
   }
   if (p.failsafeMs < 100 || p.failsafeMs > 3000) e.failsafeTimeout = 'Thời gian failsafe trong khoảng 100–3000 ms';
   if (p.throttleCh != null && p.throttleCh === p.steeringCh) e.steeringCh = 'Kênh Lái trùng kênh Ga';
-  if (p.gears.count < 1 || p.gears.count > 5) e.gearCount = 'Số lượng số 1–5';
-  for (let i = 0; i < p.gears.count; i++) { const g = p.gears.max[i]; if (g < 1 || g > 100) e['gear' + i] = `Ga tối đa số ${i + 1} phải 1–100%`; }
   return e;
 }
 const inputMap = (p) => Object.fromEntries(p.inputs.map((i) => [i.id, i]));
@@ -1130,8 +1126,7 @@ function renameInput(p, from, to) {
   for (const c of p.conditions) c.expr = renameInExpr(c.expr, from, to);
   if (p.arm.armCondition) p.arm.armCondition = renameInExpr(p.arm.armCondition, from, to);
 }
-const defaultGears = () => ({ count: 3, max: [30, 60, 100, 100, 100] });
-/** CarProfile.resetConfig: kênh, mix, hộp số, failsafe, ARM về mặc định; giữ kênh Ga/Lái đã chọn và luật
+/** CarProfile.resetConfig: kênh, mix, failsafe, ARM về mặc định; giữ kênh Ga/Lái đã chọn và luật
  *  tối thiểu Input đang điều khiển kênh Lái / Ga → kênh đó */
 function resetConfig(p) {
   const steer = [...steeringInputs(p)][0], thr = [...throttleInputs(p)][0];
@@ -1141,7 +1136,7 @@ function resetConfig(p) {
     ...(steer != null ? [newRule({ id: 'r_steer', source: steer, destCh: p.steeringCh })] : []),
     ...(thr != null ? [newRule({ id: 'r_throttle', source: thr, destCh: p.throttleCh })] : []),
   ];
-  p.gears = defaultGears(); p.failsafeMs = 400; p.arm = { autoArm: false, armCondition: null };
+  p.failsafeMs = 400; p.arm = { enabled: true, autoArm: false, armCondition: null };
 }
 /** CarProfile.roleWarning: kênh Ga / Lái đã chọn nhưng chưa có luật, hoặc bố cục thiếu phần tử cho Input điều khiển nó.
  *  Chỉ cảnh báo, không chặn Lưu: hồ sơ không bắt buộc có kênh Ga/Lái, có thể chọn kênh trước rồi mới dựng luật / bố cục. */
@@ -1167,12 +1162,12 @@ function makeProfile(name, conn, tpl, o = {}) {
     // wifi.ip: chế độ Router là IP lần cuối thấy xe · wifi.carId: MAC gốc của xe (đọc từ xe), có thì app tự dò xe khi IP đổi
     id: newId('p'), name, conn, wifi: { ip: o.ip ?? '192.168.4.1', port: o.port ?? 4210, ssid: o.ssid ?? '', ...(o.carId ? { carId: o.carId } : {}) },
     ble: { mac: o.mac ?? '', deviceName: o.devName ?? '' },
-    // Kênh Ga / Lái do người dùng chọn, null = không có (hộp số + thả ga khi ARM / ô Trim)
+    // Kênh Ga / Lái do người dùng chọn, null = không có (thả ga khi ARM / ô Trim)
     steeringCh: blank ? null : 1, throttleCh: blank ? null : 2,
     channels: blank ? defaultChannels() : defaultChannels(1, 2),
     inputs: blank ? [] : [newInput('steer', 'Lái'), newInput('throttle', 'Ga')], conditions: [],
     mixer: blank ? [] : [newRule({ id: 'r_steer', source: 'steer', destCh: 1 }), newRule({ id: 'r_throttle', source: 'throttle', destCh: 2 })],
-    arm: { autoArm: false, armCondition: null }, gears: defaultGears(), failsafeMs: 400,
+    arm: { enabled: true, autoArm: false, armCondition: null }, failsafeMs: 400,
     lastConnectedAt: o.last ?? null, layout: blank ? blankLayout() : standardLayout(),
   };
   if (tpl === 'lightsHorn') {
@@ -1190,7 +1185,7 @@ const TEMPLATES = [
   ['blank', 'Trống', 'Chưa có Input, luật mix hay kênh Ga/Lái. Tự thêm phần tử và gắn vào kênh bạn muốn'],
   ['basic', 'Xe cơ bản 2 kênh', 'Lái (CH1) và Ga (CH2)'],
   ['lightsHorn', 'Xe có đèn/còi', 'Thêm Đèn (CH3, bật/tắt) và Còi (CH4, nhấn giữ)'],
-  ['copy', 'Sao chép từ xe khác', 'Lấy Input, mix, kênh, hộp số và bố cục của một xe có sẵn'],
+  ['copy', 'Sao chép từ xe khác', 'Lấy Input, mix, kênh, ARM và bố cục của một xe có sẵn'],
 ];
 const connLabel = (p) => p.conn === 'wifi' ? `${p.wifi.ip}:${p.wifi.port}` : (p.ble.deviceName || p.ble.mac || '?');
 const namesExcept = (id) => S.profiles.filter((p) => p.id !== id).map((p) => p.name);
@@ -1201,10 +1196,10 @@ function uniqueName(base) {
   return n;
 }
 /** Cấu hình firmware v1 (CH1 → chân lái, CH2 → chân ga + failsafe) — mô phỏng phần đang lưu trên xe.
- *  Hộp số do app áp lên kênh Ga đã chọn nên xe nhận giới hạn 100% mọi số. */
+ *  App không có hộp số: gửi 1 số, giới hạn ga 100% để xe không cắt ga. */
 const SERVO_KEYS = ['min', 'center', 'max', 'trim', 'offset', 'reverse', 'failsafe'];
 const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
-const carConfigOf = (p) => clone({ steer: pick(p.channels[0], SERVO_KEYS), thr: pick(p.channels[1], SERVO_KEYS), failsafeMs: p.failsafeMs, gears: { count: p.gears.count, max: [100, 100, 100, 100, 100] } });
+const carConfigOf = (p) => clone({ steer: pick(p.channels[0], SERVO_KEYS), thr: pick(p.channels[1], SERVO_KEYS), failsafeMs: p.failsafeMs, gears: { count: 1, max: [100, 100, 100, 100, 100] } });
 /** CarController.syncProfile: app là nguồn đúng (0.5) — ghi cấu hình xuống xe nếu khác cấu hình xe đang có.
  *  Firmware v1 vẫn nhận CH1/CH2 (cầu nối Sprint 3); giao thức v2 chỉ còn FS_WRITE. Đồng bộ xong thì READY (E6, R1). */
 function syncProfile(p, force = false) {
@@ -1337,7 +1332,7 @@ const S = {
   theme: 'dark', accent: 'lime', lang: 'vi', screen: 'garage', history: [], profiles: [],
   connectedId: null, link: 'disconnected', connectingId: null, ping: {}, pinging: {}, carCfg: {},
   wizard: null, settings: null, chEdit: null, mixEdit: null, inEdit: null, net: null, ctl: null,
-  pos: {}, swPos: {}, gear: 1, tel: null, overlay: null, raw: {}, cbGroup: {}, arm: new ArmController(),
+  pos: {}, swPos: {}, tel: null, overlay: null, raw: {}, cbGroup: {}, arm: new ArmController(),
 };
 {
   const p1 = makeProfile('Xe tải đỏ', 'wifi', 'lightsHorn', { last: new Date(2026, 8, 22, 18, 40).getTime() });
@@ -1538,7 +1533,6 @@ function connect(p) {
         return;
       }
       S.link = document.getElementById('simLost').checked ? 'lost' : 'connected';
-      S.gear = 1;
       p.lastConnectedAt = Date.now();
       S.arm.onConnected(); // CONNECTED "Đang đồng bộ…": chưa ARM được tới khi đồng bộ failsafe xong
       openControl(p.id);
@@ -1550,7 +1544,7 @@ function connect(p) {
 function disconnect() { S.connectedId = null; S.link = 'disconnected'; S.tel = null; S.arm.onDisconnected(); }
 /** Báo cáo một lần các hồ sơ vừa được tự chuyển sang mô hình Input → Mixer (garage_screen.dart, J4) */
 function migrationReport() {
-  const reports = [[S.profiles[0]?.name ?? 'Xe tải đỏ', ['Luật mix 2 ghi vào CH2 (Ga): hộp số nay áp sau mix, kết quả có thể khác.']], [S.profiles[1]?.name ?? 'Buggy xanh', []]];
+  const reports = [[S.profiles[0]?.name ?? 'Xe tải đỏ', ['Đã bỏ hộp số: ga không còn bị giới hạn theo số (30/60/100%). Muốn giảm ga tối đa, hạ Max của kênh Ga.']], [S.profiles[1]?.name ?? 'Buggy xanh', []]];
   S.overlay = { type: 'html', html: () => `<h3>Đã cập nhật hồ sơ xe</h3>
     <div class="dlist"><div style="color:var(--textBody)">Cấu hình điều khiển được chuyển sang dạng Input → luật mix → kênh. Mỗi kênh cũ thành một Input "chN" và một luật; luật mix cũ được giữ nguyên thứ tự. Bản gốc được lưu cạnh hồ sơ (đuôi .bak).</div>
     ${reports.map(([name, ws]) => `<div class="h-title" style="margin-top:16px">${esc(name)}</div>${ws.length
@@ -1695,7 +1689,7 @@ function renderAppSettings() {
 //  Tạo xe mới — 3 bước (profile_wizard_screen.dart)
 // ============================================================================
 function openWizard() {
-  S.wizard = { step: 0, p: { name: uniqueName('Xe mới'), conn: 'wifi', wifi: { ip: '192.168.4.1', port: 4210, ssid: '' }, ble: { mac: '', deviceName: '' }, failsafeMs: 400, gears: defaultGears() },
+  S.wizard = { step: 0, p: { name: uniqueName('Xe mới'), conn: 'wifi', wifi: { ip: '192.168.4.1', port: 4210, ssid: '' }, ble: { mac: '', deviceName: '' }, failsafeMs: 400 },
     portTxt: '4210', tpl: 'blank', copyFrom: null, scanning: false, results: [], found: [], finding: false, ping: null, pinging: false };
   go('wizard');
 }
@@ -1770,7 +1764,7 @@ function finishWizard() {
       { ip: q.wifi.ip, port: q.wifi.port, ssid: q.wifi.ssid, carId: q.wifi.carId, mac: q.ble.mac, devName: q.ble.deviceName });
     if (w.tpl === 'copy') {
       const s = clone(prof(w.copyFrom));
-      Object.assign(p, { channels: s.channels, steeringCh: s.steeringCh, throttleCh: s.throttleCh, inputs: s.inputs, conditions: s.conditions, mixer: s.mixer, arm: s.arm, gears: s.gears, failsafeMs: s.failsafeMs, layout: s.layout });
+      Object.assign(p, { channels: s.channels, steeringCh: s.steeringCh, throttleCh: s.throttleCh, inputs: s.inputs, conditions: s.conditions, mixer: s.mixer, arm: s.arm, failsafeMs: s.failsafeMs, layout: s.layout });
     }
     S.profiles.push(p);
     S.history = []; S.screen = 'garage';
@@ -1929,6 +1923,7 @@ function tabFoot(d, tab) {
 }
 function generalTab(d) {
   const st = S.settings, g = validateGeneral(d, namesExcept(d.id)), connected = isConnected(prof(st.pid));
+  const armOn = d.arm.enabled !== false;
   return field('Tên xe', d.name, { fid: 'sname', max: 32, err: g.name, on: (v) => { d.name = v; } }) + '<div style="height:8px"></div>' +
     connSeg(d.conn, (v) => { d.conn = v; }) + '<div style="height:12px"></div>' +
     (d.conn === 'wifi'
@@ -1946,24 +1941,21 @@ function generalTab(d) {
     numField('Thời gian chờ failsafe', d.failsafeMs, { min: 100, max: 3000, step: 50, unit: ' ms', err: g.failsafeTimeout }, (v) => { d.failsafeMs = v; }) +
     hint('Xe chuyển sang failsafe nếu không nhận lệnh trong khoảng thời gian này.') +
     '<div class="divider" style="margin:16px 0"></div><div class="h-title" style="margin-bottom:8px">Kênh Ga / Lái</div>' +
-    hint('Kênh Ga chịu giới hạn của hộp số; muốn ARM hay sửa bố cục phải thả cần ga về vị trí nghỉ. Kênh Lái là kênh ô Trim trên màn Lái chỉnh. Chọn "Không có" nếu xe không cần. Min/Center/Max, trim và failsafe của kênh chỉnh ở tab Kênh.') +
+    hint('Muốn ARM (hoặc bắt đầu lái khi tắt ARM) hay sửa bố cục phải thả cần của kênh Ga về vị trí nghỉ. Kênh Lái là kênh ô Trim trên màn Lái chỉnh. Chọn "Không có" nếu xe không cần. Min/Center/Max, trim và failsafe của kênh chỉnh ở tab Kênh.') +
     rolePicker(d, true) + rolePicker(d, false) +
-    '<div class="divider" style="margin:16px 0"></div>' +
-    numField('Số lượng số', d.gears.count, { min: 1, max: 5, err: g.gearCount }, (v) => { d.gears.count = v; }) +
-    Array.from({ length: d.gears.count }, (_, i) => numField(`Ga tối đa số ${i + 1}`, d.gears.max[i], { min: 1, max: 100, step: 5, unit: '%', err: g['gear' + i] }, (v) => { d.gears.max[i] = v; })).join('') +
-    hint(d.throttleCh == null ? 'Chưa chọn kênh Ga (ở trên) nên hộp số chưa có tác dụng.' : `Hộp số giới hạn kênh Ga (${profChLabel(d, d.throttleCh)}).`) +
     '<div class="divider" style="margin:16px 0"></div><div class="h-title" style="margin-bottom:8px">ARM</div>' +
-    hint('Vừa kết nối xe chưa nhận lệnh lái. Nhấn giữ nút ARM 1 giây trên màn Lái (có kênh Ga thì cần ga phải ở vị trí nghỉ).') +
-    switchRow('Tự ARM sau khi kết nối', d.arm.autoArm, () => { d.arm.autoArm = !d.arm.autoArm; }, { sub: 'Tự ARM một lần khi đủ điều kiện; DISARM rồi thì phải bấm lại' }) +
-    switchRow('Điều kiện ARM riêng', d.arm.armCondition != null, () => { d.arm.armCondition = d.arm.armCondition ? null : TRUE(); }, { sub: 'Chỉ ARM được khi điều kiện đúng; điều kiện sai thì tự DISARM' }) +
-    (d.arm.armCondition ? condBuilder('arm', d.arm.armCondition, d, (e) => { d.arm.armCondition = e; }) : '') + '<div style="height:16px"></div>';
+    switchRow('Dùng cơ chế ARM', armOn, () => { d.arm.enabled = !armOn; }, { sub: armOn
+      ? 'Vừa kết nối xe chưa nhận lệnh lái: nhấn giữ nút ARM 1 giây trên màn Lái mới lái được.'
+      : 'Vào màn Lái là lái được ngay, không có nút ARM. Xe chỉ nhận lệnh khi cần ga ở vị trí nghỉ; mở Cấu hình, sửa bố cục, app xuống nền hay mất tín hiệu thì tạm dừng, xong tự lái lại.' }) +
+    (armOn ? switchRow('Tự ARM sau khi kết nối', d.arm.autoArm, () => { d.arm.autoArm = !d.arm.autoArm; }, { sub: 'Tự ARM một lần khi đủ điều kiện; DISARM rồi thì phải bấm lại' }) +
+      switchRow('Điều kiện ARM riêng', d.arm.armCondition != null, () => { d.arm.armCondition = d.arm.armCondition ? null : TRUE(); }, { sub: 'Chỉ ARM được khi điều kiện đúng; điều kiện sai thì tự DISARM' }) : '') +
+    (armOn && d.arm.armCondition ? condBuilder('arm', d.arm.armCondition, d, (e) => { d.arm.armCondition = e; }) : '') + '<div style="height:16px"></div>';
 }
 function saveSettings() {
   const st = S.settings, d = st.draft;
   const idx = S.profiles.findIndex((x) => x.id === st.pid);
   S.profiles[idx] = clone(d);
   st.saved = draftJson(d);
-  if (S.gear > d.gears.count) S.gear = d.gears.count;
   // Cấu hình nằm trong app và có tác dụng ngay; chỉ phần xe cần giữ khi mất sóng mới ghi xuống xe
   if (!isConnected(prof(st.pid))) snack('Đã lưu vào máy');
   else snack(syncProfile(d) ? 'Đã lưu và đồng bộ failsafe với xe' : 'Đã lưu, có tác dụng ngay');
@@ -1978,7 +1970,7 @@ function renderSettings() {
   ][st.tab]();
   const save = saveSettings;
   const syncFs = () => { syncProfile(prof(st.pid), true); snack('Đã đồng bộ failsafe với xe'); };
-  const reset = () => confirmDlg('Khôi phục mặc định?', 'Kênh, luật mix, hộp số, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). Tên, kết nối, Input, bố cục và việc chọn kênh Ga/Lái được giữ lại. Chỉ ghi vào máy khi bấm Lưu.', 'Khôi phục', () => resetConfig(d));
+  const reset = () => confirmDlg('Khôi phục mặc định?', 'Kênh, luật mix, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). Tên, kết nối, Input, bố cục và việc chọn kênh Ga/Lái được giữ lại. Chỉ ghi vào máy khi bấm Lưu.', 'Khôi phục', () => resetConfig(d));
   return `<div class="appbar" style="border-bottom:0"><button class="iconbtn" data-act="${A(settingsBack)}">${ic('back')}</button><div class="title">${esc(d.name.trim() || 'Cấu hình')}</div></div>
     <div class="tabs">${SET_TABS.map((t, i) => `<button class="${st.tab === i ? 'on' : ''}" data-act="${A(() => { st.tab = i; })}">${t}</button>`).join('')}</div>
     <div class="body" data-scroll="set${st.tab}">${content}</div>${tabFoot(d, st.tab)}
@@ -2501,7 +2493,6 @@ const ctlLayout = () => S.ctl && (S.ctl.editing ? S.ctl.draft : ctlProfile()?.la
 function openControl(pid, editOnly = false) {
   const p = prof(pid);
   S.ctl = { pid, editOnly, editing: false, draft: null, sel: null, undo: [], redo: [], snap: null, pipe: null, armCond: null, errors: [] };
-  if (S.gear > p.gears.count) S.gear = p.gears.count;
   loadPipe();
   initValues();
   go('control');
@@ -2511,8 +2502,10 @@ function openControl(pid, editOnly = false) {
 function loadPipe() {
   const p = ctlProfile(), c = S.ctl;
   if (!c.pipe) c.pipe = new OutputPipeline(p); else c.pipe.update(p);
+  S.arm.enabled = p.arm.enabled !== false;
   S.arm.autoArm = p.arm.autoArm;
-  c.armCond = p.arm.armCondition ? c.pipe.mixer.conditions.compile(p.arm.armCondition) : null;
+  // Tắt cơ chế ARM thì bỏ qua điều kiện ARM riêng
+  c.armCond = S.arm.enabled && p.arm.armCondition ? c.pipe.mixer.conditions.compile(p.arm.armCondition) : null;
   for (const [id, v] of Object.entries(S.pos)) c.pipe.inputs.setPosition(id, v);
   for (const [id, v] of Object.entries(S.swPos)) c.pipe.inputs.setSwitch(id, v);
   c.errors = validateAll(p);
@@ -2525,7 +2518,8 @@ function armConditionOk() {
 /** _armCheck: điều kiện ARM do màn Lái cung cấp (điều kiện ARM riêng được xét khi hoàn tất giữ nút và mỗi chu kỳ) */
 function armCheck() {
   const c = S.ctl, p = ctlProfile();
-  return { profileValid: !c.errors.length, throttleAtRest: c.pipe ? c.pipe.throttleAtRest(p.layout) : true, editing: c.editing, armConditionOk: true };
+  return { profileValid: !c.errors.length, throttleAtRest: c.pipe ? c.pipe.throttleAtRest(p.layout) : true, editing: c.editing, armConditionOk: true,
+    linkOk: S.link === 'connected' && !S.tel?.failsafe };
 }
 /** Cần gạt / núm gắn Input `id`: vị trí −100…+100 */
 function setPos(id, v) { const x = clamp(v, -100, 100); S.pos[id] = x; S.ctl?.pipe?.inputs.setPosition(id, x); }
@@ -2615,6 +2609,14 @@ function updateLive() {
     Object.assign(f.style, { top: (v >= 0 ? 50 - 50 * v : 50) + '%', height: `max(1px, ${50 * Math.abs(v)}%)`, background: p.channels[i].enabled ? 'var(--accentFill)' : 'var(--disabled)' });
   }));
   scr.querySelectorAll('[data-vt]').forEach((el) => { const it = l.items.find((i) => i.id === el.dataset.vt); if (it) el.textContent = trailingText(p, it) ?? ''; });
+  // Bảng luật đang mở đổi theo mixer: thả tay khỏi cần là trạng thái cập nhật
+  scr.querySelectorAll('[data-rs]').forEach((el) => {
+    const r = p.mixer.find((m) => m.id === el.dataset.rs);
+    if (!r) return;
+    const [col, lab] = ruleStatus(r);
+    el.querySelector('.rsdot').style.background = col;
+    el.querySelector('.rslab').textContent = lab;
+  });
 }
 
 // ---------- Trục cần gạt: vị trí thô, tự về (ReturnMotion), vùng chết ----------
@@ -2656,16 +2658,25 @@ function releaseAxis(k) {
   if (cfg && returnsFrom(cfg, a.raw)) { a.anim = { cfg, from: a.raw, t0: performance.now() }; loop(); }
 }
 
-/** Input có luật có điều kiện hoặc đi vào nhiều kênh → chấm `accent`; nhấn giữ xem luật (U6) */
+/** Input có luật có điều kiện hoặc đi vào nhiều kênh → chấm `accent`; nhấn giữ xem luật (U6), chỉ khi DISARM */
 function isMixed(p, id) { const rs = rulesUsing(p, id); return rs.length > 1 || rs.some((r) => r.condition.op !== 'true'); }
+/** Trạng thái một luật trong bảng nhấn giữ. Luật không điều kiện luôn tác động — không nói gì về việc cần có đang được gạt */
+function ruleStatus(r) {
+  const mixer = S.ctl?.pipe?.mixer;
+  if (!r.enabled) return ['var(--disabled)', 'Luật đang tắt'];
+  if (r.condition.op === 'true') return ['var(--accent)', 'Luôn áp dụng'];
+  if (mixer?.isPending(r.id)) return ['var(--warn)', 'Chờ về giữa'];
+  if (mixer?.isActive(r.id)) return ['var(--accent)', 'Điều kiện đúng · đang tác động'];
+  return ['var(--disabled)', 'Điều kiện chưa đúng'];
+}
 function showRules(it) {
-  const p = ctlProfile(), ids = itemIns(it), mixer = S.ctl.pipe?.mixer;
+  const p = ctlProfile(), ids = itemIns(it);
   const rules = [...new Set(ids.flatMap((id) => rulesUsing(p, id)))];
   S.overlay = { type: 'html', html: () => `<h3>${esc(ids.map((i) => findInput(p, i)?.name ?? i).join(' · '))}</h3>
     ${rules.length ? `<div class="dlist">${rules.map((r) => {
-      const pend = mixer?.isPending(r.id), act = mixer?.isActive(r.id);
-      return `<div style="display:flex;gap:12px;padding:6px 0"><span style="margin-top:6px;width:10px;height:10px;border-radius:50%;flex:none;background:${pend ? 'var(--warn)' : act ? 'var(--accent)' : 'var(--disabled)'}"></span>
-        <div><div style="font-size:14px">${esc(describeRule(r, p))}</div><div class="muted" style="font-size:12px;font-weight:500">${pend ? 'Chờ về giữa' : act ? 'Đang tác động' : 'Không tác động'}</div></div></div>`;
+      const [col, lab] = ruleStatus(r);
+      return `<div data-rs="${r.id}" style="display:flex;gap:12px;padding:6px 0"><span class="rsdot" style="margin-top:6px;width:10px;height:10px;border-radius:50%;flex:none;background:${col}"></span>
+        <div><div style="font-size:14px">${esc(describeRule(r, p))}</div><div class="muted rslab" style="font-size:12px;font-weight:500">${lab}</div></div></div>`;
     }).join('')}</div>` : '<p>Input này chưa đi vào kênh nào.</p>'}
     <div class="acts"><button class="btn text" data-act="${A(closeOverlay)}">Đóng</button></div>` };
   render();
@@ -2707,12 +2718,6 @@ function renderItem(p, it) {
       const [icon, v, sub] = gaugeData(it.gauge);
       return `<div class="gauge" data-gauge="${it.id}"><div class="gh">${ic(icon)}<span class="caption">${esc(glabel.toUpperCase())}</span></div><div class="gv">${v}</div><div class="gs">${sub ?? ''}</div></div>`;
     }
-    case 'gearBox': {
-      const g = clamp(S.gear, 1, p.gears.count);
-      return frame(lbl, null, `<div class="rowctl"><button class="iconbtn outlined" ${S.gear > 1 ? '' : 'disabled'} data-rep="gear:-" data-slow data-act="${A(() => { S.gear--; })}">${ic('minus')}</button>
-        <div class="mid"><div style="font-size:26px;font-weight:800;line-height:1.1">Số ${g}</div><div class="muted" style="font-size:12px;font-weight:500">Ga tối đa ${p.gears.max[g - 1]}%</div></div>
-        <button class="iconbtn outlined" ${S.gear < p.gears.count ? '' : 'disabled'} data-rep="gear:+" data-slow data-act="${A(() => { S.gear++; })}">${ic('plus')}</button></div>`, 'padding:4px');
-    }
     case 'trim': {
       // Trim nhanh cho kênh Lái đã chọn trong hồ sơ
       if (p.steeringCh == null) {
@@ -2737,12 +2742,19 @@ function renderItem(p, it) {
   return '';
 }
 
-// ---------- Nút ARM / DISARM: nhấn giữ 1 s để ARM (có vòng tiến trình), bấm một lần để DISARM ----------
+// ---------- Nút ARM / DISARM: nhấn giữ 1 s để ARM (có vòng tiến trình), bấm một lần để DISARM.
+//            Hồ sơ tắt cơ chế ARM thì chỉ là ô trạng thái: "Đang lái" hoặc lý do chưa lái được ----------
 let armHold = null;
 const armRing = (t) => `<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" stroke-width="2.5"/>
   <circle cx="10" cy="10" r="8" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="${(t * 50.27).toFixed(2)} 60" transform="rotate(-90 10 10)"/></svg>`;
 function armButton() {
   const a = S.arm, armed = a.armed, ready = a.state === 'ready';
+  if (!a.enabled) {
+    const text = armed ? 'Đang lái' : (a.canArm(armCheck()) ?? ARM_LABEL[a.state]);
+    return `<div class="armbtn${armed ? ' armed' : ''}" id="armBtn" data-armstatus="1" title="${esc(text)}"
+      style="max-width:30vw;color:${armed ? 'var(--onAccentFill)' : 'var(--textMuted)'}"><span class="armic">${ic('steering', { mini: true })}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(text)}</span></div>`;
+  }
   return `<div class="armbtn${armed ? ' armed' : ready ? ' ready' : ''}" id="armBtn" data-arm="1" style="color:${armed ? 'var(--onAccentFill)' : ready ? 'var(--text)' : 'var(--disabled)'}">
     <span class="armic">${ic(armed ? 'unlocked' : 'locked', { mini: true })}</span>${armed ? 'ARMED' : ready ? 'Giữ để ARM' : ARM_LABEL[a.state]}</div>`;
 }
@@ -2826,7 +2838,7 @@ function addSheet() {
   S.overlay = { type: 'sheet', html: () => {
     const controls = Object.keys(KIND).filter(isControl);
     const gauges = Object.keys(GAUGES).filter((g) => !d.items.some((i) => i.gauge === g));
-    const extras = ['gearBox', 'trim', 'statusBadge'].filter((k) => !d.items.some((i) => i.kind === k));
+    const extras = ['trim', 'statusBadge'].filter((k) => !d.items.some((i) => i.kind === k));
     return `<div class="handle"></div><div class="h-title" style="margin-bottom:8px">Thêm điều khiển</div>
     ${controls.map((k) => `<div class="row" data-act="${A(() => pick(() => addControl(d, k)))}">${ic('addControl', { color: 'var(--textMuted)' })}<div><div>${KIND[k]}</div><div class="muted" style="font-size:13px">${hintOf[k]}</div></div></div>`).join('')}
     ${gauges.length || extras.length ? '<div class="divider"></div>' : ''}
@@ -3060,7 +3072,7 @@ function back() {
   if (S.screen === 'control') {
     const p = ctlProfile();
     if (!p) S.screen = 'garage';
-    else { if (S.gear > p.gears.count) S.gear = p.gears.count; loadPipe(); initValues(); }
+    else { loadPipe(); initValues(); }
   }
   if ((S.screen === 'settings' && !S.settings) || (S.screen === 'channel' && !S.chEdit) || (S.screen === 'mix' && !S.mixEdit) || (S.screen === 'input' && !S.inEdit) ||
       (S.screen === 'network' && !S.net)) S.screen = 'garage';
@@ -3138,7 +3150,7 @@ window.addEventListener('resize', () => { fit(); drawAxes(); });
 
 // Nhấn giữ nút −/+ (đổi gấp 10 lần)
 let lpFired = false;
-// HoldRepeat: nhấn giữ nút −/+ thì lặp, càng giữ càng nhanh (data-slow: nhịp đều cho hộp số; data-fast: bước gộp khi giữ lâu).
+// HoldRepeat: nhấn giữ nút −/+ thì lặp, càng giữ càng nhanh (data-slow: nhịp đều, chậm; data-fast: bước gộp khi giữ lâu).
 // Mỗi lần vẽ lại DOM mới nên tìm lại nút theo data-rep.
 let rep = null;
 function stopRep() { if (rep) clearTimeout(rep.timer); rep = null; }
@@ -3219,6 +3231,11 @@ scr.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     return;
   }
+  if (e.target.closest('[data-armstatus]')) { // tắt ARM: bấm ô trạng thái (khi chưa lái được) thì báo lý do
+    if (!S.arm.armed) snack(S.arm.canArm(armCheck()) ?? ARM_LABEL[S.arm.state]);
+    e.preventDefault();
+    return;
+  }
   if (e.target.closest('[data-arm]')) {
     if (S.arm.armed) drags.set(e.pointerId, { mode: 'disarm' });
     else if (armStart()) drags.set(e.pointerId, { mode: 'armhold' });
@@ -3226,7 +3243,7 @@ scr.addEventListener('pointerdown', (e) => {
     return;
   }
   const editing = S.screen === 'control' && S.ctl?.editing;
-  const mixEl = !editing && e.target.closest('[data-mixitem]');
+  const mixEl = !editing && !S.arm.armed && e.target.closest('[data-mixitem]'); // đang lái: không bật bảng luật
   if (mixEl) {
     clearTimeout(mixLp?.timer);
     const pid = e.pointerId, id = mixEl.dataset.item;
@@ -3416,8 +3433,7 @@ setInterval(() => {
   if (failsafe && S.arm.armed) S.arm.onCarFailsafe();
   const wasFail = !!S.tel?.failsafe;
   // Giao thức v1: chỉ khi ARMED mới gửi CH1/CH2 sau mixer; xe chạy theo CH2 (chân ga).
-  // Hộp số app đã áp lên kênh Ga người dùng chọn (không có kênh Ga thì không giới hạn).
-  const thr = failsafe || !S.arm.armed || !S.ctl.pipe ? 0 : S.ctl.pipe.gearedPct(S.ctl.pipe.lastPct, 2, S.gear) / 100;
+  const thr = failsafe || !S.arm.armed || !S.ctl.pipe ? 0 : S.ctl.pipe.lastPct[1] / 100;
   battery = Math.max(6.4, battery - 0.0004 - Math.abs(thr) * 0.002);
   S.tel = { failsafe, netSetup, v: battery - Math.abs(thr) * 0.35, a: 0.4 + Math.abs(thr) * 18 + Math.random() * 0.3, kmh: Math.abs(thr) * 42 + (thr ? Math.random() : 0), rssi: -55 - Math.round(Math.random() * 6) };
   if (wasFail !== failsafe) render(); else updateGauges();

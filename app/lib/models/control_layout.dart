@@ -16,7 +16,6 @@ enum ItemKind {
   switch3('Công tắc 3 nấc', '3-position switch'),
   knob('Núm xoay', 'Knob'),
   gauge('Ô đồng hồ', 'Gauge'),
-  gearBox('Hộp số', 'Gearbox'),
   trim('Trim lái', 'Steering trim'),
   statusBadge('Trạng thái', 'Status');
 
@@ -59,7 +58,7 @@ class SizeLimits {
         ItemKind.switch3 => const SizeLimits(3, 2, 8, 4),
         ItemKind.knob => const SizeLimits(3, 3, 6, 6),
         ItemKind.gauge || ItemKind.statusBadge => const SizeLimits(3, 2, 8, 4),
-        ItemKind.gearBox || ItemKind.trim => const SizeLimits(4, 2, 12, 4),
+        ItemKind.trim => const SizeLimits(4, 2, 12, 4),
       };
 
   /// Nâng kích thước nhỏ nhất để vùng chạm ≥ 48 dp trên màn thật
@@ -276,7 +275,7 @@ class ControlItem {
     return inputId == id ? returnCfg ?? ReturnConfig() : null;
   }
 
-  bool get touchable => kind.isControl || kind == ItemKind.gearBox || kind == ItemKind.trim;
+  bool get touchable => kind.isControl || kind == ItemKind.trim;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -318,6 +317,9 @@ class ControlItem {
 
 class ControlLayout {
   static const defaultCols = 24, defaultRows = 12;
+
+  /// Loại phần tử đã bỏ khỏi app (vd hộp số): bố cục cũ còn thì bỏ qua khi đọc
+  static const removedKinds = {'gearBox'};
 
   String id;
   String name;
@@ -395,7 +397,9 @@ class ControlLayout {
         rows: j['rows'] as int? ?? defaultRows,
         locked: j['locked'] as bool? ?? true,
         items: (j['items'] as List? ?? const [])
-            .map((e) => ControlItem.fromJson(e as Map<String, dynamic>))
+            .cast<Map<String, dynamic>>()
+            .where((e) => !removedKinds.contains(e['kind']))
+            .map(ControlItem.fromJson)
             .toList(),
       );
 
