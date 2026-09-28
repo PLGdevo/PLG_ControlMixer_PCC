@@ -13,6 +13,7 @@ import '../models/car_profile.dart';
 import '../models/channel_config.dart';
 import '../models/condition.dart';
 import '../models/control_layout.dart';
+import '../models/data_source.dart';
 import '../models/input_def.dart';
 import '../models/mixer_rule.dart';
 import '../services/quick_ping.dart';
@@ -262,7 +263,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   String _itemLabel(ControlItem it) {
     final custom = it.style.labelText;
     if (it.style.showLabel && custom != null && custom.trim().isNotEmpty) return custom;
-    if (it.kind == ItemKind.gauge) return (GaugeKey.values.asNameMap()[it.gaugeKey] ?? GaugeKey.battery).label;
+    if (it.kind.isDisplay) return DataSource.labelOf(it, draft);
     return draft.input(it.inputId)?.name ?? it.kind.label;
   }
 

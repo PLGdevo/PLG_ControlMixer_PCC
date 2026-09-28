@@ -56,6 +56,7 @@ abstract final class AppIcons {
   static const palette = HeroIcons.swatch;
   static const check = HeroIcons.check;
   static const layout = HeroIcons.squares2x2;
+  static const vector = HeroIcons.viewfinderCircle;
 
   /// Icon cho nút/công tắc, chọn được trong bảng thuộc tính (H3)
   static const pickable = <String, HeroIcons>{

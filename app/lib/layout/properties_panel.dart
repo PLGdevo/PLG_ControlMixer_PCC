@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/control_layout.dart';
+import '../models/data_source.dart';
 import '../models/input_def.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
@@ -80,6 +81,7 @@ class PropertiesPanel extends StatelessWidget {
     final isStick = k.isStick;
     final hasValue = isStick || k == ItemKind.knob;
     final isThrottle = item.inputIds.any(profile.isThrottleInput);
+    final info = DataSource.info(item.source, profile);
 
     Widget section(String title, List<Widget> children) => Padding(
           padding: const EdgeInsets.only(top: Gap.m),
@@ -143,22 +145,129 @@ class PropertiesPanel extends StatelessWidget {
                   inputSlot(item.inputIdY, y: true),
                 ],
               ]),
-            if (k == ItemKind.gauge)
-              section(tr('Ô đồng hồ', 'Gauge'), [
-                DropdownButtonFormField<String>(
-                  key: ValueKey(item.gaugeKey),
-                  initialValue: item.gaugeKey,
-                  isDense: true,
-                  items: [for (final g in GaugeKey.values) DropdownMenuItem(value: g.name, child: Text(g.label))],
-                  onChanged: (v) => _edit(() => item.gaugeKey = v),
+            if (k.isDisplay)
+              section(tr('Giá trị hiển thị', 'Displayed value'), [
+                _SourcePicker(
+                  key: ValueKey('src-${item.id}-${item.source}'),
+                  profile: profile,
+                  kind: k,
+                  value: item.source,
+                  label: k == ItemKind.vector ? tr('Trục X', 'X axis') : tr('Nguồn', 'Source'),
+                  onChanged: (v) => _edit(() => item.source = v),
+                ),
+                if (k == ItemKind.vector) ...[
+                  const SizedBox(height: Gap.s),
+                  _SourcePicker(
+                    key: ValueKey('srcy-${item.id}-${item.sourceY}'),
+                    profile: profile,
+                    kind: k,
+                    value: item.sourceY,
+                    label: tr('Trục Y', 'Y axis'),
+                    onChanged: (v) => _edit(() => item.sourceY = v),
+                  ),
+                ],
+              ]),
+            if (k == ItemKind.led && info != null && !info.flag)
+              section(tr('Ngưỡng sáng đèn', 'Light-up threshold'), [
+                SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  segments: [
+                    ButtonSegment(value: false, label: Text(tr('Sáng khi trên', 'On when above'))),
+                    ButtonSegment(value: true, label: Text(tr('Sáng khi dưới', 'On when below'))),
+                  ],
+                  selected: {item.display.below ?? info.alarmBelow},
+                  onSelectionChanged: (v) => _edit(() => item.display.below = v.first),
+                ),
+                const SizedBox(height: Gap.s),
+                _DecimalField(
+                  key: ValueKey('th-${item.id}-${item.source}'),
+                  label: tr('Ngưỡng', 'Threshold'),
+                  unit: info.unit,
+                  value: item.display.threshold,
+                  hint: info.alarm,
+                  onChanged: (v) {
+                    item.display.threshold = v;
+                    changed();
+                  },
                 ),
               ]),
+            if (k == ItemKind.led)
+              section(tr('Khi sáng', 'When on'), [
+                SegmentedButton<LedBlink>(
+                  showSelectedIcon: false,
+                  segments: [for (final b in LedBlink.values) ButtonSegment(value: b, label: Text(b.label))],
+                  selected: {item.display.blink},
+                  onSelectionChanged: (v) => _edit(() => item.display.blink = v.first),
+                ),
+              ]),
+            if (k == ItemKind.bar && info != null)
+              section(tr('Khoảng thanh', 'Bar range'), [
+                Row(children: [
+                  Expanded(
+                    child: _DecimalField(
+                      key: ValueKey('min-${item.id}-${item.source}'),
+                      label: 'Min',
+                      unit: info.unit,
+                      value: item.display.min,
+                      hint: info.min,
+                      onChanged: (v) {
+                        item.display.min = v;
+                        changed();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: Gap.s),
+                  Expanded(
+                    child: _DecimalField(
+                      key: ValueKey('max-${item.id}-${item.source}'),
+                      label: 'Max',
+                      unit: info.unit,
+                      value: item.display.max,
+                      hint: info.max,
+                      onChanged: (v) {
+                        item.display.max = v;
+                        changed();
+                      },
+                    ),
+                  ),
+                ]),
+                if ((item.display.min ?? info.min) >= (item.display.max ?? info.max))
+                  Text(tr('Min phải nhỏ hơn Max', 'Min must be less than Max'),
+                      style: AppText.label.copyWith(color: t.bad, fontSize: 12)),
+              ]),
+            if (k == ItemKind.bar || k == ItemKind.vector)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(tr('Hiện số', 'Show number')),
+                value: item.style.valueDisplay != ValueDisplay.hidden,
+                onChanged: (v) => _edit(() => item.style.valueDisplay = v ? ValueDisplay.pct : ValueDisplay.hidden),
+              ),
+            if ((k == ItemKind.gauge || k == ItemKind.bar || k == ItemKind.vector) &&
+                item.style.valueDisplay != ValueDisplay.hidden &&
+                (DataSource.chOf(item.source) != null || DataSource.chOf(item.sourceY) != null))
+              section(tr('Kênh hiện theo', 'Show channel as'), [
+                SegmentedButton<ValueDisplay>(
+                  showSelectedIcon: false,
+                  segments: [for (final v in [ValueDisplay.pct, ValueDisplay.us]) ButtonSegment(value: v, label: Text(v.label))],
+                  selected: {item.style.valueDisplay == ValueDisplay.us ? ValueDisplay.us : ValueDisplay.pct},
+                  onSelectionChanged: (s) => _edit(() => item.style.valueDisplay = s.first),
+                ),
+              ]),
+            if (k == ItemKind.vector)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(tr('Vệt chuyển động', 'Motion trail')),
+                value: item.display.trail,
+                onChanged: (v) => _edit(() => item.display.trail = v),
+              ),
             section(tr('Nhãn', 'Label'), [
               TextFormField(
                 key: ValueKey('label-${item.id}'),
                 initialValue: item.style.labelText ?? '',
                 decoration: InputDecoration(
-                  hintText: profile.input(item.inputId)?.name ?? k.label,
+                  hintText: k.isDisplay ? DataSource.labelOf(item, profile) : profile.input(item.inputId)?.name ?? k.label,
                   isDense: true,
                 ),
                 onChanged: (v) {
@@ -282,6 +391,103 @@ class PropertiesPanel extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Chọn nguồn giá trị cho phần tử hiển thị, theo nhóm (đo từ xe, trạng thái, kênh, Input)
+class _SourcePicker extends StatelessWidget {
+  const _SourcePicker({
+    super.key,
+    required this.profile,
+    required this.kind,
+    required this.value,
+    required this.label,
+    required this.onChanged,
+  });
+
+  final CarProfile profile;
+  final ItemKind kind;
+  final String? value;
+  final String label;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final items = <DropdownMenuItem<String>>[];
+    SourceGroup? group;
+    for (final key in DataSource.options(profile, kind)) {
+      final info = DataSource.info(key, profile)!;
+      if (info.group != group) {
+        group = info.group;
+        items.add(DropdownMenuItem(
+          value: '\u0000${group.name}',
+          enabled: false,
+          child: Text(group.label.toUpperCase(), style: AppText.caption.copyWith(color: t.textMuted)),
+        ));
+      }
+      items.add(DropdownMenuItem(
+        value: key,
+        child: Padding(
+          padding: const EdgeInsets.only(left: Gap.s),
+          child: Text(info.unit.isEmpty || info.unit == '%' ? info.label : '${info.label} (${info.unit})',
+              overflow: TextOverflow.ellipsis),
+        ),
+      ));
+    }
+    final valid = items.any((e) => e.value == value && e.enabled);
+    return DropdownButtonFormField<String>(
+      initialValue: valid ? value : null,
+      isDense: true,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: label, errorText: valid ? null : tr('Chọn giá trị để hiển thị', 'Pick a value to show')),
+      items: items,
+      onChanged: (v) {
+        if (v != null) onChanged(v);
+      },
+    );
+  }
+}
+
+/// Ô nhập số thập phân; để trống = dùng giá trị gợi ý (mặc định của nguồn)
+class _DecimalField extends StatelessWidget {
+  const _DecimalField({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.hint,
+    required this.onChanged,
+    this.unit = '',
+  });
+
+  final String label, unit;
+  final double? value;
+  final double hint;
+  final ValueChanged<double?> onChanged;
+
+  static String _fmt(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : '$v';
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      initialValue: value == null ? '' : _fmt(value!),
+      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: tr('Mặc định ${_fmt(hint)}', 'Default ${_fmt(hint)}'),
+        suffixText: unit,
+        isDense: true,
+      ),
+      onChanged: (v) {
+        final text = v.trim().replaceAll(',', '.');
+        if (text.isEmpty) {
+          onChanged(null);
+          return;
+        }
+        final d = double.tryParse(text);
+        if (d != null) onChanged(d);
+      },
     );
   }
 }

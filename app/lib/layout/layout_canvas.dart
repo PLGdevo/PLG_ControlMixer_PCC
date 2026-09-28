@@ -1,4 +1,6 @@
 // Hiển thị bố cục trên lưới và chế độ sửa (H2).
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,7 +9,22 @@ import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import 'layout_grid.dart';
 
-enum _Corner { tl, tr, bl, br }
+/// Tay nắm đổi cỡ: 4 góc + 4 cạnh. `hx`/`hy`: −1 kéo cạnh trái/trên, 1 cạnh phải/dưới, 0 giữ nguyên trục đó.
+enum _Handle {
+  t(0, -1),
+  r(1, 0),
+  b(0, 1),
+  l(-1, 0),
+  tl(-1, -1),
+  tr(1, -1),
+  br(1, 1),
+  bl(-1, 1);
+
+  const _Handle(this.hx, this.hy);
+  final int hx, hy;
+
+  bool get corner => hx != 0 && hy != 0;
+}
 
 class LayoutCanvas extends StatefulWidget {
   const LayoutCanvas({
@@ -45,7 +62,7 @@ class LayoutCanvas extends StatefulWidget {
 
 class _LayoutCanvasState extends State<LayoutCanvas> {
   String? _dragId;
-  _Corner? _corner; // null = di chuyển
+  _Handle? _handle; // null = di chuyển
   GridRect? _start, _preview;
   Offset _acc = Offset.zero;
   bool _valid = true, _overTrash = false;
@@ -58,11 +75,11 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
     return (box.localToGlobal(Offset.zero) & box.size).inflate(8).contains(global);
   }
 
-  void _begin(ControlItem it, _Corner? corner) {
+  void _begin(ControlItem it, _Handle? handle) {
     widget.onSelect?.call(it.id);
     setState(() {
       _dragId = it.id;
-      _corner = corner;
+      _handle = handle;
       _start = GridRect.of(it);
       _preview = _start;
       _acc = Offset.zero;
@@ -78,17 +95,20 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
     _acc += d.delta;
     final dx = LayoutGrid.snap(_acc.dx, cw), dy = LayoutGrid.snap(_acc.dy, ch);
     GridRect r;
-    final corner = _corner;
-    if (corner == null) {
+    final handle = _handle;
+    if (handle == null) {
       r = GridRect((s.x + dx).clamp(0, l.cols - s.w).toInt(), (s.y + dy).clamp(0, l.rows - s.h).toInt(), s.w, s.h);
     } else {
       final lim = SizeLimits.of(it.kind).forCell(cw, ch, touchable: it.touchable);
-      final left = corner == _Corner.tl || corner == _Corner.bl;
-      final top = corner == _Corner.tl || corner == _Corner.tr;
-      var w = (left ? s.w - dx : s.w + dx).clamp(lim.minW, lim.maxW).toInt();
-      var h = (top ? s.h - dy : s.h + dy).clamp(lim.minH, lim.maxH).toInt();
-      var x = left ? s.right - w : s.x;
-      var y = top ? s.bottom - h : s.y;
+      var x = s.x, y = s.y, w = s.w, h = s.h;
+      if (handle.hx != 0) {
+        w = (handle.hx < 0 ? s.w - dx : s.w + dx).clamp(lim.minW, lim.maxW).toInt();
+        if (handle.hx < 0) x = s.right - w;
+      }
+      if (handle.hy != 0) {
+        h = (handle.hy < 0 ? s.h - dy : s.h + dy).clamp(lim.minH, lim.maxH).toInt();
+        if (handle.hy < 0) y = s.bottom - h;
+      }
       if (x < 0) {
         w += x;
         x = 0;
@@ -101,7 +121,7 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
       if (y + h > l.rows) h = l.rows - y;
       r = GridRect(x, y, w, h);
     }
-    final over = corner == null && _isOverTrash(d.globalPosition);
+    final over = handle == null && _isOverTrash(d.globalPosition);
     if (r != _preview || over != _overTrash) {
       if (r != _preview) HapticFeedback.selectionClick();
       final lim = SizeLimits.of(it.kind);
@@ -124,7 +144,7 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
     // Không hợp lệ → phần tử quay về chỗ cũ
     setState(() {
       _dragId = null;
-      _corner = null;
+      _handle = null;
       _start = null;
       _preview = null;
       _overTrash = false;
@@ -140,6 +160,7 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
       final cw = c.maxWidth / l.cols, ch = c.maxHeight / l.rows;
       final dragging = _dragId != null && _preview != null;
       final guides = dragging ? LayoutGrid.guides(l, _dragId!, _preview!) : null;
+      final selected = widget.editing ? l.items.where((i) => i.id == widget.selectedId).firstOrNull : null;
       return Stack(
         clipBehavior: Clip.none,
         children: [
@@ -170,6 +191,7 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
                 child: CustomPaint(painter: _GuidePainter(guides.xs, guides.ys, cw, ch, t.accent)),
               ),
             ),
+          if (selected != null) ..._handles(context, selected, cw, ch),
         ],
       );
     });
@@ -217,34 +239,102 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
             ),
           ),
         ),
-        if (selected)
-          for (final corner in _Corner.values)
-            Positioned(
-              left: corner == _Corner.tl || corner == _Corner.bl ? -6 : null,
-              right: corner == _Corner.tr || corner == _Corner.br ? -6 : null,
-              top: corner == _Corner.tl || corner == _Corner.tr ? -6 : null,
-              bottom: corner == _Corner.bl || corner == _Corner.br ? -6 : null,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onPanStart: (_) => _begin(it, corner),
-                onPanUpdate: (d) => _update(it, d, cw, ch),
-                onPanEnd: (_) => _end(it),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Container(
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: t.accentFill,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: t.onAccentFill, width: 1.5),
-                    ),
+      ],
+    );
+  }
+
+  /// Tay nắm đổi cỡ và nhãn kích thước của phần tử đang chọn. Vẽ ở lớp trên cùng của lưới
+  /// (không nằm trong khung phần tử) để phần nhô ra ngoài khung vẫn nhận chạm và không bị phần tử
+  /// bên cạnh che. Có key để giữ cử chỉ đang kéo khi danh sách con của Stack đổi (đường gióng hiện ra).
+  List<Widget> _handles(BuildContext context, ControlItem it, double cw, double ch) {
+    final t = context.tokens;
+    final g = it.id == _dragId && _preview != null ? _preview! : GridRect.of(it);
+    final rect = Rect.fromLTWH(g.x * cw, g.y * ch, g.w * cw, g.h * ch);
+    const corner = 32.0, out = 16.0; // vùng chạm góc; `out` = phần dải cạnh nằm ngoài khung
+    // Phần dải cạnh nằm trong khung; khung thấp / hẹp thì dải nằm hẳn bên ngoài để còn chỗ kéo di chuyển
+    final inX = rect.width >= 64 ? 10.0 : 0.0, inY = rect.height >= 64 ? 10.0 : 0.0;
+    final bad = _dragId == it.id && (!_valid || _overTrash);
+    final fill = bad ? t.bad : t.accentFill;
+
+    /// Vùng chạm của tay nắm `h`; hình tay nắm cỡ `size`, tâm tại `at` (toạ độ trong vùng chạm, nằm trên cạnh khung)
+    Widget grip(_Handle h, Rect area, Size size, Offset at) => Positioned(
+          key: ValueKey('handle-${h.name}'),
+          left: area.left,
+          top: area.top,
+          width: area.width,
+          height: area.height,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanStart: (_) => _begin(it, h),
+            onPanUpdate: (d) => _update(it, d, cw, ch),
+            onPanEnd: (_) => _end(it),
+            onPanCancel: () {
+              if (_dragId == it.id) _end(it);
+            },
+            child: Stack(clipBehavior: Clip.none, children: [
+              Positioned(
+                left: at.dx - size.width / 2,
+                top: at.dy - size.height / 2,
+                width: size.width,
+                height: size.height,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: fill,
+                    borderRadius: BorderRadius.circular(h.corner ? 4 : 3),
+                    border: Border.all(color: t.onAccentFill, width: 1.5),
                   ),
                 ),
               ),
+            ]),
+          ),
+        );
+
+    final widgets = <Widget>[];
+    // Cạnh trước, góc sau (góc nằm trên khi hai vùng chạm chồng nhau)
+    final lenX = max(rect.width - corner, 16.0), lenY = max(rect.height - corner, 16.0);
+    final barX = Size(min(28.0, lenX), 7), barY = Size(7, min(28.0, lenY));
+    widgets
+      ..add(grip(_Handle.t, Rect.fromLTWH(rect.center.dx - lenX / 2, rect.top - out, lenX, out + inY), barX,
+          Offset(lenX / 2, out)))
+      ..add(grip(_Handle.b, Rect.fromLTWH(rect.center.dx - lenX / 2, rect.bottom - inY, lenX, out + inY), barX,
+          Offset(lenX / 2, inY)))
+      ..add(grip(_Handle.l, Rect.fromLTWH(rect.left - out, rect.center.dy - lenY / 2, out + inX, lenY), barY,
+          Offset(out, lenY / 2)))
+      ..add(grip(_Handle.r, Rect.fromLTWH(rect.right - inX, rect.center.dy - lenY / 2, out + inX, lenY), barY,
+          Offset(inX, lenY / 2)));
+    for (final h in _Handle.values.where((h) => h.corner)) {
+      final c = Offset(h.hx < 0 ? rect.left : rect.right, h.hy < 0 ? rect.top : rect.bottom);
+      widgets.add(grip(h, Rect.fromCenter(center: c, width: corner, height: corner), const Size(14, 14),
+          const Offset(corner / 2, corner / 2)));
+    }
+    // Nhãn kích thước (số ô) khi đang kéo / đổi cỡ
+    if (_dragId == it.id) {
+      final above = rect.top >= 30;
+      widgets.add(Positioned(
+        key: const ValueKey('handle-size'),
+        left: rect.center.dx - 60,
+        width: 120,
+        top: above ? rect.top - 30 : rect.bottom + 6,
+        child: IgnorePointer(
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: Gap.s, vertical: 2),
+              decoration: BoxDecoration(color: fill, borderRadius: BorderRadius.circular(Radii.pill)),
+              child: Text(
+                '${g.w} × ${g.h}',
+                style: AppText.caption.copyWith(
+                  color: t.onAccentFill,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
             ),
-      ],
-    );
+          ),
+        ),
+      ));
+    }
+    return widgets;
   }
 }
 

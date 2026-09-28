@@ -17,7 +17,10 @@ enum ItemKind {
   knob('Núm xoay', 'Knob'),
   gauge('Ô đồng hồ', 'Gauge'),
   trim('Trim lái', 'Steering trim'),
-  statusBadge('Trạng thái', 'Status');
+  statusBadge('Trạng thái', 'Status'),
+  led('Đèn LED', 'LED'),
+  bar('Thanh giá trị', 'Value bar'),
+  vector('Vector 2D', '2D vector');
 
   const ItemKind(this._vi, this._en);
   final String _vi, _en;
@@ -27,22 +30,11 @@ enum ItemKind {
   bool get isStick => this == stickH || this == stickV || this == stick2D;
   bool get isSwitchLike => this == button || this == toggle || this == switch3;
 
+  /// Phần tử chỉ hiện một nguồn giá trị (DataSource), không điều khiển
+  bool get isDisplay => this == gauge || this == led || this == bar || this == vector;
+
   /// Các loại phần tử điều khiển có thể thêm tự do lên màn Lái (không giới hạn số lượng)
   static List<ItemKind> get controls => values.where((k) => k.isControl).toList();
-}
-
-/// Các ô đồng hồ có thể đặt lên màn Lái
-enum GaugeKey {
-  battery('Pin', 'Battery'),
-  current('Dòng', 'Current'),
-  speed('Tốc độ', 'Speed'),
-  ping('Ping', 'Ping'),
-  rssi('RSSI', 'RSSI'),
-  channels('Kênh đầu ra', 'Output channels');
-
-  const GaugeKey(this._vi, this._en);
-  final String _vi, _en;
-  String get label => tr(_vi, _en);
 }
 
 /// Giới hạn kích thước theo ô lưới (H2)
@@ -59,6 +51,9 @@ class SizeLimits {
         ItemKind.knob => const SizeLimits(3, 3, 6, 6),
         ItemKind.gauge || ItemKind.statusBadge => const SizeLimits(3, 2, 8, 4),
         ItemKind.trim => const SizeLimits(4, 2, 12, 4),
+        ItemKind.led => const SizeLimits(2, 1, 8, 4),
+        ItemKind.bar => const SizeLimits(2, 1, 24, 12),
+        ItemKind.vector => const SizeLimits(3, 3, 12, 12),
       };
 
   /// Nâng kích thước nhỏ nhất để vùng chạm ≥ 48 dp trên màn thật
@@ -233,14 +228,59 @@ class ReturnConfig {
   ReturnConfig copy() => ReturnConfig.fromJson(toJson());
 }
 
+enum LedBlink {
+  off('Sáng liền', 'Steady', 0),
+  slow('Nháy chậm', 'Slow blink', 1000),
+  fast('Nháy nhanh', 'Fast blink', 300);
+
+  const LedBlink(this._vi, this._en, this.periodMs);
+  final String _vi, _en;
+  final int periodMs;
+  String get label => tr(_vi, _en);
+}
+
+/// Cấu hình phần tử hiển thị. Để trống (null) = theo mặc định của nguồn giá trị.
+class DisplayConfig {
+  double? min, max; // khoảng của thanh giá trị
+  double? threshold; // ngưỡng bật đèn LED (nguồn dạng số)
+  bool? below; // LED sáng khi giá trị dưới ngưỡng (true) hay trên ngưỡng (false)
+  LedBlink blink; // LED nháy khi sáng
+  bool trail; // vector: vệt chuyển động
+
+  DisplayConfig({this.min, this.max, this.threshold, this.below, this.blink = LedBlink.off, this.trail = true});
+
+  Map<String, dynamic> toJson() => {
+        if (min != null) 'min': min,
+        if (max != null) 'max': max,
+        if (threshold != null) 'threshold': threshold,
+        if (below != null) 'below': below,
+        'blink': blink.name,
+        'trail': trail,
+      };
+
+  factory DisplayConfig.fromJson(Map<String, dynamic>? j) {
+    if (j == null) return DisplayConfig();
+    return DisplayConfig(
+      min: (j['min'] as num?)?.toDouble(),
+      max: (j['max'] as num?)?.toDouble(),
+      threshold: (j['threshold'] as num?)?.toDouble(),
+      below: j['below'] as bool?,
+      blink: LedBlink.values.asNameMap()[j['blink']] ?? LedBlink.off,
+      trail: j['trail'] as bool? ?? true,
+    );
+  }
+}
+
 class ControlItem {
   String id;
   ItemKind kind;
   String? inputId; // Input gắn vào; với stick2D là trục X
   String? inputIdY; // chỉ stick2D
-  String? gaugeKey; // với kind = gauge
+  String? source; // phần tử hiển thị: khoá nguồn giá trị (DataSource); với vector là trục X
+  String? sourceY; // chỉ vector
   int x, y, w, h; // theo ô lưới
   ItemStyle style;
+  DisplayConfig display;
   ReturnConfig? returnCfg; // cần gạt (trục X với stick2D)
   ReturnConfig? returnCfgY; // trục Y của stick2D
   double? savedPct, savedPctY; // vị trí nhớ khi thoát (Giữ vị trí + Nhớ vị trí)
@@ -250,17 +290,20 @@ class ControlItem {
     required this.kind,
     this.inputId,
     this.inputIdY,
-    this.gaugeKey,
+    this.source,
+    this.sourceY,
     required this.x,
     required this.y,
     required this.w,
     required this.h,
     ItemStyle? style,
+    DisplayConfig? display,
     this.returnCfg,
     this.returnCfgY,
     this.savedPct,
     this.savedPctY,
-  }) : style = style ?? ItemStyle();
+  })  : style = style ?? ItemStyle(),
+        display = display ?? DisplayConfig();
 
   static String newId() =>
       'it-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-${Random().nextInt(1 << 20).toRadixString(36)}';
@@ -282,12 +325,14 @@ class ControlItem {
         'kind': kind.name,
         'inputId': inputId,
         'inputIdY': inputIdY,
-        'gaugeKey': gaugeKey,
+        if (source != null) 'source': source,
+        if (sourceY != null) 'sourceY': sourceY,
         'x': x,
         'y': y,
         'w': w,
         'h': h,
         'style': style.toJson(),
+        if (kind.isDisplay) 'display': display.toJson(),
         'returnCfg': returnCfg?.toJson(),
         'returnCfgY': returnCfgY?.toJson(),
         'savedPct': savedPct,
@@ -299,12 +344,15 @@ class ControlItem {
         kind: ItemKind.values.asNameMap()[j['kind']] ?? ItemKind.button,
         inputId: j['inputId'] as String?,
         inputIdY: j['inputIdY'] as String?,
-        gaugeKey: j['gaugeKey'] as String?,
+        // Bố cục cũ: ô đồng hồ lưu khoá ở 'gaugeKey' (cùng tên khoá nguồn: battery, speed…)
+        source: j['source'] as String? ?? j['gaugeKey'] as String?,
+        sourceY: j['sourceY'] as String?,
         x: j['x'] as int,
         y: j['y'] as int,
         w: j['w'] as int,
         h: j['h'] as int,
         style: ItemStyle.fromJson(j['style'] as Map<String, dynamic>?),
+        display: DisplayConfig.fromJson(j['display'] as Map<String, dynamic>?),
         returnCfg: j['returnCfg'] == null ? null : ReturnConfig.fromJson(j['returnCfg'] as Map<String, dynamic>),
         returnCfgY:
             j['returnCfgY'] == null ? null : ReturnConfig.fromJson(j['returnCfgY'] as Map<String, dynamic>),

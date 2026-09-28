@@ -1,15 +1,16 @@
 // Bố cục khởi đầu. (Các mẫu Thuận tay trái / Tay cầm / Tối giản và nút Lật ngang thuộc H4, Sprint 4.)
 import '../l10n/lang.dart';
 import '../models/control_layout.dart';
+import '../models/data_source.dart';
 import 'layout_grid.dart';
 
 abstract final class LayoutTemplates {
-  static ControlItem _it(ItemKind k, int x, int y, int w, int h, {String? input, String? gauge, ReturnConfig? ret}) =>
+  static ControlItem _it(ItemKind k, int x, int y, int w, int h, {String? input, String? source, ReturnConfig? ret}) =>
       ControlItem(
         id: ControlItem.newId(),
         kind: k,
         inputId: input,
-        gaugeKey: gauge,
+        source: source,
         x: x,
         y: y,
         w: w,
@@ -20,10 +21,10 @@ abstract final class LayoutTemplates {
   /// Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, trim người dùng tự thêm.
   static ControlLayout blank() => ControlLayout(id: ControlLayout.newId(), name: tr('Mặc định', 'Default'), items: [
         _it(ItemKind.statusBadge, 5, 0, 6, 2),
-        _it(ItemKind.gauge, 5, 2, 4, 2, gauge: GaugeKey.battery.name),
-        _it(ItemKind.gauge, 9, 2, 4, 2, gauge: GaugeKey.current.name),
-        _it(ItemKind.gauge, 5, 4, 4, 2, gauge: GaugeKey.speed.name),
-        _it(ItemKind.gauge, 9, 4, 4, 2, gauge: GaugeKey.ping.name),
+        _it(ItemKind.gauge, 5, 2, 4, 2, source: DataSource.battery),
+        _it(ItemKind.gauge, 9, 2, 4, 2, source: DataSource.current),
+        _it(ItemKind.gauge, 5, 4, 4, 2, source: DataSource.speed),
+        _it(ItemKind.gauge, 9, 4, 4, 2, source: DataSource.ping),
       ]);
 
   /// "Mặc định": ga dọc trái, lái ngang phải, đồng hồ ở giữa.
@@ -47,6 +48,9 @@ abstract final class LayoutTemplates {
         ItemKind.knob => (3, 3),
         ItemKind.gauge || ItemKind.statusBadge => (4, 2),
         ItemKind.trim => (6, 2),
+        ItemKind.led => (3, 1),
+        ItemKind.bar => (6, 2),
+        ItemKind.vector => (4, 4),
       };
 
   /// Thêm một phần tử điều khiển (cần gạt, nút, ...) vào chỗ trống, gắn sẵn Input nếu có.
@@ -57,18 +61,19 @@ abstract final class LayoutTemplates {
     return item;
   }
 
-  /// Thêm một ô đồng hồ / hộp số / trim / trạng thái
-  static ControlItem? addWidget(ControlLayout l, ItemKind kind, {String? gaugeKey}) =>
-      _place(l, kind, gaugeKey: gaugeKey);
+  /// Thêm một phần tử hiển thị (ô đồng hồ, LED, thanh, vector) / trim / trạng thái
+  static ControlItem? addWidget(ControlLayout l, ItemKind kind, {String? source, String? sourceY}) =>
+      _place(l, kind, source: source, sourceY: sourceY);
 
-  static ControlItem? _place(ControlLayout l, ItemKind kind, {String? gaugeKey}) {
+  static ControlItem? _place(ControlLayout l, ItemKind kind, {String? source, String? sourceY}) {
     final (w, h) = defaultSize(kind);
     final spot = LayoutGrid.findFreeSpot(l, w, h) ?? LayoutGrid.findFreeSpot(l, SizeLimits.of(kind).minW, SizeLimits.of(kind).minH);
     if (spot == null) return null;
     final item = ControlItem(
       id: ControlItem.newId(),
       kind: kind,
-      gaugeKey: gaugeKey,
+      source: source,
+      sourceY: sourceY,
       x: spot.x,
       y: spot.y,
       w: spot.w,

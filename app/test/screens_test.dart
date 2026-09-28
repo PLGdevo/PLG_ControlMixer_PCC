@@ -9,12 +9,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:rc_controller/controller/car_controller.dart';
 import 'package:rc_controller/data/profile_repository.dart';
 import 'package:rc_controller/layout/item_widgets.dart';
+import 'package:rc_controller/layout/layout_canvas.dart';
 import 'package:rc_controller/layout/layout_templates.dart';
 import 'package:rc_controller/layout/properties_panel.dart';
 import 'package:rc_controller/main.dart';
 import 'package:rc_controller/models/car_profile.dart';
 import 'package:rc_controller/models/condition.dart';
 import 'package:rc_controller/models/control_layout.dart';
+import 'package:rc_controller/models/data_source.dart';
 import 'package:rc_controller/models/input_def.dart';
 import 'package:rc_controller/models/mixer_rule.dart';
 import 'package:rc_controller/screens/channel_detail_screen.dart';
@@ -44,7 +46,7 @@ CarProfile sample() {
   ]);
   LayoutTemplates.addControl(l, ItemKind.knob, inputId: 'slider_x');
   LayoutTemplates.addControl(l, ItemKind.toggle, inputId: 'btn_a');
-  l.items.add(ControlItem(id: 'mon', kind: ItemKind.gauge, gaugeKey: GaugeKey.channels.name, x: 14, y: 0, w: 8, h: 3));
+  l.items.add(ControlItem(id: 'mon', kind: ItemKind.gauge, source: DataSource.channels, x: 14, y: 0, w: 8, h: 3));
   p.mixer.addAll([
     MixRule(id: 'r_x1', source: 'slider_x', destCh: 1, priority: 1,
         condition: const ExprCmp(input: 'btn_a', op: CmpOp.eq, value: 1)),
@@ -485,6 +487,88 @@ void main() {
     expect(c.pipeline, isNull); // rời màn Lái: bỏ hồ sơ khỏi vòng gửi
   });
 
+  testWidgets('Màn Lái: đèn LED, thanh giá trị, vector 2D và ô đồng hồ đọc theo nguồn đã chọn', (tester) async {
+    setSize(tester, const Size(900, 420));
+    final p = sample();
+    final l = p.activeLayout;
+    l.items.removeWhere((i) => i.id == 'mon');
+    final led = LayoutTemplates.addWidget(l, ItemKind.led, source: 'in:btn_a')!;
+    LayoutTemplates.addWidget(l, ItemKind.bar, source: 'in:slider_x')!;
+    LayoutTemplates.addWidget(l, ItemKind.vector, source: 'in:slider_x', sourceY: 'in:btn_a')!;
+    LayoutTemplates.addWidget(l, ItemKind.gauge, source: 'in:slider_x')!;
+    expect(led.source, 'in:btn_a');
+    final repo = await repoWith(tester, p);
+    final c = CarController();
+    await tester.pumpWidget(app(ControlScreen(controller: c, repo: repo, profileId: 'p1')));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(LedLamp), findsOneWidget);
+    expect(find.byType(ValueBar), findsOneWidget);
+    expect(find.byType(VectorPad), findsOneWidget);
+    expect(tester.widget<LedLamp>(find.byType(LedLamp)).on, isFalse); // nút A tắt = −100% < ngưỡng 0
+
+    c.setSwitch('btn_a', 1);
+    c.setPosition('slider_x', 60);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.widget<LedLamp>(find.byType(LedLamp)).on, isTrue);
+    expect(tester.widget<ValueBar>(find.byType(ValueBar)).value, 60);
+    final pad = tester.widget<VectorPad>(find.byType(VectorPad));
+    expect(pad.x, closeTo(0.6, 1e-9));
+    expect(pad.y, closeTo(1.0, 1e-9));
+    expect(find.text('60% · 100%'), findsOneWidget); // số của vector
+    expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(seconds: 1)); // vệt vector mờ hết
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Sửa bố cục: thêm Vector 2D từ mục Hiển thị, có ô chọn nguồn X/Y; kéo tay nắm cạnh phải đổi bề ngang, hiện kích thước', (tester) async {
+    setSize(tester, const Size(900, 420));
+    final p = sample();
+    p.activeLayout.locked = false;
+    final repo = await repoWith(tester, p);
+    final c = CarController();
+    await tester.pumpWidget(app(ControlScreen(controller: c, repo: repo, profileId: 'p1')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byTooltip('Sửa bố cục'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Thêm'));
+    await tester.pumpAndSettle();
+    final sheet = find.byType(Scrollable).last;
+    for (final k in ['Hiển thị', 'Ô đồng hồ', 'Đèn LED', 'Thanh giá trị', 'Vector 2D']) {
+      await tester.scrollUntilVisible(find.text(k), 120, scrollable: sheet);
+      expect(find.text(k), findsOneWidget, reason: k);
+    }
+    await tester.tap(find.text('Vector 2D'));
+    await tester.pumpAndSettle();
+    // Bảng thuộc tính mở ngay: hai ô chọn nguồn X / Y, mặc định Lái / Ga
+    expect(find.text('Trục X'), findsOneWidget);
+    expect(find.text('Trục Y'), findsOneWidget);
+    expect(find.text('Vệt chuyển động'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Kéo tay nắm cạnh phải vào trong một ô: vector 4×4 → 3×4, nhãn kích thước hiện khi đang kéo
+    final pad = tester.getRect(find.byType(VectorPad));
+    final handle = find.byKey(const ValueKey('handle-r'));
+    expect(handle, findsOneWidget);
+    expect(find.byKey(const ValueKey('handle-b')), findsOneWidget);
+    expect(find.byKey(const ValueKey('handle-tl')), findsOneWidget);
+    final cw = tester.getRect(find.byType(LayoutCanvas)).width / 24;
+    final g = await tester.startGesture(tester.getCenter(handle));
+    await g.moveBy(const Offset(-40, 0)); // vượt ngưỡng kéo
+    await g.moveBy(Offset(-cw, 0));
+    await tester.pump();
+    expect(find.text('3 × 4'), findsOneWidget);
+    await g.up();
+    await tester.pumpAndSettle();
+    expect(find.text('3 × 4'), findsNothing);
+    final after = tester.getRect(find.byType(VectorPad));
+    expect(after.left, closeTo(pad.left, 0.5)); // cạnh trái đứng yên
+    expect(after.height, closeTo(pad.height, 0.5)); // kéo cạnh không đổi chiều cao
+    expect(after.width, lessThan(pad.width));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('Cấu hình ▸ Chung: không còn hộp số; tắt "Dùng cơ chế ARM" thì ẩn Tự ARM và điều kiện ARM riêng', (tester) async {
     setSize(tester, const Size(420, 2400));
     final repo = await repoWith(tester, sample());
@@ -643,6 +727,58 @@ void main() {
     await tester.tap(find.byTooltip('Theo màu app'));
     await tester.pumpAndSettle();
     expect(it.style.color, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Bảng thuộc tính: LED theo pin có ngưỡng mặc định, nhập ngưỡng riêng; thanh có khoảng Min/Max', (tester) async {
+    setSize(tester, const Size(360, 1600));
+    final p = sample();
+    final l = p.activeLayout;
+    final led = LayoutTemplates.addWidget(l, ItemKind.led, source: DataSource.battery)!;
+    final bar = LayoutTemplates.addWidget(l, ItemKind.bar, source: 'ch:1')!;
+    var item = led;
+    late StateSetter rebuild;
+    await tester.pumpWidget(app(Scaffold(
+      body: StatefulBuilder(builder: (context, setState) {
+        rebuild = setState;
+        return PropertiesPanel(
+          key: ValueKey(item.id),
+          item: item,
+          profile: p,
+          layout: l,
+          beforeChange: () {},
+          changed: () => setState(() {}),
+          onDelete: () {},
+          onClose: () {},
+          onMessage: (_) {},
+          onOpenMix: () {},
+        );
+      }),
+    )));
+    await tester.pumpAndSettle();
+    expect(find.text('Pin (V)'), findsOneWidget); // nguồn đang chọn
+    expect(find.text('Mặc định 7'), findsOneWidget); // pin yếu < 7 V
+    final below = tester.widget<SegmentedButton<bool>>(find.byType(SegmentedButton<bool>));
+    expect(below.selected, {true});
+    await tester.enterText(find.widgetWithText(TextFormField, 'Ngưỡng'), '6,8');
+    expect(led.display.threshold, 6.8);
+    await tester.tap(find.text('Nháy nhanh'));
+    await tester.pumpAndSettle();
+    expect(led.display.blink, LedBlink.fast);
+    expect(tester.takeException(), isNull);
+
+    rebuild(() => item = bar);
+    await tester.pumpAndSettle();
+    expect(find.text('Khoảng thanh'.toUpperCase()), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextFormField, 'Min'), '50');
+    await tester.enterText(find.widgetWithText(TextFormField, 'Max'), '20');
+    await tester.pump();
+    expect(find.text('Min phải nhỏ hơn Max'), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextFormField, 'Max'), '');
+    await tester.pump();
+    expect((bar.display.min, bar.display.max), (50, null)); // để trống = theo nguồn (100%)
+    expect(find.text('Min phải nhỏ hơn Max'), findsNothing);
+    expect(find.text('Kênh hiện theo'.toUpperCase()), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

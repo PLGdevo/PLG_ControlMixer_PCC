@@ -20,8 +20,8 @@ import '../layout/properties_panel.dart';
 import '../layout/return_motion.dart';
 import '../models/car_profile.dart';
 import '../models/control_layout.dart';
+import '../models/data_source.dart';
 import '../models/mixer_rule.dart';
-import '../protocol/protocol.dart';
 import '../services/arm_controller.dart';
 import '../services/output_pipeline.dart';
 import '../theme/app_icons.dart';
@@ -366,7 +366,7 @@ class _ControlScreenState extends State<ControlScreen> {
   Future<void> _openAddSheet() async {
     final d = draft!;
     final controls = ItemKind.controls;
-    final gauges = GaugeKey.values.where((g) => !d.items.any((i) => i.gaugeKey == g.name)).toList();
+    const displays = [ItemKind.gauge, ItemKind.led, ItemKind.bar, ItemKind.vector];
     final extras = [ItemKind.trim, ItemKind.statusBadge]
         .where((k) => !d.items.any((i) => i.kind == k))
         .toList();
@@ -388,13 +388,16 @@ class _ControlScreenState extends State<ControlScreen> {
                 subtitle: Text(_kindHint(k)),
                 onTap: () => Navigator.pop(ctx, k),
               ),
-            if (gauges.isNotEmpty || extras.isNotEmpty) const Divider(),
-            for (final g in gauges)
+            const Divider(),
+            Text(tr('Hiển thị', 'Display'), style: AppText.title.copyWith(color: t.text)),
+            for (final k in displays)
               ListTile(
-                leading: const CustomIconView(CustomIcon.speedometer),
-                title: Text(tr('Ô ${g.label}', '${g.label} gauge')),
-                onTap: () => Navigator.pop(ctx, g),
+                leading: k == ItemKind.gauge ? const CustomIconView(CustomIcon.speedometer) : AppIcon(_displayIcon(k)),
+                title: Text(k.label),
+                subtitle: Text(_kindHint(k)),
+                onTap: () => Navigator.pop(ctx, k),
               ),
+            if (extras.isNotEmpty) const Divider(),
             for (final k in extras)
               ListTile(
                 leading: const AppIcon(AppIcons.addControl),
@@ -413,14 +416,35 @@ class _ControlScreenState extends State<ControlScreen> {
     history.push(d);
     setState(() {
       added = switch (picked) {
-        GaugeKey g => LayoutTemplates.addWidget(d, ItemKind.gauge, gaugeKey: g.name),
         ItemKind k when k.isControl => LayoutTemplates.addControl(d, k),
+        ItemKind k when k.isDisplay => LayoutTemplates.addWidget(d, k,
+            source: _defaultSource(d, k), sourceY: k == ItemKind.vector ? _defaultSource(d, k, y: true) : null),
         ItemKind k => LayoutTemplates.addWidget(d, k),
         _ => null,
       };
       if (added != null) selectedId = added!.id;
     });
     if (added == null) _snack(tr('Không còn chỗ trống đủ lớn trên màn', 'No free space large enough on screen'));
+  }
+
+  static HeroIcons _displayIcon(ItemKind k) => switch (k) {
+        ItemKind.led => AppIcons.light,
+        ItemKind.bar => AppIcons.diagnostics,
+        _ => AppIcons.vector,
+      };
+
+  /// Nguồn giá trị mặc định khi thêm phần tử hiển thị: ô đồng hồ lấy số đo xe chưa có trên màn,
+  /// thanh lấy kênh Ga, vector lấy Lái (X) / Ga (Y), LED lấy trạng thái ARM
+  String _defaultSource(ControlLayout d, ItemKind k, {bool y = false}) {
+    final thr = profile.throttleCh, steer = profile.steeringCh;
+    return switch (k) {
+      ItemKind.gauge => DataSource.carKeys.firstWhere(
+          (key) => !d.items.any((i) => i.kind == ItemKind.gauge && i.source == key),
+          orElse: () => DataSource.battery),
+      ItemKind.bar => thr == null ? DataSource.battery : DataSource.ch(thr),
+      ItemKind.vector => y ? DataSource.ch(thr ?? 2) : DataSource.ch(steer ?? 1),
+      _ => DataSource.arm,
+    };
   }
 
   static String _kindHint(ItemKind k) => switch (k) {
@@ -430,6 +454,10 @@ class _ControlScreenState extends State<ControlScreen> {
         ItemKind.toggle => tr('Mỗi lần bấm đổi trạng thái', 'Each press toggles the state'),
         ItemKind.switch3 => tr('Trái / giữa / phải', 'Left / center / right'),
         ItemKind.knob => tr('Giữ nguyên vị trí', 'Stays where you leave it'),
+        ItemKind.gauge => tr('Hiện số: pin, tốc độ, kênh, Input…', 'Shows a number: battery, speed, channel, Input…'),
+        ItemKind.led => tr('Sáng theo trạng thái hoặc khi vượt ngưỡng', 'Lights up on a state or past a threshold'),
+        ItemKind.bar => tr('Thanh ngang/dọc theo một giá trị', 'Horizontal/vertical bar for one value'),
+        ItemKind.vector => tr('Chấm X/Y từ hai giá trị, vd Lái / Ga', 'X/Y dot from two values, e.g. steering / throttle'),
         _ => '',
       };
 
@@ -686,6 +714,7 @@ class _ControlScreenState extends State<ControlScreen> {
     if (!it.style.showLabel) return '';
     final custom = it.style.labelText;
     if (custom != null && custom.trim().isNotEmpty) return custom;
+    if (it.kind.isDisplay) return DataSource.labelOf(it, profile);
     return profile.input(it.inputId)?.name ?? it.kind.label;
   }
 
@@ -827,7 +856,28 @@ class _ControlScreenState extends State<ControlScreen> {
           ),
         );
       case ItemKind.gauge:
-        return _gauge(it);
+        return _gauge(it, lbl);
+      case ItemKind.led:
+        return LedLamp(on: _ledOn(it), label: lbl, blink: it.display.blink);
+      case ItemKind.bar:
+        final info = DataSource.info(it.source, profile);
+        final v = _read(it.source);
+        final lo = it.display.min ?? info?.min ?? -100, hi = it.display.max ?? info?.max ?? 100;
+        return ItemFrame(
+          label: lbl,
+          trailing: it.style.valueDisplay == ValueDisplay.hidden ? null : _fmt(it, it.source, v),
+          padding: const EdgeInsets.fromLTRB(Gap.s, Gap.xs, Gap.s, Gap.xs),
+          child: ValueBar(value: v, min: lo, max: hi > lo ? hi : lo + 1),
+        );
+      case ItemKind.vector:
+        final vx = _read(it.source), vy = _read(it.sourceY);
+        final show = it.style.valueDisplay != ValueDisplay.hidden;
+        return ItemFrame(
+          label: lbl,
+          trailing: show ? '${_fmt(it, it.source, vx)} · ${_fmt(it, it.sourceY, vy)}' : null,
+          padding: const EdgeInsets.all(Gap.xs),
+          child: VectorPad(x: _norm(it.source, vx), y: _norm(it.sourceY, vy), trail: it.display.trail),
+        );
       case ItemKind.trim:
         return _trimBox(lbl);
       case ItemKind.statusBadge:
@@ -835,41 +885,84 @@ class _ControlScreenState extends State<ControlScreen> {
     }
   }
 
-  Widget _gauge(ControlItem it) {
-    final Telemetry? tel = c.telemetry;
-    final key = GaugeKey.values.asNameMap()[it.gaugeKey] ?? GaugeKey.battery;
-    final label = it.style.showLabel ? (it.style.labelText ?? key.label) : '';
-    if (key == GaugeKey.channels) return _channelMonitor(label);
-    final (Widget icon, String value, String? sub) = switch (key) {
-      GaugeKey.battery => (
-          AppIcon(tel == null ? AppIcons.batteryEmpty : AppIcons.batteryHalf),
-          tel == null ? '--' : '${tel.batteryV.toStringAsFixed(2)} V',
-          null
-        ),
-      GaugeKey.current => (
-          const AppIcon(AppIcons.current),
-          tel == null ? '--' : '${tel.currentA.toStringAsFixed(1)} A',
-          null
-        ),
-      GaugeKey.speed => (
-          const CustomIconView(CustomIcon.speedometer),
-          tel == null ? '--' : '${tel.speedKmh.toStringAsFixed(1)} km/h',
-          null
-        ),
-      // Ping ngầm khi lái (F6) thuộc Sprint 4; tạm hiện RSSI ở dòng phụ
-      GaugeKey.ping => (
-          const AppIcon(AppIcons.signal),
-          '--',
-          tel == null || tel.rssi == 0 ? null : 'RSSI ${tel.rssi} dBm'
-        ),
-      GaugeKey.rssi => (
-          AppIcon(tel == null || tel.rssi == 0 ? AppIcons.signalOff : AppIcons.signal),
-          tel == null || tel.rssi == 0 ? '--' : '${tel.rssi} dBm',
-          null
-        ),
-      GaugeKey.channels => (const SizedBox.shrink(), '', null),
+  /// Giá trị hiện tại của một nguồn (null = chưa có dữ liệu). Trạng thái đúng/sai trả về 1/0.
+  double? _read(String? key) {
+    final tel = c.telemetry;
+    switch (key) {
+      case DataSource.battery:
+        return tel?.batteryV;
+      case DataSource.current:
+        return tel?.currentA;
+      case DataSource.speed:
+        return tel?.speedKmh;
+      case DataSource.rssi:
+        return tel == null || tel.rssi == 0 ? null : tel.rssi.toDouble();
+      case DataSource.ping: // chưa đo ping ngầm khi lái
+        return null;
+      case DataSource.arm:
+        return c.arm.armed ? 1 : 0;
+      case DataSource.link:
+        return c.state == LinkState.connected ? 1 : 0;
+      case DataSource.failsafe:
+        return tel == null ? null : (tel.failsafe ? 1 : 0);
+    }
+    final n = DataSource.chOf(key);
+    if (n != null) {
+      final out = c.channelPct;
+      return out == null || n < 1 || n > out.length ? null : out[n - 1];
+    }
+    final id = DataSource.inputOf(key);
+    if (id != null && profile.input(id) != null) return c.pipeline?.inputs.valueOf(id) ?? c.position(id);
+    return null;
+  }
+
+  /// Chữ hiện giá trị của nguồn; kênh ra hiện µs nếu phần tử chọn µs
+  String _fmt(ControlItem it, String? key, double? v) {
+    final info = DataSource.info(key, profile);
+    if (info == null || v == null) return '--';
+    final n = DataSource.chOf(key);
+    if (n != null && it.style.valueDisplay == ValueDisplay.us) return '${OutputPipeline.toUs(profile.ch(n), v)} µs';
+    return info.format(v);
+  }
+
+  /// Giá trị về −1…+1 theo khoảng mặc định của nguồn (trục vector)
+  double? _norm(String? key, double? v) {
+    final info = DataSource.info(key, profile);
+    if (info == null || v == null || info.max <= info.min) return null;
+    return (v - info.min) / (info.max - info.min) * 2 - 1;
+  }
+
+  /// Trạng thái đèn LED lần trước, để có trễ quanh ngưỡng (pin sụt áp khi tăng ga không làm đèn nháy loạn)
+  final Map<String, bool> _ledLast = {};
+
+  bool? _ledOn(ControlItem it) {
+    final info = DataSource.info(it.source, profile);
+    final v = _read(it.source);
+    if (info == null || v == null) return null;
+    if (info.flag) return v >= 0.5;
+    final th = it.display.threshold ?? info.alarm;
+    final below = it.display.below ?? info.alarmBelow;
+    final hyst = (info.max - info.min).abs() * 0.02;
+    final was = _ledLast[it.id] ?? false;
+    final on = below ? v < (was ? th + hyst : th) : v > (was ? th - hyst : th);
+    _ledLast[it.id] = on;
+    return on;
+  }
+
+  Widget _gauge(ControlItem it, String? label) {
+    if (it.source == DataSource.channels) return _channelMonitor(label ?? '');
+    final key = it.source;
+    final tel = c.telemetry;
+    final Widget? icon = switch (key) {
+      DataSource.battery => AppIcon(tel == null ? AppIcons.batteryEmpty : AppIcons.batteryHalf),
+      DataSource.current => const AppIcon(AppIcons.current),
+      DataSource.speed => const CustomIconView(CustomIcon.speedometer),
+      DataSource.ping || DataSource.rssi => AppIcon(tel == null || tel.rssi == 0 ? AppIcons.signalOff : AppIcons.signal),
+      _ => null,
     };
-    return GaugeTile(label: label, value: value, sub: sub, icon: icon);
+    // Ping chưa đo khi lái: tạm hiện RSSI ở dòng phụ
+    final sub = key == DataSource.ping && tel != null && tel.rssi != 0 ? 'RSSI ${tel.rssi} dBm' : null;
+    return GaugeTile(label: label ?? '', value: _fmt(it, key, _read(key)), sub: sub, icon: icon);
   }
 
   /// Ô "Kênh đầu ra": 10 thanh nhỏ hiện % của CH1–CH10 sau mixer (U6)

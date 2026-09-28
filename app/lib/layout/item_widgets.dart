@@ -1,4 +1,5 @@
-// Phần tử trên màn Lái: cần gạt 1 trục, cần 2 trục, nút, nút bật/tắt, công tắc 3 nấc, núm xoay, ô đồng hồ.
+// Phần tử trên màn Lái: cần gạt 1 trục, cần 2 trục, nút, nút bật/tắt, công tắc 3 nấc, núm xoay, ô đồng hồ,
+// đèn LED, thanh giá trị, vector 2D.
 import 'dart:math';
 
 import 'package:flutter/scheduler.dart';
@@ -38,18 +39,28 @@ class ItemFrame extends StatelessWidget {
           if (label != null || trailing != null)
             Padding(
               padding: const EdgeInsets.only(bottom: Gap.xs),
-              child: Row(
-                children: [
-                  if (label != null)
-                    Expanded(
-                      child: Text(label!.toUpperCase(),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppText.caption.copyWith(color: t.textMuted)),
-                    ),
-                  if (trailing != null)
-                    Text(trailing!, style: AppText.caption.copyWith(color: t.text, fontFeatures: const [FontFeature.tabularFigures()])),
-                ],
+              // Khung hẹp: nhãn nhường chỗ trước, số thu nhỏ chữ cho vừa chứ không tràn
+              child: LayoutBuilder(
+                builder: (context, c) => Row(
+                  children: [
+                    if (label != null)
+                      Expanded(
+                        child: Text(label!.toUpperCase(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.caption.copyWith(color: t.textMuted)),
+                      ),
+                    if (trailing != null)
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: c.maxWidth),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(trailing!,
+                              style: AppText.caption.copyWith(color: t.text, fontFeatures: const [FontFeature.tabularFigures()])),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           Expanded(child: child),
@@ -221,14 +232,16 @@ class _AxisPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size s) {
-    final short = min(s.width, s.height);
+    final short = min(s.width, s.height), long = max(s.width, s.height);
     final r = RRect.fromRectAndRadius(Offset.zero & s, Radius.circular(short / 2));
     canvas.drawRRect(r, Paint()..color = track);
     final mid = Offset(s.width / 2, s.height / 2);
     final p = pos / 100;
-    final thumbR = (short * (0.45 + knob) / 2).clamp(10.0, short / 2);
-    final along = vertical ? s.height / 2 - thumbR : s.width / 2 - thumbR;
-    final c = vertical ? mid.translate(0, -p * along) : mid.translate(p * along, 0);
+    // Núm hình viên thuốc dẹp nằm ngang qua rãnh: bề ngang gần hết rãnh, bề dày theo cỡ núm
+    final across = short * 0.84;
+    final thick = (short * (0.2 + knob * 0.6)).clamp(min(14.0, across), across).toDouble();
+    final travel = max(0.0, long / 2 - thick / 2 - (short - across) / 2);
+    final c = vertical ? mid.translate(0, -p * travel) : mid.translate(p * travel, 0);
     // Vạch tâm
     final cp = Paint()
       ..color = center
@@ -244,14 +257,25 @@ class _AxisPainter extends CustomPainter {
       ..strokeWidth = short * 0.3
       ..strokeCap = StrokeCap.round;
     canvas.drawLine(mid, c, bar);
-    canvas.drawCircle(c, thumbR, Paint()..color = fill);
-    canvas.drawCircle(
-        c,
-        thumbR * 0.35,
-        Paint()
-          ..color = thumbEdge.withValues(alpha: 0.25)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5);
+    final pill = Rect.fromCenter(
+      center: c,
+      width: vertical ? across : thick,
+      height: vertical ? thick : across,
+    );
+    canvas.drawRRect(RRect.fromRectAndRadius(pill, Radius.circular(thick / 2)), Paint()..color = fill);
+    // Vạch cầm dọc theo thân viên thuốc
+    final grip = Paint()
+      ..color = thumbEdge.withValues(alpha: 0.4)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    final g = across / 2 - thick / 2;
+    if (g > 2) {
+      if (vertical) {
+        canvas.drawLine(c.translate(-g, 0), c.translate(g, 0), grip);
+      } else {
+        canvas.drawLine(c.translate(0, -g), c.translate(0, g), grip);
+      }
+    }
   }
 
   @override
@@ -652,4 +676,299 @@ class GaugeTile extends StatelessWidget {
       ),
     );
   }
+}
+
+// ============================================================================
+//  Đèn LED trạng thái
+// ============================================================================
+class LedLamp extends StatefulWidget {
+  const LedLamp({super.key, required this.on, this.label, this.blink = LedBlink.off});
+
+  /// null = chưa có dữ liệu (đèn rỗng)
+  final bool? on;
+  final String? label;
+  final LedBlink blink;
+
+  @override
+  State<LedLamp> createState() => _LedLampState();
+}
+
+class _LedLampState extends State<LedLamp> with SingleTickerProviderStateMixin {
+  late final _anim = AnimationController(vsync: this);
+
+  bool get _blinking => widget.on == true && widget.blink != LedBlink.off;
+
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(LedLamp old) {
+    super.didUpdateWidget(old);
+    if (old.on != widget.on || old.blink != widget.blink) _sync();
+  }
+
+  void _sync() {
+    if (_blinking) {
+      final d = Duration(milliseconds: widget.blink.periodMs);
+      if (!_anim.isAnimating || _anim.duration != d) {
+        _anim
+          ..duration = d
+          ..repeat();
+      }
+    } else {
+      _anim.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Gap.s, vertical: 2),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(Radii.card),
+        border: Border.all(color: t.line),
+      ),
+      child: LayoutBuilder(builder: (context, c) {
+        final d = (c.maxHeight * 0.62).clamp(8.0, 40.0);
+        final lamp = AnimatedBuilder(
+          animation: _anim,
+          builder: (context, _) {
+            final lit = widget.on == true && (!_blinking || _anim.value < 0.5);
+            return Container(
+              width: d,
+              height: d,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: lit ? t.accentFill : (widget.on == null ? Colors.transparent : t.surface2),
+                border: Border.all(color: lit ? t.accentFill : t.line, width: 1.5),
+                boxShadow: lit ? [BoxShadow(color: t.accentFill.withValues(alpha: 0.6), blurRadius: d * 0.6)] : null,
+              ),
+            );
+          },
+        );
+        final label = widget.label;
+        if (label == null || c.maxWidth < d * 2.5) return Center(child: lamp);
+        return Row(children: [
+          lamp,
+          const SizedBox(width: Gap.s),
+          Expanded(
+            child: Text(label.toUpperCase(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.caption.copyWith(color: widget.on == true ? t.text : t.textMuted)),
+          ),
+        ]);
+      }),
+    );
+  }
+}
+
+// ============================================================================
+//  Thanh giá trị (chỉ hiển thị): ngang hoặc dọc theo hình khung
+// ============================================================================
+class ValueBar extends StatelessWidget {
+  const ValueBar({super.key, required this.value, required this.min, required this.max});
+
+  /// null = chưa có dữ liệu
+  final double? value;
+  final double min, max;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return LayoutBuilder(builder: (context, c) {
+      final size = Size(c.maxWidth, c.maxHeight);
+      return CustomPaint(
+        size: size,
+        painter: _BarPainter(
+          value: value,
+          min: min,
+          max: max,
+          vertical: size.height > size.width,
+          track: t.surface2,
+          fill: t.accentFill,
+          line: t.line,
+        ),
+      );
+    });
+  }
+}
+
+class _BarPainter extends CustomPainter {
+  _BarPainter({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.vertical,
+    required this.track,
+    required this.fill,
+    required this.line,
+  });
+
+  final double? value;
+  final double min, max;
+  final bool vertical;
+  final Color track, fill, line;
+
+  /// Vị trí 0…1 của `v` trên thanh
+  double _f(double v) => max > min ? ((v - min) / (max - min)).clamp(0.0, 1.0) : 0;
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    // Thanh bo tròn hai đầu như rãnh cần gạt, không dày quá 28
+    final thick = (vertical ? s.width : s.height).clamp(0.0, 28.0);
+    final r = vertical
+        ? Rect.fromCenter(center: s.center(Offset.zero), width: thick, height: s.height)
+        : Rect.fromCenter(center: s.center(Offset.zero), width: s.width, height: thick);
+    final rr = RRect.fromRectAndRadius(r, Radius.circular(thick / 2));
+    canvas.drawRRect(rr, Paint()..color = track);
+    Offset at(double f) =>
+        vertical ? Offset(r.center.dx, r.bottom - f * r.height) : Offset(r.left + f * r.width, r.center.dy);
+    Offset lo(Offset p) => vertical ? Offset(r.left, p.dy) : Offset(p.dx, r.top);
+    Offset hi(Offset p) => vertical ? Offset(r.right, p.dy) : Offset(p.dx, r.bottom);
+    // Khoảng có cả số âm: tô từ vạch 0; toàn dương: tô từ đầu thanh
+    final zero = min < 0 && max > 0 ? _f(0) : 0.0;
+    if (zero > 0) {
+      final z = at(zero);
+      canvas.drawLine(lo(z), hi(z), Paint()
+        ..color = line
+        ..strokeWidth = 2);
+    }
+    final v = value;
+    if (v == null) return;
+    final a = at(zero), b = at(_f(v));
+    canvas.save();
+    canvas.clipRRect(rr);
+    canvas.drawRect(Rect.fromPoints(lo(a), hi(b)), Paint()..color = fill.withValues(alpha: 0.55));
+    canvas.restore();
+    // Vạch giá trị
+    canvas.drawLine(lo(b), hi(b), Paint()
+      ..color = fill
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round);
+  }
+
+  @override
+  bool shouldRepaint(_BarPainter o) =>
+      o.value != value || o.min != min || o.max != max || o.vertical != vertical || o.fill != fill || o.track != track;
+}
+
+// ============================================================================
+//  Vector 2D (chỉ hiển thị): chấm X/Y trong ô vuông, có vệt chuyển động
+// ============================================================================
+class VectorPad extends StatefulWidget {
+  const VectorPad({super.key, required this.x, required this.y, this.trail = true});
+
+  /// −1…+1 mỗi trục; null = chưa có dữ liệu
+  final double? x, y;
+  final bool trail;
+
+  @override
+  State<VectorPad> createState() => _VectorPadState();
+}
+
+class _VectorPadState extends State<VectorPad> with SingleTickerProviderStateMixin {
+  static const trailMs = 600;
+  late final Ticker _ticker = createTicker((_) => _prune());
+  final _points = <(Offset, int)>[];
+
+  int get _now => DateTime.now().millisecondsSinceEpoch;
+
+  @override
+  void didUpdateWidget(VectorPad old) {
+    super.didUpdateWidget(old);
+    final x = widget.x, y = widget.y;
+    if (!widget.trail || x == null || y == null) {
+      _points.clear();
+      return;
+    }
+    if (x != old.x || y != old.y) {
+      _points.add((Offset(x, y), _now));
+      if (_points.length > 48) _points.removeAt(0);
+      if (!_ticker.isActive) _ticker.start();
+    }
+  }
+
+  /// Vệt mờ dần theo thời gian; hết vệt thì dừng ticker
+  void _prune() {
+    final now = _now;
+    _points.removeWhere((p) => now - p.$2 > trailMs);
+    if (_points.isEmpty) _ticker.stop();
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final x = widget.x, y = widget.y;
+    final now = _now;
+    return CustomPaint(
+      size: Size.infinite,
+      painter: _VectorPainter(
+        dot: x == null || y == null ? null : Offset(x, y),
+        trail: [for (final p in _points) (p.$1, 1 - (now - p.$2) / trailMs)],
+        base: t.surface2,
+        line: t.line,
+        fill: t.accentFill,
+      ),
+    );
+  }
+}
+
+class _VectorPainter extends CustomPainter {
+  _VectorPainter({required this.dot, required this.trail, required this.base, required this.line, required this.fill});
+
+  final Offset? dot;
+  final List<(Offset, double)> trail; // (điểm, độ đậm 0…1)
+  final Color base, line, fill;
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final side = min(s.width, s.height);
+    final sq = Rect.fromCenter(center: s.center(Offset.zero), width: side, height: side);
+    canvas.drawRRect(RRect.fromRectAndRadius(sq, const Radius.circular(8)), Paint()..color = base);
+    final lp = Paint()
+      ..color = line
+      ..strokeWidth = 1;
+    final c = sq.center;
+    canvas.drawLine(Offset(sq.left + 6, c.dy), Offset(sq.right - 6, c.dy), lp);
+    canvas.drawLine(Offset(c.dx, sq.top + 6), Offset(c.dx, sq.bottom - 6), lp);
+    final dr = (side * 0.06).clamp(4.0, 12.0);
+    final half = side / 2 - dr - 2;
+    Offset at(Offset v) => c.translate(v.dx.clamp(-1.0, 1.0) * half, -v.dy.clamp(-1.0, 1.0) * half);
+    for (var i = 1; i < trail.length; i++) {
+      final (pa, _) = trail[i - 1];
+      final (pb, alpha) = trail[i];
+      canvas.drawLine(
+        at(pa),
+        at(pb),
+        Paint()
+          ..color = fill.withValues(alpha: (alpha * 0.5).clamp(0.0, 1.0))
+          ..strokeWidth = dr * 0.8
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+    final d = dot;
+    if (d != null) canvas.drawCircle(at(d), dr, Paint()..color = fill);
+  }
+
+  @override
+  bool shouldRepaint(_VectorPainter o) => true;
 }

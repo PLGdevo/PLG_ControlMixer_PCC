@@ -3,7 +3,10 @@ import 'package:rc_controller/layout/layout_grid.dart';
 import 'package:rc_controller/layout/layout_history.dart';
 import 'package:rc_controller/layout/layout_templates.dart';
 import 'package:rc_controller/layout/return_motion.dart';
+import 'package:rc_controller/models/car_profile.dart';
 import 'package:rc_controller/models/control_layout.dart';
+import 'package:rc_controller/models/data_source.dart';
+import 'package:rc_controller/models/input_def.dart';
 import 'package:rc_controller/theme/tokens.dart';
 
 void main() {
@@ -187,6 +190,83 @@ void main() {
       expect(ReturnMotion.deadzone(5, 10), 0);
       expect(ReturnMotion.deadzone(100, 10), 100);
       expect(ReturnMotion.deadzone(-55, 10), closeTo(-50, 0.001));
+    });
+  });
+
+  group('Phần tử hiển thị', () {
+    test('bố cục cũ: ô đồng hồ đọc "gaugeKey" thành nguồn giá trị', () {
+      final old = ControlItem.fromJson({'id': 'g', 'kind': 'gauge', 'gaugeKey': 'speed', 'x': 0, 'y': 0, 'w': 4, 'h': 2});
+      expect(old.source, DataSource.speed);
+      expect(old.toJson()['source'], DataSource.speed);
+      expect(old.toJson().containsKey('gaugeKey'), isFalse);
+    });
+
+    test('cấu hình hiển thị lưu / đọc lại; phần tử điều khiển không lưu', () {
+      final led = ControlItem(
+        id: 'l',
+        kind: ItemKind.led,
+        source: DataSource.battery,
+        x: 0,
+        y: 0,
+        w: 3,
+        h: 1,
+        display: DisplayConfig(threshold: 6.8, below: true, blink: LedBlink.fast),
+      );
+      final l2 = ControlItem.fromJson(led.toJson());
+      expect(l2.display.threshold, 6.8);
+      expect(l2.display.below, isTrue);
+      expect(l2.display.blink, LedBlink.fast);
+      final v = ControlItem(
+          id: 'v', kind: ItemKind.vector, source: 'ch:1', sourceY: 'ch:2', x: 0, y: 0, w: 4, h: 4, display: DisplayConfig(trail: false));
+      final v2 = ControlItem.fromJson(v.toJson());
+      expect((v2.source, v2.sourceY, v2.display.trail), ('ch:1', 'ch:2', false));
+      final bar = ControlItem.fromJson(
+          ControlItem(id: 'b', kind: ItemKind.bar, source: 'ch:2', x: 0, y: 0, w: 6, h: 2, display: DisplayConfig(min: -50, max: 50))
+              .toJson());
+      expect((bar.display.min, bar.display.max), (-50, 50));
+      expect(bar.display.threshold, isNull);
+      final btn = ControlItem(id: 'x', kind: ItemKind.button, x: 0, y: 0, w: 3, h: 2).toJson();
+      expect(btn.containsKey('display'), isFalse);
+      expect(btn.containsKey('source'), isFalse);
+    });
+
+    test('nguồn giá trị: kênh, Input, khoá không hợp lệ, định dạng', () {
+      final p = CarProfile(id: 'p', name: 'Xe', connType: ConnType.wifi, wifi: WifiConn());
+      p.inputs.add(InputDef(id: 'thr', name: 'Ga', range: AxisRange.unipolar));
+      expect(DataSource.info('ch:3', p)!.label, p.chLabel(3));
+      expect(DataSource.info('ch:0', p), isNull);
+      expect(DataSource.info('ch:11', p), isNull);
+      expect(DataSource.info('in:thr', p)!.label, 'Ga');
+      expect(DataSource.info('in:thr', p)!.min, 0);
+      expect(DataSource.info('in:gone', p), isNull);
+      expect(DataSource.info(null, p), isNull);
+      expect(DataSource.info(DataSource.battery, p)!.format(7.456), '7.46 V');
+      expect(DataSource.info('ch:1', p)!.format(-42.4), '-42%');
+      expect(DataSource.info(DataSource.arm, p)!.format(1), 'ARMED');
+      expect(DataSource.info(DataSource.arm, p)!.format(0), 'DISARMED');
+      // Pin: đèn LED mặc định báo pin yếu
+      expect((DataSource.info(DataSource.battery, p)!.alarm, DataSource.info(DataSource.battery, p)!.alarmBelow), (7, true));
+      // Ô theo dõi 10 kênh và trạng thái đúng/sai không vẽ được thành thanh / vector
+      expect(DataSource.options(p, ItemKind.gauge), containsAll([DataSource.channels, DataSource.arm, 'ch:10', 'in:thr']));
+      expect(DataSource.options(p, ItemKind.bar), isNot(contains(DataSource.channels)));
+      expect(DataSource.options(p, ItemKind.vector), isNot(contains(DataSource.arm)));
+      expect(DataSource.options(p, ItemKind.led), contains(DataSource.failsafe));
+    });
+
+    test('nhãn mặc định theo nguồn; vector ghép hai trục', () {
+      final p = CarProfile(id: 'p', name: 'Xe', connType: ConnType.wifi, wifi: WifiConn());
+      final v = ControlItem(id: 'v', kind: ItemKind.vector, source: 'ch:1', sourceY: DataSource.speed, x: 0, y: 0, w: 4, h: 4);
+      expect(DataSource.labelOf(v, p), '${p.chLabel(1)} / Tốc độ');
+    });
+
+    test('kích thước mặc định của mọi loại phần tử nằm trong giới hạn', () {
+      for (final k in ItemKind.values) {
+        final (w, h) = LayoutTemplates.defaultSize(k);
+        final lim = SizeLimits.of(k);
+        expect(w, inInclusiveRange(lim.minW, lim.maxW), reason: k.name);
+        expect(h, inInclusiveRange(lim.minH, lim.maxH), reason: k.name);
+      }
+      expect(ItemKind.led.isControl || ItemKind.bar.isControl || ItemKind.vector.isControl, isFalse);
     });
   });
 }

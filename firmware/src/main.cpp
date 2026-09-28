@@ -24,6 +24,7 @@
 #include "net_manager.h"
 #include "protocol.h"
 #include "servo_logic.h"
+#include "status_led.h"
 
 using namespace proto;
 
@@ -37,6 +38,9 @@ constexpr uint16_t MANUAL_MIN_US = US_MIN, MANUAL_MAX_US = US_MAX;
 constexpr int   PIN_BATTERY    = 1;      // ADC1, qua cầu chia áp
 constexpr int   PIN_HALL       = 6;      // cảm biến tốc độ (tùy chọn)
 constexpr int   PIN_NET_BUTTON = 0;      // nút BOOT của DevKitC: giữ 3 s = chế độ cấu hình, 10 s = mạng mặc định; -1 = không dùng
+constexpr int   PIN_STATUS_LED = 48;     // LED RGB WS2812 trên board (DevKitC-1 v1.1: GPIO38); -1 = không dùng
+constexpr uint8_t  LED_BRIGHTNESS = 40;  // 0..255, LED trên board rất chói
+constexpr uint32_t LED_LOST_MS    = 10000;  // mất tín hiệu lúc đang lái: nháy đỏ tối đa 10 s rồi về chờ app
 constexpr float BATT_DIVIDER   = 11.0f;  // R1=100k, R2=10k -> (100+10)/10
 constexpr float WHEEL_CIRC_CM  = 20.4f;  // chu vi bánh xe (cm)
 constexpr int   PULSES_PER_REV = 1;      // số xung hall mỗi vòng bánh
@@ -81,6 +85,8 @@ uint32_t       lastControlMs = 0;
 Source         activeSrc     = SRC_NONE;
 bool           armed         = false;  // chỉ dùng ở chế độ 2 kênh; chế độ n kênh do app ARM
 bool           failsafe      = true;
+bool           lostAlarm     = false;  // mất tín hiệu lúc đang lái -> LED nháy đỏ
+uint32_t       lostAtMs      = 0;
 
 // ---------------- Giao thức n kênh ----------------
 bool     multiCh          = false;  // true: app gửi CONTROL_US; false: CONTROL 2 kênh (app cũ)
@@ -537,6 +543,8 @@ void updateOutputs() {
   bool lost = (activeSrc == SRC_NONE) || (now - lastControlMs > failsafeTimeout());
 
   if (lost && !failsafe) {
+    lostAlarm = multiCh ? appCh > 0 : armed;  // đang lái thật, không phải app chỉ giữ kết nối
+    lostAtMs = now;
     failsafe = true;
     armed = false;
     armHintShown = false;
@@ -549,6 +557,7 @@ void updateOutputs() {
   }
   if (!lost && failsafe) {
     failsafe = false;
+    lostAlarm = false;
     dbg::log("LINK", "Có tín hiệu qua %s", srcName(activeSrc));
     bool cleared = false;
     for (int i = 0; i < NUM_CH; i++)  // app luôn thắng gõ tay trên kênh app điều khiển
@@ -571,6 +580,38 @@ void updateOutputs() {
     if (manualUs[i]) outUs[i] = manualUs[i];
     writeMicros(PIN_CH[i], outUs[i]);
   }
+}
+
+// ---------------- LED trạng thái (status_led.h) ----------------
+uint32_t ledBootMs = 0;  // hết setup(); giữ màu trắng thêm 300 ms
+
+void ledWrite(led::Rgb c) { rgbLedWrite(PIN_STATUS_LED, c.r, c.g, c.b); }
+
+led::Look ledLook(uint32_t now) {
+  if (!netm::allowControl()) return {led::PURPLE, led::BREATHE};
+  if (failsafe && lostAlarm && now - lostAtMs < LED_LOST_MS) return {led::RED, led::BLINK_FAST};
+  bool sta = netm::mode() == net::MODE_STA;
+  led::Rgb wifi = sta ? led::GREEN : led::BLUE;
+  if (!failsafe) {
+    bool driving = multiCh ? appCh > 0 : armed;
+    return {activeSrc == SRC_BLE ? led::ORANGE : wifi, driving ? led::SOLID : led::BREATHE};
+  }
+  if (bleConnected) return {led::ORANGE, led::BREATHE};  // app nối BLE nhưng chưa gửi lệnh lái
+  if (sta && WiFi.status() != WL_CONNECTED) return {led::GREEN, led::BLINK_FAST};
+  return {wifi, led::BLINK_SLOW};
+}
+
+void updateLed() {
+  static uint32_t lastMs = 0;
+  static led::Rgb shown = {1, 1, 1};  // khác mọi màu thật -> lần đầu luôn ghi
+  uint32_t now = millis();
+  if (PIN_STATUS_LED < 0 || now - lastMs < 20 || now - ledBootMs < 300) return;  // 50 Hz đủ mượt khi thở
+  lastMs = now;
+  led::Look look = ledLook(now);
+  led::Rgb c = led::scale(look.color, led::level(look.pattern, now), LED_BRIGHTNESS);
+  if (c.r == shown.r && c.g == shown.g && c.b == shown.b) return;
+  shown = c;
+  ledWrite(c);  // ~30 µs, chỉ ghi khi màu đổi
 }
 
 // ---------------- Telemetry ----------------
@@ -761,12 +802,14 @@ void debugLoop() {
 
 // ============================================================================
 void setup() {
+  if (PIN_STATUS_LED >= 0) ledWrite(led::scale(led::WHITE, 255, LED_BRIGHTNESS));  // trắng: đang khởi động
   dbg::begin(115200);
   dbg::raw("\r\n\r\n==================== RC CAR khởi động ====================\r\n");
   printSystem();
-  dbg::log("PIN", "CH1-CH8 = GPIO %d %d %d %d %d %d %d %d (CH1 lái, CH2 ga) | Pin GPIO%d | Hall GPIO%d | Nút mạng GPIO%d",
+  dbg::log("PIN", "CH1-CH8 = GPIO %d %d %d %d %d %d %d %d (CH1 lái, CH2 ga) | Pin GPIO%d | Hall GPIO%d | Nút mạng GPIO%d"
+           " | LED GPIO%d",
            PIN_CH[0], PIN_CH[1], PIN_CH[2], PIN_CH[3], PIN_CH[4], PIN_CH[5], PIN_CH[6], PIN_CH[7], PIN_BATTERY, PIN_HALL,
-           PIN_NET_BUTTON);
+           PIN_NET_BUTTON, PIN_STATUS_LED);
   loadConfig();
   loadFailsafe();
 
@@ -786,6 +829,7 @@ void setup() {
   setupBle();
 #endif
   dbg::log("SYS", "Sẵn sàng. Gõ \"help\" để xem lệnh");
+  ledBootMs = millis();
   dbg::raw("==========================================================\r\n");
 }
 
@@ -804,13 +848,14 @@ void loop() {
   while (xQueueReceive(bleQueue, &f, 0) == pdTRUE) handleFrame(f.data, f.len, SRC_BLE);
   if (bleJustDisconnected) {
     bleJustDisconnected = false;
-    dbg::log("BLE", "Điện thoại ngắt BLE, quảng bá lại");
+    dbg::log("BLE", "Điện thoại ngắt BLE, quảng bá lại");    
     if (activeSrc == SRC_BLE) activeSrc = SRC_NONE;  // failsafe ngay, không chờ timeout
     BLEDevice::startAdvertising();
   }
 #endif
   updateOutputs();
+  updateLed();
   sendTelemetry();
   debugLoop();
-  delay(1);
+  // delay(1);
 }
