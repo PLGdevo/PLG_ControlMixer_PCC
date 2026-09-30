@@ -68,6 +68,16 @@ class PropertiesPanel extends StatelessWidget {
     if (m != null && m.id != item.id) onMessage(tr('Đã chuyển Input từ ${itemTitle(m).toLowerCase()} sang phần tử này', 'Moved the Input from ${itemTitle(m).toLowerCase()} to this control'));
   }
 
+  /// Cần 2 trục dùng 1 hay 2 trục. Bỏ trục nào thì gỡ Input của trục đó (Input vẫn còn trong hồ sơ).
+  void _setAxes(StickAxes a) {
+    if (a == item.axes) return;
+    _edit(() {
+      item.axes = a;
+      if (!a.hasX) layout.bindInput(item, null);
+      if (!a.hasY) layout.bindInput(item, null, y: true);
+    });
+  }
+
   /// Tên hiển thị của phần tử: nhãn tự đặt, nếu không thì loại phần tử
   static String itemTitle(ControlItem it) {
     final l = it.style.labelText;
@@ -137,13 +147,87 @@ class PropertiesPanel extends StatelessWidget {
               Expanded(child: Text(k.label, style: AppText.title.copyWith(color: t.text))),
               IconButton(onPressed: onClose, icon: const AppIcon(AppIcons.close)),
             ]),
+            if (k == ItemKind.stick2D)
+              section(tr('Trục dùng', 'Axes used'), [
+                SegmentedButton<StickAxes>(
+                  showSelectedIcon: false,
+                  segments: [for (final a in StickAxes.values) ButtonSegment(value: a, label: Text(a.label))],
+                  selected: {item.axes},
+                  onSelectionChanged: (v) => _setAxes(v.first),
+                ),
+                const SizedBox(height: Gap.xs),
+                Text(
+                    tr('Như tay RC: 1 trục = 1 kênh (trục kia khoá, có rãnh dẫn), 2 trục = 2 kênh. Mỗi trục gắn một Input rồi chọn "Gửi tới kênh".',
+                        'Like a transmitter: 1 axis = 1 channel (the other axis is locked with a guide slot), 2 axes = 2 channels. Bind an Input to each axis, then pick "Send to channel".'),
+                    style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
+              ]),
             if (k.isControl)
               section('Input', [
-                inputSlot(item.inputId),
-                if (k == ItemKind.stick2D) ...[
-                  const SizedBox(height: Gap.m),
-                  inputSlot(item.inputIdY, y: true),
-                ],
+                if (k != ItemKind.stick2D || item.axes.hasX) inputSlot(item.inputId),
+                if (k == ItemKind.stick2D && item.axes == StickAxes.both) const SizedBox(height: Gap.m),
+                if (k == ItemKind.stick2D && item.axes.hasY) inputSlot(item.inputIdY, y: true),
+              ]),
+            if (k == ItemKind.trimBar)
+              section(tr('Kênh trim', 'Trimmed channel'), [
+                DropdownButtonFormField<int>(
+                  key: ValueKey('trimch-${item.id}-${item.trimCh}'),
+                  initialValue: item.trimCh != null && item.trimCh! <= profile.channels.length ? item.trimCh : null,
+                  isDense: true,
+                  isExpanded: true,
+                  decoration: InputDecoration(labelText: tr('Kênh', 'Channel')),
+                  items: [
+                    for (final ch in profile.channels)
+                      DropdownMenuItem<int>(
+                        value: ch.index,
+                        child: Text(
+                          profile.chLabel(ch.index) + (ch.enabled ? '' : tr(' (đang tắt)', ' (off)')),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) _edit(() => item.trimCh = v);
+                  },
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(tr('Hiện số µs', 'Show µs value')),
+                  value: item.style.valueDisplay != ValueDisplay.hidden,
+                  onChanged: (v) => _edit(() => item.style.valueDisplay = v ? ValueDisplay.us : ValueDisplay.hidden),
+                ),
+                Text(tr('Khung cao hơn rộng thì thanh nằm dọc. Bấm vào rãnh để mở bảng trim mọi kênh.', 'A frame taller than wide makes the bar vertical. Tap the track to open the trim panel for every channel.'),
+                    style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
+              ]),
+            if (k == ItemKind.channels)
+              section(tr('Kênh hiển thị', 'Channels shown'), [
+                Wrap(spacing: Gap.xs, runSpacing: Gap.xs, children: [
+                  ChoiceChip(
+                    label: Text(tr('Mọi kênh đang bật', 'All enabled channels')),
+                    selected: item.chList == null,
+                    onSelected: (_) => _edit(() => item.chList = null),
+                  ),
+                  for (final ch in profile.channels)
+                    FilterChip(
+                      label: Text(profile.chLabel(ch.index)),
+                      selected: (item.chList ?? [for (final c in profile.channels) if (c.enabled) c.index]).contains(ch.index),
+                      onSelected: (on) => _edit(() {
+                        final cur = {...(item.chList ?? [for (final c in profile.channels) if (c.enabled) c.index])};
+                        on ? cur.add(ch.index) : cur.remove(ch.index);
+                        item.chList = cur.toList()..sort();
+                      }),
+                    ),
+                ]),
+                const SizedBox(height: Gap.s),
+                SegmentedButton<ValueDisplay>(
+                  showSelectedIcon: false,
+                  segments: [for (final v in ValueDisplay.values) ButtonSegment(value: v, label: Text(v.label))],
+                  selected: {item.style.valueDisplay},
+                  onSelectionChanged: (v) => _edit(() => item.style.valueDisplay = v.first),
+                ),
+                const SizedBox(height: Gap.xs),
+                Text(tr('Nhiều kênh mà ô thấp thì tự chia cột. Kéo góc để đổi cỡ.', 'Many channels in a short box are split into columns. Drag a corner to resize.'),
+                    style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
               ]),
             if (k.isDisplay)
               section(tr('Giá trị hiển thị', 'Displayed value'), [
@@ -267,7 +351,11 @@ class PropertiesPanel extends StatelessWidget {
                 key: ValueKey('label-${item.id}'),
                 initialValue: item.style.labelText ?? '',
                 decoration: InputDecoration(
-                  hintText: k.isDisplay ? DataSource.labelOf(item, profile) : profile.input(item.inputId)?.name ?? k.label,
+                  hintText: k.isDisplay
+                      ? DataSource.labelOf(item, profile)
+                      : k == ItemKind.trimBar && item.trimCh != null
+                          ? profile.chLabel(item.trimCh!)
+                          : profile.input(item.inputId ?? item.inputIdY)?.name ?? k.label,
                   isDense: true,
                 ),
                 onChanged: (v) {
@@ -312,6 +400,14 @@ class PropertiesPanel extends StatelessWidget {
                   onSelectionChanged: (s) => _edit(() => item.style.valueDisplay = s.first),
                 ),
               ]),
+            if (k == ItemKind.stick2D)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(tr('Kiểu tay RC', 'Transmitter look')),
+                subtitle: Text(tr('Đế có ốc, núm có khía, vệt sáng theo hướng đẩy', 'Screwed plate, knurled cap, glow in the push direction')),
+                value: item.style.gimbal,
+                onChanged: (v) => _edit(() => item.style.gimbal = v),
+              ),
             if (isStick)
               section(tr('Kích thước núm cầm', 'Knob size'), [
                 SegmentedButton<KnobSize>(
@@ -322,7 +418,8 @@ class PropertiesPanel extends StatelessWidget {
                 ),
               ]),
             if (isStick) ...[
-              section(k == ItemKind.stick2D ? tr('Tự về · trục X', 'Return · X axis') : tr('Tự về', 'Return'), [
+              if (k != ItemKind.stick2D || item.axes.hasX)
+              section(k == ItemKind.stick2D && item.axes == StickAxes.both ? tr('Tự về · trục X', 'Return · X axis') : tr('Tự về', 'Return'), [
                 ReturnEditor(
                   cfg: item.returnCfg ??= ReturnConfig(),
                   isThrottle: profile.isThrottleInput(item.inputId),
@@ -331,8 +428,8 @@ class PropertiesPanel extends StatelessWidget {
                   changed: changed,
                 ),
               ]),
-              if (k == ItemKind.stick2D)
-                section(tr('Tự về · trục Y', 'Return · Y axis'), [
+              if (k == ItemKind.stick2D && item.axes.hasY)
+                section(item.axes == StickAxes.both ? tr('Tự về · trục Y', 'Return · Y axis') : tr('Tự về', 'Return'), [
                   ReturnEditor(
                     cfg: item.returnCfgY ??= ReturnConfig(),
                     isThrottle: profile.isThrottleInput(item.inputIdY),

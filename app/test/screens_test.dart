@@ -46,7 +46,7 @@ CarProfile sample() {
   ]);
   LayoutTemplates.addControl(l, ItemKind.knob, inputId: 'slider_x');
   LayoutTemplates.addControl(l, ItemKind.toggle, inputId: 'btn_a');
-  l.items.add(ControlItem(id: 'mon', kind: ItemKind.gauge, source: DataSource.channels, x: 14, y: 0, w: 8, h: 3));
+  l.items.add(ControlItem(id: 'mon', kind: ItemKind.gauge, source: DataSource.channels, x: 28, y: 0, w: 16, h: 6));
   p.mixer.addAll([
     MixRule(id: 'r_x1', source: 'slider_x', destCh: 1, priority: 1,
         condition: const ExprCmp(input: 'btn_a', op: CmpOp.eq, value: 1)),
@@ -222,7 +222,7 @@ void main() {
     await tester.tap(edit);
     await tester.pumpAndSettle();
     expect(find.byType(ControlScreen), findsOneWidget);
-    expect(find.text('Sửa bố cục · kéo để di chuyển'), findsOneWidget);
+    expect(find.text('Sửa bố cục · kéo để di chuyển · nhấn đúp để cấu hình'), findsOneWidget);
     expect(find.byTooltip('Tuỳ chọn'), findsNothing, reason: 'mở từ Cấu hình thì không có thanh lái / menu');
     expect(tester.takeException(), isNull);
 
@@ -255,7 +255,7 @@ void main() {
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Lưu')));
     await settleIo(tester, until: () => find.byType(ControlScreen).evaluate().isNotEmpty);
     expect(repo.get('p1')!.activeLayout.locked, isFalse, reason: 'đã lưu trước khi mở Sửa bố cục');
-    expect(find.text('Sửa bố cục · kéo để di chuyển'), findsOneWidget);
+    expect(find.text('Sửa bố cục · kéo để di chuyển · nhấn đúp để cấu hình'), findsOneWidget);
   });
 
   testWidgets('Màn Lái ▸ Cấu hình ▸ Bố cục ▸ Sửa bố cục: quay về màn Lái ở chế độ sửa', (tester) async {
@@ -278,7 +278,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(SettingsScreen), findsNothing);
     expect(find.byType(ControlScreen), findsOneWidget);
-    expect(find.text('Sửa bố cục · kéo để di chuyển'), findsOneWidget);
+    expect(find.text('Sửa bố cục · kéo để di chuyển · nhấn đúp để cấu hình'), findsOneWidget);
     await tester.tap(find.text('Huỷ'));
     await tester.pumpAndSettle();
     expect(find.byType(ControlScreen), findsOneWidget, reason: 'mở từ màn Lái thì Huỷ ở lại màn Lái');
@@ -340,7 +340,7 @@ void main() {
     }
   });
 
-  testWidgets('Màn Lái: nút Sửa riêng ở góc phải mở Sửa bố cục; bố cục khoá thì nút mờ', (tester) async {
+  testWidgets('Màn Lái: bố cục khoá thì ẩn nút Sửa; mở khoá thì nút Sửa hiện ở góc phải', (tester) async {
     setSize(tester, const Size(900, 420));
     final p = sample();
     expect(p.activeLayout.locked, isTrue);
@@ -348,10 +348,8 @@ void main() {
     await tester.pumpWidget(app(ControlScreen(controller: CarController(), repo: repo, profileId: 'p1')));
     await tester.pump(const Duration(milliseconds: 100));
     final edit = find.widgetWithText(TextButton, 'Sửa');
-    expect(tester.widget<TextButton>(edit).onPressed, isNull, reason: 'bố cục đang khoá');
-    // Nút Sửa nằm ngay trước menu ⚙, sát mép phải
-    final editRight = tester.getTopRight(edit).dx, menuLeft = tester.getTopLeft(find.byTooltip('Tuỳ chọn')).dx;
-    expect(menuLeft - editRight, lessThan(16));
+    expect(edit, findsNothing, reason: 'bố cục đang khoá');
+    expect(find.byTooltip('Sửa bố cục'), findsNothing);
     expect(tester.getTopRight(find.byTooltip('Tuỳ chọn')).dx, greaterThan(900 - 48));
 
     await tester.tap(find.byTooltip('Tuỳ chọn'));
@@ -359,9 +357,12 @@ void main() {
     expect(find.text('Sửa bố cục'), findsNothing, reason: 'menu ⚙ không còn mục Sửa bố cục');
     await tester.tap(find.text('Mở khoá bố cục'));
     await settleIo(tester);
-    await tester.tap(find.widgetWithText(TextButton, 'Sửa'));
+    // Nút Sửa nằm ngay trước menu ⚙, sát mép phải
+    final editRight = tester.getTopRight(edit).dx, menuLeft = tester.getTopLeft(find.byTooltip('Tuỳ chọn')).dx;
+    expect(menuLeft - editRight, lessThan(16));
+    await tester.tap(edit);
     await tester.pumpAndSettle();
-    expect(find.text('Sửa bố cục · kéo để di chuyển'), findsOneWidget);
+    expect(find.text('Sửa bố cục · kéo để di chuyển · nhấn đúp để cấu hình'), findsOneWidget);
   });
 
   testWidgets('Xe của tôi: bấm vào thẻ xe đang nối là vào thẳng màn Lái', (tester) async {
@@ -377,6 +378,42 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(ControlScreen), findsOneWidget);
     await tester.runAsync(c.disconnect);
+  });
+
+  testWidgets('Xe của tôi: hai hồ sơ cùng IP/port (chế độ AP) thì chỉ hồ sơ đã nối hiện Đã kết nối', (tester) async {
+    setSize(tester, const Size(420, 900));
+    mockWakelock();
+    final p = sample();
+    final q = CarProfile(id: 'p2', name: 'Xe hai', connType: ConnType.wifi, wifi: WifiConn());
+    expect((p.wifi!.ip, p.wifi!.port), (q.wifi!.ip, q.wifi!.port));
+    expect(p.connKey, isNot(q.connKey));
+    final repo = await repoWith(tester, p);
+    await tester.runAsync(() => repo.save(q));
+    final c = CarController();
+    await tester.runAsync(() => c.connect(FakeCarTransport(), key: p.connKey));
+    await tester.pumpWidget(app(GarageScreen(controller: c, repo: repo, theme: ThemeController())));
+    await tester.pumpAndSettle();
+    expect(find.text('Đã kết nối'), findsOneWidget);
+    await tester.runAsync(c.disconnect);
+  });
+
+  testWidgets('Xe của tôi: xe đang chọn nằm đầu, có nhãn Đang chọn; xe khác có nút Chọn xe', (tester) async {
+    setSize(tester, const Size(420, 900));
+    final p = sample();
+    final repo = await repoWith(tester, p);
+    await tester.runAsync(() async {
+      await repo.save(CarProfile(id: 'p2', name: 'Xe hai', connType: ConnType.wifi, wifi: WifiConn()));
+      await repo.select('p1');
+    });
+    await tester.pumpWidget(app(GarageScreen(controller: CarController(), repo: repo, theme: ThemeController())));
+    await tester.pumpAndSettle();
+    expect(find.text('Đang chọn'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('Xe thử')).dy, lessThan(tester.getTopLeft(find.text('Xe hai')).dy));
+    expect(find.text('Kết nối'), findsOneWidget);
+    expect(find.text('Chọn xe'), findsOneWidget);
+    await tester.runAsync(() => repo.select('p2'));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('Xe hai')).dy, lessThan(tester.getTopLeft(find.text('Xe thử')).dy));
   });
 
   testWidgets('Sửa luật mix: điều kiện, curve, xem trước chạy khoá an toàn', (tester) async {
@@ -465,7 +502,7 @@ void main() {
     expect(find.text('Gửi tới kênh'), findsOneWidget);
     await show(l.itemForInput('slider_x')!);
     expect(find.text('Dùng tab Mix'), findsOneWidget);
-    await show(ControlItem(id: 'free', kind: ItemKind.stick2D, x: 0, y: 0, w: 6, h: 6));
+    await show(ControlItem(id: 'free', kind: ItemKind.stick2D, x: 0, y: 0, w: 12, h: 12));
     expect(find.text('Input trục Y'), findsOneWidget);
   });
 
@@ -546,27 +583,133 @@ void main() {
     expect(find.text('Vệt chuyển động'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    // Kéo tay nắm cạnh phải vào trong một ô: vector 4×4 → 3×4, nhãn kích thước hiện khi đang kéo
+    // Kéo tay nắm cạnh phải vào trong: vector 8×8 hẹp lại (lưới dày: vài ô), cao giữ 8, nhãn kích thước hiện khi đang kéo
     final pad = tester.getRect(find.byType(VectorPad));
     final handle = find.byKey(const ValueKey('handle-r'));
     expect(handle, findsOneWidget);
     expect(find.byKey(const ValueKey('handle-b')), findsOneWidget);
     expect(find.byKey(const ValueKey('handle-tl')), findsOneWidget);
-    final cw = tester.getRect(find.byType(LayoutCanvas)).width / 24;
+    final cw = tester.getRect(find.byType(LayoutCanvas)).width / 48;
     final g = await tester.startGesture(tester.getCenter(handle));
     await g.moveBy(const Offset(-40, 0)); // vượt ngưỡng kéo
     await g.moveBy(Offset(-cw, 0));
     await tester.pump();
-    expect(find.text('3 × 4'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^[1-7] × 8$')), findsOneWidget);
     await g.up();
     await tester.pumpAndSettle();
-    expect(find.text('3 × 4'), findsNothing);
+    expect(find.textContaining(' × 8'), findsNothing);
     final after = tester.getRect(find.byType(VectorPad));
     expect(after.left, closeTo(pad.left, 0.5)); // cạnh trái đứng yên
     expect(after.height, closeTo(pad.height, 0.5)); // kéo cạnh không đổi chiều cao
     expect(after.width, lessThan(pad.width));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Sửa bố cục: chạm một lần chỉ chọn (có tay nắm), chạm hai lần mới mở bảng thuộc tính', (tester) async {
+    setSize(tester, const Size(900, 420));
+    final p = sample();
+    p.activeLayout.locked = false;
+    final repo = await repoWith(tester, p);
+    await tester.pumpWidget(app(ControlScreen(controller: CarController(), repo: repo, profileId: 'p1')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byTooltip('Sửa bố cục'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PropertiesPanel), findsNothing);
+
+    final knob = find.byType(Knob);
+    await tester.tap(knob);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('handle-r')), findsOneWidget, reason: 'đã chọn: có tay nắm đổi cỡ');
+    expect(find.byType(PropertiesPanel), findsNothing, reason: 'chạm một lần chưa mở cấu hình');
+
+    await tester.tap(knob);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(knob);
+    await tester.pumpAndSettle();
+    expect(find.byType(PropertiesPanel), findsOneWidget);
+
+    // Chọn phần tử khác thì bảng cũ đóng; bấm nền trống bỏ chọn
+    await tester.tap(find.byType(ChannelButton).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.byType(PropertiesPanel), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Màn Lái: bấm giữa ô Trim mở bảng trim các kênh đang bật, trim riêng từng kênh', (tester) async {
+    setSize(tester, const Size(900, 420));
+    final p = sample();
+    final repo = await repoWith(tester, p);
+    await tester.pumpWidget(app(ControlScreen(controller: CarController(), repo: repo, profileId: 'p1')));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Trim từng kênh'), findsNothing);
+
+    await tester.tap(find.text('Trim 0 µs'));
+    await tester.pumpAndSettle();
+    expect(find.text('Trim từng kênh'), findsOneWidget);
+    for (final ch in p.channels) {
+      expect(find.byKey(ValueKey('trim-ch${ch.index}')), ch.enabled ? findsOneWidget : findsNothing,
+          reason: 'CH${ch.index} ${ch.enabled ? 'đang bật' : 'đang tắt'}');
+    }
+    expect(p.channels.any((c) => !c.enabled), isTrue, reason: 'mẫu phải có kênh tắt để kiểm tra');
+
+    Finder arrow(int ch, String a) =>
+        find.descendant(of: find.byKey(ValueKey('trim-ch$ch')), matching: find.text(a));
+    await tester.tap(arrow(7, '▶'));
+    await tester.tap(arrow(7, '▶'));
+    await tester.tap(arrow(8, '◀'));
+    await tester.pump();
+    expect(find.descendant(of: find.byKey(const ValueKey('trim-ch7')), matching: find.text('+10 µs')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('trim-ch8')), matching: find.text('-5 µs')), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 300));
+    await settleIo(tester, until: () => repo.get('p1')!.ch(7).trimUs == 10);
+    expect(repo.get('p1')!.ch(7).trimUs, 10);
+    expect(repo.get('p1')!.ch(8).trimUs, -5);
+    expect(repo.get('p1')!.ch(1).trimUs, 0, reason: 'kênh khác không đổi');
+
+    // Bấm số µs về 0, nút đóng ẩn bảng
+    await tester.tap(find.descendant(of: find.byKey(const ValueKey('trim-ch7')), matching: find.text('+10 µs')));
+    await tester.pump();
+    expect(find.descendant(of: find.byKey(const ValueKey('trim-ch7')), matching: find.text('0 µs')), findsOneWidget);
+    await tester.tap(find.byTooltip('Đóng'));
+    await tester.pumpAndSettle();
+    expect(find.text('Trim từng kênh'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 300));
+    await settleIo(tester);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Nút Ngắt: tắt cơ chế ARM thì ngắt được cả khi đang lái; bật ARM thì phải DISARM trước', (tester) async {
+    setSize(tester, const Size(900, 420));
+    mockWakelock();
+    for (final armOn in [false, true]) {
+      final p = sample()..arm.enabled = armOn;
+      final repo = await repoWith(tester, p);
+      final c = CarController();
+      await tester.runAsync(() => c.connect(FakeCarTransport(), key: p.connKey));
+      await tester.pumpWidget(app(ControlScreen(controller: c, repo: repo, profileId: 'p1')));
+      await tester.pump(const Duration(milliseconds: 100));
+      c.arm.onFailsafeSync(true);
+      expect(c.arm.arm(const ArmCheck()), isNull);
+      await tester.pump();
+      expect(c.arm.armed, isTrue);
+      final disconnect = find.ancestor(of: find.text('Ngắt'), matching: find.byWidgetPredicate((w) => w is OutlinedButton));
+      expect(tester.widget<OutlinedButton>(disconnect).onPressed, armOn ? isNull : isNotNull, reason: 'ARM ${armOn ? 'bật' : 'tắt'}');
+      if (!armOn) {
+        await tester.runAsync(() async {
+          tester.widget<OutlinedButton>(disconnect).onPressed!();
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        });
+        await tester.pump();
+        expect(c.state, LinkState.disconnected);
+        expect(find.text('Kết nối'), findsOneWidget);
+      } else {
+        c.arm.disarm();
+        await tester.runAsync(c.disconnect);
+      }
+      await tester.pumpWidget(const SizedBox());
+    }
   });
 
   testWidgets('Cấu hình ▸ Chung: không còn hộp số; tắt "Dùng cơ chế ARM" thì ẩn Tự ARM và điều kiện ARM riêng', (tester) async {
@@ -593,7 +736,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Màn Lái tắt ARM: không có nút "Giữ để ARM", ô trạng thái báo lý do; thêm phần tử không còn Hộp số', (tester) async {
+  testWidgets('Màn Lái tắt ARM: không có nút "Giữ để ARM", không hiện ô trạng thái lái; thêm phần tử không còn Hộp số', (tester) async {
     setSize(tester, const Size(900, 420));
     final p = sample()..arm.enabled = false;
     p.activeLayout.locked = false;
@@ -602,17 +745,16 @@ void main() {
     await tester.pumpWidget(app(ControlScreen(controller: c, repo: repo, profileId: 'p1')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Giữ để ARM'), findsNothing);
-    expect(find.text('Chưa sẵn sàng (Chưa kết nối)'), findsOneWidget);
+    expect(find.text('Chưa sẵn sàng (Chưa kết nối)'), findsNothing);
     c.arm
       ..onConnected()
       ..onFailsafeSync(true);
     c.arm.tick(c.currentArmCheck()!); // chưa kết nối thật: coi như mất tín hiệu
     await tester.pump();
     expect(c.arm.armed, isFalse);
-    expect(find.text('Mất tín hiệu'), findsOneWidget);
     expect(c.arm.arm(const ArmCheck()), isNull);
     await tester.pump();
-    expect(find.text('Đang lái'), findsOneWidget);
+    expect(find.text('Đang lái'), findsNothing);
     c.arm.disarm();
 
     await tester.tap(find.byTooltip('Sửa bố cục'));
@@ -788,7 +930,7 @@ void main() {
     File('${dir.path}/fixture-s3.json').writeAsStringSync(File('test/fixtures/sprint3_profile.json').readAsStringSync());
     final repo = ProfileRepository(dir);
     await tester.runAsync(repo.load);
-    await tester.pumpWidget(RcApp(controller: CarController(), repo: repo, theme: ThemeController()));
+    await tester.pumpWidget(RcApp(controller: CarController(), repo: repo, theme: ThemeController(), autoConnect: false));
     await tester.pumpAndSettle();
     expect(find.text('Đã cập nhật hồ sơ xe'), findsOneWidget);
     expect(find.text('Không có thay đổi hành vi.'), findsOneWidget);

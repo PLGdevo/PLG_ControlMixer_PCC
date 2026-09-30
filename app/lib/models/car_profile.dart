@@ -113,6 +113,11 @@ class CarProfile {
   PingConfig ping;
   List<ControlLayout> layouts;
   String activeLayoutId;
+
+  /// Thanh trạng thái trên cùng màn Lái / Cấu hình (kiểu tai thỏ): các khoá DataSource người dùng chọn
+  List<String> statusItems;
+  static const defaultStatusItems = ['link', 'battery', 'rssi'];
+  static const maxStatusItems = 6;
   DateTime updatedAt;
   DateTime? lastSyncedAt;
   String? lastSyncedHash;
@@ -140,6 +145,7 @@ class CarProfile {
     PingConfig? ping,
     List<ControlLayout>? layouts,
     String? activeLayoutId,
+    List<String>? statusItems,
     DateTime? updatedAt,
     this.lastSyncedAt,
     this.lastSyncedHash,
@@ -153,6 +159,7 @@ class CarProfile {
         ping = ping ?? PingConfig(),
         layouts = layouts ?? [],
         activeLayoutId = activeLayoutId ?? '',
+        statusItems = statusItems ?? [...defaultStatusItems],
         updatedAt = updatedAt ?? DateTime.now() {
     if (inputs == null && layouts == null && mixer == null) {
       ProfileTemplate.basic.applyTo(this);
@@ -179,10 +186,11 @@ class CarProfile {
       ? '${wifi?.ip ?? '?'}:${wifi?.port ?? '?'}'
       : (ble?.deviceName.isNotEmpty == true ? ble!.deviceName : (ble?.mac ?? '?'));
 
-  /// Khoá nhận diện kết nối, khớp với `CarController.connectedKey`
+  /// Khoá nhận diện kết nối, khớp với `CarController.connectedKey`. Có mã hồ sơ: chế độ AP mọi xe cùng
+  /// 192.168.4.1:4210, hai hồ sơ cùng IP/port không được cùng hiện "đã kết nối"
   String get connKey => connType == ConnType.wifi
-      ? 'wifi:${wifi?.ip}:${wifi?.port}'
-      : 'ble:${(ble?.mac ?? '').toUpperCase()}';
+      ? '$id|wifi:${wifi?.ip}:${wifi?.port}'
+      : '$id|ble:${(ble?.mac ?? '').toUpperCase()}';
 
   // ---------------- Input · luật ----------------
   InputDef? input(String? id) => id == null ? null : inputs.where((i) => i.id == id).firstOrNull;
@@ -513,6 +521,7 @@ class CarProfile {
         'ping': ping.toJson(),
         'layouts': layouts.map((l) => l.toJson()).toList(),
         'activeLayoutId': activeLayoutId,
+        'statusItems': statusItems,
         'updatedAt': updatedAt.toIso8601String(),
         'lastSyncedAt': lastSyncedAt?.toIso8601String(),
         'lastSyncedHash': lastSyncedHash,
@@ -550,6 +559,7 @@ class CarProfile {
       ping: PingConfig.fromJson(j['ping'] as Map<String, dynamic>?),
       layouts: list('layouts', ControlLayout.fromJson),
       activeLayoutId: j['activeLayoutId'] as String?,
+      statusItems: (j['statusItems'] as List?)?.cast<String>().toList(),
       updatedAt: dt('updatedAt'),
       lastSyncedAt: dt('lastSyncedAt'),
       lastSyncedHash: j['lastSyncedHash'] as String?,

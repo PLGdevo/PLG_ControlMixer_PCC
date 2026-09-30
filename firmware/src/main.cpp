@@ -45,9 +45,7 @@ constexpr float BATT_DIVIDER   = 11.0f;  // R1=100k, R2=10k -> (100+10)/10
 constexpr float WHEEL_CIRC_CM  = 20.4f;  // chu vi bánh xe (cm)
 constexpr int   PULSES_PER_REV = 1;      // số xung hall mỗi vòng bánh
 
-constexpr uint32_t PWM_FREQ      = 50;   // servo analog 50 Hz
-constexpr uint8_t  PWM_RES_BITS  = 14;
-constexpr uint32_t PWM_PERIOD_US = 1000000UL / PWM_FREQ;
+constexpr uint8_t  PWM_RES_BITS  = 14;   // tần số từng kênh: lệnh "hz", lưu NVS "rchz" (mặc định 50 Hz)
 
 // ---------------- Kết nối ----------------
 #define ENABLE_WIFI 1
@@ -113,6 +111,15 @@ bool     haveSeq      = false;  // đã có seq trước đó để so
 bool     armHintShown = false;
 uint16_t outUs[NUM_CH]    = {};  // xung đang xuất ra từng kênh
 uint16_t manualUs[NUM_CH] = {};  // giá trị gõ tay ("ch 3 1800"), 0 = không
+
+// ---------------- Làm mượt xung (servo_logic.h) ----------------
+bool          smoothOn  = true;  // kênh app điều khiển đi dần tới giá trị mới ("smooth off" để so sánh)
+servo::Smooth smooth[NUM_CH];
+uint16_t      gapAvg16  = 0;     // khoảng giữa hai gói lái, trung bình (×16 ms)
+uint32_t      lastDuty[NUM_CH] = {};  // duty đã ghi LEDC, chỉ ghi lại khi đổi
+uint16_t      pwmHz[NUM_CH];          // tần số xung từng kênh (NVS "rchz")
+uint16_t      dbUs[NUM_CH]  = {};     // vùng chết từng kênh, µs (NVS "rcdb"), 0 = tắt
+uint16_t      heldUs[NUM_CH] = {};    // giá trị đang giữ sau vùng chết
 
 const char* srcName(Source s) { return s == SRC_WIFI ? "WiFi" : (s == SRC_BLE ? "BLE" : "-"); }
 
@@ -237,6 +244,13 @@ void setMultiCh(bool on) {
   else dbg::log("CH", "Chế độ 2 KÊNH (app cũ): CH1 lái, CH2 ga, xe tự áp servo + ARM");
 }
 
+// Có gói lái: đo khoảng từ gói trước (cho làm mượt), không tính khoảng chờ khi đang failsafe
+void noteControl() {
+  uint32_t now = millis();
+  if (!failsafe) gapAvg16 = servo::nextGapAvg(gapAvg16, now - lastControlMs);
+  lastControlMs = now;
+}
+
 // Kênh đang do app điều khiển (không gõ tay được khi app đang nối)
 bool appDriven(int i) { return multiCh ? i < appCh : i < 2; }
 
@@ -297,7 +311,7 @@ void handleFrame(const uint8_t* buf, size_t n, Source src) {
         haveSeq = true;
         ctrlCount++;
       }
-      lastControlMs = millis();
+      noteControl();
       activeSrc = src;
       // Arming: sau failsafe/khởi động phải nhả ga về ~0 mới cho chạy
       if (!armed && abs(lastControl.throttle) < 50) {
@@ -335,13 +349,14 @@ void handleFrame(const uint8_t* buf, size_t n, Source src) {
         else dbg::log("CH", "App gửi %d kênh, xe có %d%s", n, NUM_CH, n > NUM_CH ? " - bỏ các kênh thừa" : "");
       }
       ctrlCount++;
-      lastControlMs = millis();
+      noteControl();
       activeSrc = src;
       break;
     }
 
     case INFO_GET: {
-      InfoPayload info = {PROTO_N_CH, NUM_CH};
+      InfoPayload info = {PROTO_N_CH, NUM_CH, {}};
+      esp_efuse_mac_get_default(info.id);
       dbg::log("CH", "App hỏi thông tin xe -> giao thức n kênh v%u, %d kênh", PROTO_N_CH, NUM_CH);
       sendFrame(src, INFO, &info, sizeof(info));
       break;
@@ -533,9 +548,131 @@ void handleUdp() {
 }
 
 // ---------------- Xuất PWM ----------------
-void writeMicros(int pin, uint16_t us) {
-  uint32_t duty = (uint32_t)us * ((1UL << PWM_RES_BITS) - 1) / PWM_PERIOD_US;
-  ledcWrite(pin, duty);
+// Chỉ ghi LEDC khi duty đổi: loop() chạy liên tục, ghi lại cùng giá trị mỗi vòng là thừa
+void writeMicros(int ch, uint16_t us) {
+  uint32_t duty = servo::dutyFor(us, pwmHz[ch], PWM_RES_BITS);
+  if (duty == lastDuty[ch]) return;
+  lastDuty[ch] = duty;
+  ledcWrite(PIN_CH[ch], duty);
+}
+
+bool attachPwm(int ch) {
+  lastDuty[ch] = 0;  // ghi lại duty theo chu kỳ mới
+  if (ledcAttach(PIN_CH[ch], pwmHz[ch], PWM_RES_BITS)) return true;
+  dbg::log("PIN", "!! Không gắn được PWM %u Hz cho CH%d (GPIO%d)", pwmHz[ch], ch + 1, PIN_CH[ch]);
+  return false;
+}
+
+void loadPwmHz() {
+  for (int i = 0; i < NUM_CH; i++) pwmHz[i] = servo::PWM_HZ_DEFAULT;
+  Preferences p;
+  p.begin("rchz", false);  // read-only báo lỗi khi namespace chưa có
+  uint16_t hz[NUM_CH];
+  if (p.getBytes("hz", hz, sizeof(hz)) == sizeof(hz)) {
+    bool ok = servo::distinctHz(hz, NUM_CH) <= servo::PWM_TIMERS;
+    for (int i = 0; i < NUM_CH; i++) ok &= servo::validHz(hz[i]);
+    if (ok) memcpy(pwmHz, hz, sizeof(hz));
+  }
+  p.end();
+}
+
+void printPwmHz() {
+  char line[96];
+  formatUs(line, sizeof(line), pwmHz);
+  dbg::log("PIN", "Tần số xung: %s Hz", line);
+}
+
+// Lệnh "<tên>" / "<tên> <n> <giá trị>" / "<tên> all <giá trị>".
+// Trả về: -2 không phải lệnh này, -1 chỉ gõ tên (in bảng), 0 sai cú pháp, 1 hợp lệ (ch = -1 là mọi kênh)
+int parseChannelCmd(const char* line, const char* name, int& ch, int& val) {
+  size_t k = strlen(name);
+  if (strncmp(line, name, k) || (line[k] && line[k] != ' ')) return -2;
+  if (!line[k]) return -1;
+  char which[8] = "";
+  if (sscanf(line + k + 1, "%7s %d", which, &val) != 2) return 0;
+  if (!strcmp(which, "all")) {
+    ch = -1;
+    return 1;
+  }
+  ch = atoi(which) - 1;
+  return ch >= 0 && ch < NUM_CH;
+}
+
+// hz | hz <n> <Hz> | hz all <Hz>. false nếu không phải lệnh hz
+bool hzCommand(const char* line) {
+  int ch = 0, hz = 0, r = parseChannelCmd(line, "hz", ch, hz);
+  if (r == -2) return false;
+  if (r == -1) {
+    printPwmHz();
+    return true;
+  }
+  if (!r || !servo::validHz(hz)) {
+    dbg::log("CMD", "Cú pháp: hz | hz <1-%d> <%u-%u> | hz all <%u-%u>", NUM_CH, servo::PWM_HZ_MIN, servo::PWM_HZ_MAX,
+             servo::PWM_HZ_MIN, servo::PWM_HZ_MAX);
+    return true;
+  }
+  uint16_t next[NUM_CH];
+  memcpy(next, pwmHz, sizeof(next));
+  for (int i = 0; i < NUM_CH; i++)
+    if (ch < 0 || i == ch) next[i] = hz;
+  if (servo::distinctHz(next, NUM_CH) > servo::PWM_TIMERS) {
+    dbg::log("CMD", "!! Tối đa %d tần số khác nhau (ESP32-S3 có %d timer PWM)", servo::PWM_TIMERS, servo::PWM_TIMERS);
+    return true;
+  }
+  for (int i = 0; i < NUM_CH; i++) {
+    if (next[i] == pwmHz[i]) continue;
+    pwmHz[i] = next[i];
+    ledcDetach(PIN_CH[i]);
+    attachPwm(i);
+  }
+  Preferences p;
+  p.begin("rchz", false);
+  p.putBytes("hz", pwmHz, sizeof(pwmHz));
+  p.end();
+  printPwmHz();
+  if (hz > 50) dbg::log("CMD", "!! Trên 50 Hz chỉ dành cho servo DIGITAL - servo analog / ESC có thể nóng, rung hoặc hỏng");
+  return true;
+}
+
+void loadDeadband() {
+  Preferences p;
+  p.begin("rcdb", false);
+  uint16_t db[NUM_CH];
+  if (p.getBytes("db", db, sizeof(db)) == sizeof(db)) {
+    bool ok = true;
+    for (int i = 0; i < NUM_CH; i++) ok &= db[i] <= servo::DEADBAND_MAX_US;
+    if (ok) memcpy(dbUs, db, sizeof(db));
+  }
+  p.end();
+}
+
+void printDeadband() {
+  char line[96];
+  formatUs(line, sizeof(line), dbUs);
+  dbg::log("PIN", "Vùng chết: %s us", line);
+}
+
+// db | db <n> <µs> | db all <µs>. false nếu không phải lệnh db
+bool dbCommand(const char* line) {
+  int ch = 0, us = 0, r = parseChannelCmd(line, "db", ch, us);
+  if (r == -2) return false;
+  if (r == -1) {
+    printDeadband();
+    return true;
+  }
+  if (!r || us < 0 || us > servo::DEADBAND_MAX_US) {
+    dbg::log("CMD", "Cú pháp: db | db <1-%d> <0-%u> | db all <0-%u>", NUM_CH, servo::DEADBAND_MAX_US,
+             servo::DEADBAND_MAX_US);
+    return true;
+  }
+  for (int i = 0; i < NUM_CH; i++)
+    if (ch < 0 || i == ch) dbUs[i] = us;
+  Preferences p;
+  p.begin("rcdb", false);
+  p.putBytes("db", dbUs, sizeof(dbUs));
+  p.end();
+  printDeadband();
+  return true;
 }
 
 void updateOutputs() {
@@ -576,9 +713,20 @@ void updateOutputs() {
     outUs[CH_THR] = servo::toMicros(cfg.throttle, thr);
     outUs[CH_STEER] = servo::toMicros(cfg.steering, lastControl.steering);
   }
+  // Kênh app điều khiển: qua vùng chết rồi đi dần tới giá trị mới; failsafe và gõ tay nhảy ngay
+  static uint32_t lastTickMs = now;
+  uint32_t dt = now - lastTickMs;
+  lastTickMs = now;
+  uint16_t span = servo::smoothSpan(gapAvg16);
   for (int i = 0; i < NUM_CH; i++) {
-    if (manualUs[i]) outUs[i] = manualUs[i];
-    writeMicros(PIN_CH[i], outUs[i]);
+    uint16_t target = manualUs[i] ? manualUs[i] : outUs[i];
+    bool fromApp = !failsafe && !manualUs[i] && appDriven(i);
+    if (fromApp) target = servo::deadband(heldUs[i], target, dbUs[i]);
+    heldUs[i] = target;
+    if (smoothOn && fromApp) servo::smoothSet(smooth[i], target, span);
+    else servo::smoothJump(smooth[i], target);
+    outUs[i] = servo::smoothTick(smooth[i], dt);
+    writeMicros(i, outUs[i]);
   }
 }
 
@@ -701,14 +849,14 @@ void printStatus() {
 }
 
 void printChannels() {
-  dbg::log("CH", "Chế độ %s | Kênh  GPIO  Xung     Failsafe  Nguồn", multiCh ? "n kênh" : "2 kênh (app cũ)");
+  dbg::log("CH", "Chế độ %s | Kênh  GPIO  Xung     Failsafe  Hz   Nguồn", multiCh ? "n kênh" : "2 kênh (app cũ)");
   for (int i = 0; i < NUM_CH; i++) {
     const char* from = manualUs[i] ? "gõ tay"
                        : failsafe ? "failsafe"
                        : appDriven(i) ? "app"
                        : multiCh ? "failsafe (app không gửi kênh này)"
                                  : "failsafe (app cũ chỉ gửi CH1/CH2)";
-    dbg::log("CH", "  CH%-2d  %-4d  %4u us  %4u us   %s%s", i + 1, PIN_CH[i], outUs[i], failsafeUsFor(i), from,
+    dbg::log("CH", "  CH%-2d  %-4d  %4u us  %4u us   %-3u  %s%s", i + 1, PIN_CH[i], outUs[i], failsafeUsFor(i), pwmHz[i], from,
              multiCh ? "" : (i == CH_STEER ? " - lái" : (i == CH_THR ? " - ga" : "")));
   }
 }
@@ -754,13 +902,19 @@ bool channelCommand(const char* line) {
 void printHelp() {
   dbg::log("CMD", "Lệnh (gõ rồi Enter):");
   dbg::log("CMD", "  help              danh sách lệnh");
-  dbg::log("CMD", "  st                in trạng thái ngay");
+  dbg::log("CMD", "  st                in trạng thái ngay");  
   dbg::log("CMD", "  st on | st off    bật/tắt dòng STAT định kỳ");
   dbg::log("CMD", "  st <ms>           chu kỳ STAT khi lái, 50..5000 (đang %u ms; khi chờ 1 s)", statPeriodMs);
   dbg::log("CMD", "  pkt on | pkt off  in hex mọi gói nhận (trừ CONTROL/PING)");
   dbg::log("CMD", "  ch                bảng CH1-CH8: chân, xung, nguồn");
   dbg::log("CMD", "  ch <n> <us>       gõ tay xung kênh n (500..2500); kênh app đang điều khiển thì chỉ khi failsafe");
   dbg::log("CMD", "  ch <n> off | ch off  bỏ gõ tay một kênh / mọi kênh");
+  dbg::log("CMD", "  hz                tần số xung từng kênh");
+  dbg::log("CMD", "  hz <n> <Hz> | hz all <Hz>  đổi tần số %u..%u (servo digital; analog / ESC giữ 50), lưu flash",
+           servo::PWM_HZ_MIN, servo::PWM_HZ_MAX);
+  dbg::log("CMD", "  db | db <n> <us> | db all <us>  vùng chết 0..%u us: servo analog bớt giật / rè (lưu flash)",
+           servo::DEADBAND_MAX_US);
+  dbg::log("CMD", "  smooth on | off làm mượt xung kênh app điều khiển (đang %s)", smoothOn ? "bật" : "tắt");
   dbg::log("CMD", "  cfg               cấu hình servo (chế độ 2 kênh) và failsafe từng kênh");
   dbg::log("CMD", "  sys               chip, bộ nhớ, lý do khởi động");
   dbg::log("CMD", "  net info | net setup | net reset");
@@ -784,9 +938,14 @@ void runCommand(const char* line) {
     printConfig();
     printFailsafe();
   }
+  else if (!strcmp(line, "smooth on") || !strcmp(line, "smooth off") || !strcmp(line, "smooth")) {
+    if (line[6]) smoothOn = !strcmp(line, "smooth on");
+    dbg::log("CMD", "Làm mượt %s | gói lái trung bình %u ms -> mỗi giá trị mới đi trong %u ms",
+             smoothOn ? "BẬT" : "TẮT", (gapAvg16 + 8) >> 4, servo::smoothSpan(gapAvg16));
+  }
   else if (!strcmp(line, "sys")) printSystem();
   else if (!strcmp(line, "reboot")) { dbg::log("CMD", "Khởi động lại..."); delay(100); ESP.restart(); }
-  else if (!channelCommand(line) && !netm::command(line)) dbg::log("CMD", "Không hiểu lệnh \"%s\" - gõ help", line);
+  else if (!channelCommand(line) && !hzCommand(line) && !dbCommand(line) && !netm::command(line)) dbg::log("CMD", "Không hiểu lệnh \"%s\" - gõ help", line);
 }
 
 void debugLoop() {
@@ -813,8 +972,11 @@ void setup() {
   loadConfig();
   loadFailsafe();
 
-  for (int i = 0; i < NUM_CH; i++)
-    if (!ledcAttach(PIN_CH[i], PWM_FREQ, PWM_RES_BITS)) dbg::log("PIN", "!! Không gắn được PWM cho CH%d (GPIO%d)", i + 1, PIN_CH[i]);
+  loadPwmHz();
+  printPwmHz();
+  loadDeadband();
+  printDeadband();
+  for (int i = 0; i < NUM_CH; i++) attachPwm(i);
   updateOutputs();  // xuất giá trị failsafe ngay khi bật nguồn
 
   pinMode(PIN_HALL, INPUT_PULLUP);

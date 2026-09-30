@@ -32,6 +32,23 @@ class ProfileRepository extends ChangeNotifier {
 
   File _file(String id) => File('${dir.path}${Platform.pathSeparator}$id.json');
 
+  // ---------------- Xe đang chọn (như chọn model trên tay RC) ----------------
+  /// Không có đuôi .json nên load() không đọc nhầm thành hồ sơ
+  File get _selectedFile => File('${dir.path}${Platform.pathSeparator}selected.txt');
+  String? _selectedId;
+
+  /// Xe đang chọn: mở app là tự nối xe này. Chưa chọn (hoặc hồ sơ đã xoá) thì lấy xe nối gần nhất.
+  String? get selectedId => _cache.containsKey(_selectedId) ? _selectedId : list().firstOrNull?.id;
+
+  Future<void> select(String id) async {
+    if (!_cache.containsKey(id) || _selectedId == id) return;
+    _selectedId = id;
+    notifyListeners();
+    try {
+      await _selectedFile.writeAsString(id);
+    } catch (_) {}
+  }
+
   /// Thư mục con: load() chỉ đọc file .json ngay trong [dir] nên không đụng tới
   Directory get photoDir => Directory('${dir.path}${Platform.pathSeparator}photos');
 
@@ -91,6 +108,11 @@ class ProfileRepository extends ChangeNotifier {
       } catch (e) {
         loadErrors.add('${f.uri.pathSegments.last}: $e');
       }
+    }
+    try {
+      _selectedId = (await _selectedFile.exists()) ? (await _selectedFile.readAsString()).trim() : null;
+    } catch (_) {
+      _selectedId = null;
     }
     notifyListeners();
   }

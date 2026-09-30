@@ -20,7 +20,9 @@ enum ItemKind {
   statusBadge('Trạng thái', 'Status'),
   led('Đèn LED', 'LED'),
   bar('Thanh giá trị', 'Value bar'),
-  vector('Vector 2D', '2D vector');
+  vector('Vector 2D', '2D vector'),
+  channels('Bảng kênh', 'Channel monitor'),
+  trimBar('Thanh trim', 'Trim bar');
 
   const ItemKind(this._vi, this._en);
   final String _vi, _en;
@@ -37,23 +39,17 @@ enum ItemKind {
   static List<ItemKind> get controls => values.where((k) => k.isControl).toList();
 }
 
-/// Giới hạn kích thước theo ô lưới (H2)
+/// Giới hạn kích thước theo ô lưới (H2). Không giới hạn trên: phần tử to tuỳ ý miễn nằm trong
+/// lưới và không đè phần tử khác; chỉ có cỡ nhỏ nhất để phần tử còn vẽ được.
 class SizeLimits {
   final int minW, minH, maxW, maxH;
-  const SizeLimits(this.minW, this.minH, this.maxW, this.maxH);
+  const SizeLimits(this.minW, this.minH, [this.maxW = 1 << 16, this.maxH = 1 << 16]);
 
   static SizeLimits of(ItemKind k) => switch (k) {
-        ItemKind.stickH => const SizeLimits(6, 2, 24, 4),
-        ItemKind.stickV => const SizeLimits(2, 6, 4, 12),
-        ItemKind.stick2D => const SizeLimits(5, 5, 12, 12),
-        ItemKind.button || ItemKind.toggle => const SizeLimits(2, 2, 6, 4),
-        ItemKind.switch3 => const SizeLimits(3, 2, 8, 4),
-        ItemKind.knob => const SizeLimits(3, 3, 6, 6),
-        ItemKind.gauge || ItemKind.statusBadge => const SizeLimits(3, 2, 8, 4),
-        ItemKind.trim => const SizeLimits(4, 2, 12, 4),
-        ItemKind.led => const SizeLimits(2, 1, 8, 4),
-        ItemKind.bar => const SizeLimits(2, 1, 24, 12),
-        ItemKind.vector => const SizeLimits(3, 3, 12, 12),
+        ItemKind.stickH || ItemKind.stickV || ItemKind.stick2D || ItemKind.knob => const SizeLimits(2, 2),
+        ItemKind.switch3 || ItemKind.trim => const SizeLimits(3, 2),
+        ItemKind.trimBar => const SizeLimits(2, 2),
+        _ => const SizeLimits(1, 1),
       };
 
   /// Nâng kích thước nhỏ nhất để vùng chạm ≥ 48 dp trên màn thật
@@ -73,6 +69,20 @@ enum ValueDisplay {
   const ValueDisplay(this._vi, this._en);
   final String _vi, _en;
   String get label => tr(_vi, _en);
+}
+
+/// Trục dùng của cần 2 trục: như tay RC, một cần có thể chỉ điều khiển 1 kênh (khoá trục kia, có rãnh dẫn)
+enum StickAxes {
+  both('Cả 2 trục', 'Both axes'),
+  x('Chỉ ngang ↔', 'Horizontal ↔'),
+  y('Chỉ dọc ↕', 'Vertical ↕');
+
+  const StickAxes(this._vi, this._en);
+  final String _vi, _en;
+  String get label => tr(_vi, _en);
+
+  bool get hasX => this != y;
+  bool get hasY => this != x;
 }
 
 enum KnobSize {
@@ -96,6 +106,7 @@ class ItemStyle {
   bool haptic;
   double opacityPct; // 30–100
   AccentColor? color; // màu riêng của phần tử; null = theo màu chủ đạo của app
+  bool gimbal; // cần 2 trục vẽ kiểu tay RC (đế, giếng, núm có khía); false = kiểu phẳng cũ
 
   ItemStyle({
     this.labelText,
@@ -107,6 +118,7 @@ class ItemStyle {
     this.haptic = true,
     this.opacityPct = 100,
     this.color,
+    this.gimbal = true,
   });
 
   Map<String, dynamic> toJson() => {
@@ -119,6 +131,7 @@ class ItemStyle {
         'haptic': haptic,
         'opacityPct': opacityPct,
         if (color != null) 'color': color!.name,
+        'gimbal': gimbal,
       };
 
   factory ItemStyle.fromJson(Map<String, dynamic>? j) {
@@ -133,6 +146,7 @@ class ItemStyle {
       haptic: j['haptic'] as bool? ?? true,
       opacityPct: (j['opacityPct'] as num?)?.toDouble() ?? 100,
       color: AccentColor.values.asNameMap()[j['color']],
+      gimbal: j['gimbal'] as bool? ?? true,
     );
   }
 }
@@ -284,6 +298,9 @@ class ControlItem {
   ReturnConfig? returnCfg; // cần gạt (trục X với stick2D)
   ReturnConfig? returnCfgY; // trục Y của stick2D
   double? savedPct, savedPctY; // vị trí nhớ khi thoát (Giữ vị trí + Nhớ vị trí)
+  StickAxes axes; // cần 2 trục: dùng 1 hay 2 trục
+  int? trimCh; // thanh trim: kênh được trim; null = kênh Lái
+  List<int>? chList; // bảng kênh: các kênh hiện; null = mọi kênh đang bật
 
   ControlItem({
     required this.id,
@@ -302,6 +319,9 @@ class ControlItem {
     this.returnCfgY,
     this.savedPct,
     this.savedPctY,
+    this.axes = StickAxes.both,
+    this.trimCh,
+    this.chList,
   })  : style = style ?? ItemStyle(),
         display = display ?? DisplayConfig();
 
@@ -318,7 +338,7 @@ class ControlItem {
     return inputId == id ? returnCfg ?? ReturnConfig() : null;
   }
 
-  bool get touchable => kind.isControl || kind == ItemKind.trim;
+  bool get touchable => kind.isControl || kind == ItemKind.trim || kind == ItemKind.trimBar;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -337,6 +357,9 @@ class ControlItem {
         'returnCfgY': returnCfgY?.toJson(),
         'savedPct': savedPct,
         'savedPctY': savedPctY,
+        if (kind == ItemKind.stick2D) 'axes': axes.name,
+        if (trimCh != null) 'trimCh': trimCh,
+        if (chList != null) 'chList': chList,
       };
 
   factory ControlItem.fromJson(Map<String, dynamic> j) => ControlItem(
@@ -358,13 +381,17 @@ class ControlItem {
             j['returnCfgY'] == null ? null : ReturnConfig.fromJson(j['returnCfgY'] as Map<String, dynamic>),
         savedPct: (j['savedPct'] as num?)?.toDouble(),
         savedPctY: (j['savedPctY'] as num?)?.toDouble(),
+        axes: StickAxes.values.asNameMap()[j['axes']] ?? StickAxes.both,
+        trimCh: j['trimCh'] as int?,
+        chList: (j['chList'] as List?)?.cast<int>(),
       );
 
   ControlItem copy() => ControlItem.fromJson(toJson());
 }
 
 class ControlLayout {
-  static const defaultCols = 24, defaultRows = 12;
+  /// Lưới dày (mỗi ô cũ 24×12 chia 4): đặt phần tử mịn hơn
+  static const defaultCols = 48, defaultRows = 24;
 
   /// Loại phần tử đã bỏ khỏi app (vd hộp số): bố cục cũ còn thì bỏ qua khi đọc
   static const removedKinds = {'gearBox'};
@@ -438,18 +465,38 @@ class ControlLayout {
         'items': items.map((i) => i.toJson()).toList(),
       };
 
-  factory ControlLayout.fromJson(Map<String, dynamic> j) => ControlLayout(
-        id: j['id'] as String? ?? newId(),
-        name: j['name'] as String? ?? 'Bố cục',
-        cols: j['cols'] as int? ?? defaultCols,
-        rows: j['rows'] as int? ?? defaultRows,
-        locked: j['locked'] as bool? ?? true,
-        items: (j['items'] as List? ?? const [])
-            .cast<Map<String, dynamic>>()
-            .where((e) => !removedKinds.contains(e['kind']))
-            .map(ControlItem.fromJson)
-            .toList(),
-      );
+  factory ControlLayout.fromJson(Map<String, dynamic> j) {
+    final l = ControlLayout(
+      id: j['id'] as String? ?? newId(),
+      name: j['name'] as String? ?? 'Bố cục',
+      cols: j['cols'] as int? ?? 24, // bố cục lưu trước khi có khoá cols/rows dùng lưới 24×12
+      rows: j['rows'] as int? ?? 12,
+      locked: j['locked'] as bool? ?? true,
+      items: (j['items'] as List? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .where((e) => !removedKinds.contains(e['kind']))
+          .map(ControlItem.fromJson)
+          .toList(),
+    );
+    l._densify();
+    return l;
+  }
+
+  /// Bố cục lưới thưa cũ (vd 24×12) → lưới dày hiện tại: nhân toạ độ, giữ nguyên hình trên màn
+  void _densify() {
+    if (cols >= defaultCols || defaultCols % cols != 0) return;
+    final k = defaultCols ~/ cols;
+    if (rows * k != defaultRows) return;
+    cols = defaultCols;
+    rows = defaultRows;
+    for (final i in items) {
+      i
+        ..x *= k
+        ..y *= k
+        ..w *= k
+        ..h *= k;
+    }
+  }
 
   ControlLayout copy() => ControlLayout.fromJson(toJson());
 }

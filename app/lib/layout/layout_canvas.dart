@@ -34,6 +34,7 @@ class LayoutCanvas extends StatefulWidget {
     required this.itemBuilder,
     this.selectedId,
     this.onSelect,
+    this.onOpen,
     this.onRectChanged,
     this.onDelete,
     this.trashKey,
@@ -45,6 +46,9 @@ class LayoutCanvas extends StatefulWidget {
   final Widget Function(BuildContext context, ControlItem item) itemBuilder;
   final String? selectedId;
   final ValueChanged<String?>? onSelect;
+
+  /// Chạm hai lần vào phần tử: mở cấu hình bên trong (chạm một lần chỉ chọn để kéo / đổi cỡ)
+  final ValueChanged<String>? onOpen;
 
   /// Kết thúc kéo/đổi cỡ hợp lệ → vị trí mới (cha lưu lịch sử rồi áp dụng)
   final void Function(String id, GridRect rect)? onRectChanged;
@@ -86,7 +90,8 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
       _valid = true;
       _overTrash = false;
     });
-    widget.onDragState?.call(true, false);
+    // Thùng rác chỉ hiện khi kéo di chuyển, không hiện khi đổi cỡ
+    if (handle == null) widget.onDragState?.call(true, false);
   }
 
   void _update(ControlItem it, DragUpdateDetails d, double cw, double ch) {
@@ -120,17 +125,23 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
       if (x + w > l.cols) w = l.cols - x;
       if (y + h > l.rows) h = l.rows - y;
       r = GridRect(x, y, w, h);
+      // Kéo to đụng phần tử khác: dừng sát phần tử đó thay vì đè lên
+      if (LayoutGrid.collides(l, it.id, r)) r = LayoutGrid.largestFree(l, it.id, s, r, handle.hx, handle.hy) ?? r;
     }
     final over = handle == null && _isOverTrash(d.globalPosition);
     if (r != _preview || over != _overTrash) {
-      if (r != _preview) HapticFeedback.selectionClick();
+      if (over && !_overTrash) {
+        HapticFeedback.mediumImpact();
+      } else if (r != _preview) {
+        HapticFeedback.selectionClick();
+      }
       final lim = SizeLimits.of(it.kind);
       setState(() {
         _preview = r;
         _overTrash = over;
         _valid = LayoutGrid.fits(l, it.id, r) && r.w >= lim.minW && r.h >= lim.minH;
       });
-      widget.onDragState?.call(true, over);
+      if (handle == null) widget.onDragState?.call(true, over);
     }
   }
 
@@ -221,20 +232,24 @@ class _LayoutCanvasState extends State<LayoutCanvas> {
         // Trong chế độ sửa, phần tử không điều khiển xe
         Positioned.fill(child: IgnorePointer(child: content)),
         Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => widget.onSelect?.call(it.id),
-            onPanStart: (_) => _begin(it, null),
-            onPanUpdate: (d) => _update(it, d, cw, ch),
-            onPanEnd: (_) => _end(it),
-            onPanCancel: () {
-              if (_dragId == it.id) _end(it);
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDragging && !_valid ? t.bad.withValues(alpha: 0.15) : Colors.transparent,
-                borderRadius: BorderRadius.circular(Radii.card),
-                border: Border.all(color: color, width: selected || isDragging ? 2 : 1),
+          // Chọn ngay khi chạm xuống, không chờ phân xử cử chỉ (chạm đúp làm onTap bị hoãn ~300 ms)
+          child: Listener(
+            onPointerDown: (_) => widget.onSelect?.call(it.id),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onDoubleTap: () => widget.onOpen?.call(it.id),
+              onPanStart: (_) => _begin(it, null),
+              onPanUpdate: (d) => _update(it, d, cw, ch),
+              onPanEnd: (_) => _end(it),
+              onPanCancel: () {
+                if (_dragId == it.id) _end(it);
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDragging && !_valid ? t.bad.withValues(alpha: 0.15) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(Radii.card),
+                  border: Border.all(color: color, width: selected || isDragging ? 2 : 1),
+                ),
               ),
             ),
           ),
@@ -346,15 +361,19 @@ class _GridPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size s) {
-    final p = Paint()
-      ..color = color.withValues(alpha: 0.6)
+    // Lưới dày: vạch mảnh từng ô, vạch đậm mỗi 4 ô để dễ đếm
+    final minor = Paint()
+      ..color = color.withValues(alpha: 0.28)
+      ..strokeWidth = 0.5;
+    final major = Paint()
+      ..color = color.withValues(alpha: 0.7)
       ..strokeWidth = 1;
     final cw = s.width / cols, ch = s.height / rows;
     for (var i = 0; i <= cols; i++) {
-      canvas.drawLine(Offset(i * cw, 0), Offset(i * cw, s.height), p);
+      canvas.drawLine(Offset(i * cw, 0), Offset(i * cw, s.height), i % 4 == 0 ? major : minor);
     }
     for (var j = 0; j <= rows; j++) {
-      canvas.drawLine(Offset(0, j * ch), Offset(s.width, j * ch), p);
+      canvas.drawLine(Offset(0, j * ch), Offset(s.width, j * ch), j % 4 == 0 ? major : minor);
     }
   }
 

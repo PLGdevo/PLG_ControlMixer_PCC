@@ -284,6 +284,25 @@ void main() {
       expect(again.list().length, 1); // file .bak không bị đọc
     });
 
+    test('xe đang chọn: lưu lại qua lần mở app, xoá hồ sơ thì lấy xe nối gần nhất', () async {
+      final repo = ProfileRepository(dir);
+      await repo.load();
+      expect(repo.selectedId, isNull);
+      await repo.save(sample());
+      await repo.save(CarProfile(id: 'p2', name: 'Xe hai', connType: ConnType.wifi, wifi: WifiConn()));
+      await repo.save((repo.get('p1')!)..lastConnectedAt = DateTime.now().add(const Duration(days: 1)), touch: false);
+      expect(repo.selectedId, 'p1', reason: 'chưa chọn: xe nối gần nhất');
+      await repo.select('p2');
+      await repo.select('khong-co');
+      expect(repo.selectedId, 'p2');
+      final again = ProfileRepository(dir);
+      await again.load();
+      expect(again.selectedId, 'p2');
+      expect(again.list().length, 2, reason: 'selected.txt không bị đọc thành hồ sơ');
+      await again.delete('p2');
+      expect(again.selectedId, 'p1');
+    });
+
     test('ảnh xe: chép vào thư mục ảnh, bản nhân bản dùng chung, xoá hồ sơ cuối cùng mới xoá ảnh', () async {
       final repo = ProfileRepository(dir);
       await repo.load();

@@ -40,7 +40,8 @@ void mockWakelock() {
 
 class FakeCarTransport implements CarTransport {
   /// `channels` = số kênh của firmware n kênh; null = firmware cũ (không trả lời INFO_GET / FS_WRITE)
-  FakeCarTransport({Map<int, Uint8List>? sections, this.channels = 8})
+  /// `id` = mã xe gửi kèm INFO; null = firmware chưa gửi mã
+  FakeCarTransport({Map<int, Uint8List>? sections, this.channels = 8, this.id})
       : sections = sections ??
             {
               NetSection.status: FirmwareVectors.status,
@@ -51,6 +52,7 @@ class FakeCarTransport implements CarTransport {
 
   final Map<int, Uint8List> sections;
   final int? channels;
+  final String? id;
   final netSets = <Uint8List>[];
   final fsWrites = <Uint8List>[];
   final configSets = <Uint8List>[];
@@ -60,7 +62,10 @@ class FakeCarTransport implements CarTransport {
 
   /// Hash xe trả trong FS_ACK; null = tính đúng trên payload nhận được
   int? fsAckHash;
-  int applied = 0, setups = 0, resets = 0;
+  int applied = 0, setups = 0, resets = 0, pings = 0;
+
+  /// false = giả mất gói: không trả PONG
+  bool answerPing = true;
   int ackStatus = NetAck.ok;
 
   final _in = StreamController<Uint8List>.broadcast();
@@ -70,6 +75,9 @@ class FakeCarTransport implements CarTransport {
 
   @override
   String get name => 'Xe giả';
+
+  @override
+  Duration get controlPeriod => const Duration(milliseconds: 25);
 
   @override
   Stream<Uint8List> get incoming => _in.stream;
@@ -93,11 +101,15 @@ class FakeCarTransport implements CarTransport {
       case PacketType.controlUs:
         controls.add(f);
       case PacketType.infoGet when n != null:
-        _reply(PacketType.info, [2, n]);
+        _reply(PacketType.info, [2, n, if (id != null) ...id!.split(':').map((x) => int.parse(x, radix: 16))]);
       case PacketType.fsWrite when n != null:
         fsWrites.add(f.payload);
         final h = fsAckHash ?? fnv1a(f.payload);
         _reply(PacketType.fsAck, [1, h & 0xFF, h >> 8 & 0xFF, h >> 16 & 0xFF, h >> 24 & 0xFF, n]);
+      case PacketType.ping:
+        pings++;
+        // PONG: seq:u16 · t_send:u32 (gửi lại nguyên 6 byte PING) · uptime:u32
+        if (answerPing) _reply(PacketType.pong, [...f.payload, 0, 0, 0, 0]);
       case PacketType.configGet:
         _reply(PacketType.configData, _config);
       case PacketType.configSet:
@@ -132,6 +144,9 @@ class FakeCarTransport implements CarTransport {
     }
     return h;
   }
+
+  /// Xe gửi một gói telemetry (firmware thật gửi 10 Hz)
+  void telemetry({int flags = 0}) => _in.add(encodeFrame(PacketType.telemetry, [0x10, 0x1d, 0, 0, 0, 0, 0xc4, flags, 0, 0]));
 
   void _ack(int type) => _reply(PacketType.ack, [type, ackStatus]);
 

@@ -16,15 +16,18 @@ import '../models/control_layout.dart';
 import '../models/data_source.dart';
 import '../models/input_def.dart';
 import '../models/mixer_rule.dart';
+import '../services/car_connector.dart';
 import '../services/quick_ping.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/channel_tile.dart';
 import '../widgets/condition_builder.dart';
+import '../widgets/hold_repeat.dart';
 import '../widgets/layout_preview.dart';
 import '../widgets/mix_rule_card.dart';
 import '../widgets/number_field.dart';
+import '../widgets/status_strip.dart';
 import 'channel_detail_screen.dart';
 import 'control_screen.dart';
 import 'input_screen.dart';
@@ -75,6 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   late final _devName = TextEditingController(text: draft.ble?.deviceName ?? '');
 
   CarController get c => widget.controller;
+  late final AppLifecycleListener _lifecycle;
 
   @override
   void initState() {
@@ -85,17 +89,88 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     _markSaved();
     // Mở từ màn Lái (đang khoá ngang) thì bỏ khoá: cầm ngang hay dọc đều dùng được
     _freeOrientation();
+    // App xuống nền: thôi thử trên xe (kênh về failsafe)
+    _lifecycle = AppLifecycleListener(onHide: () => c.setTesting(false));
+    c.addListener(_onCar);
+    _onCar();
   }
 
   // Không khôi phục hướng trong dispose: màn nào mở màn này thì tự đặt lại sau khi push trả về.
 
   @override
   void dispose() {
+    _lifecycle.dispose();
+    c.removeListener(_onCar);
+    c.endLive(widget.repo.get(widget.profileId));
     for (final t in [_name, _ip, _port, _ssid, _mac, _devName]) {
       t.dispose();
     }
     _tabs.dispose();
     super.dispose();
+  }
+
+  // ---------------- Cấu hình trực tiếp ----------------
+  /// Mọi thay đổi bản nháp đi qua setState: đang nối đúng xe thì đưa ngay vào vòng gửi
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _pushLive();
+  }
+
+  bool _wasHere = false;
+  String? _liveJson;
+
+  /// Vừa nối / vừa mất kết nối với xe của hồ sơ này
+  void _onCar() {
+    final here = _connectedHere;
+    if (here == _wasHere) return;
+    _wasHere = here;
+    _liveJson = null;
+    if (here) _pushLive();
+  }
+
+  /// Bản nháp hợp lệ → nạp vào vòng gửi (kênh, trim, luật mix có tác dụng ngay, chưa lưu)
+  void _pushLive() {
+    if (!_connectedHere || _errors.isNotEmpty) return;
+    final j = jsonEncode(draft.toJson());
+    if (j == _liveJson && c.live) return;
+    _liveJson = j;
+    c.updateLive(draft.copy());
+  }
+
+  Future<void> _connect() async {
+    if (_dirty && _savedKey != draft.connKey) {
+      _snack(tr('Lưu thay đổi kết nối trước khi nối xe', 'Save the connection changes before connecting'));
+      return;
+    }
+    final msgs = await CarConnector.connect(c, widget.repo, widget.profileId);
+    if (!mounted) return;
+    // Dò xe (Router) có thể đã đổi IP trong hồ sơ đã lưu
+    final fresh = widget.repo.get(widget.profileId);
+    if (fresh != null && !_dirty) {
+      super.setState(() {
+        draft.wifi = fresh.wifi ?? WifiConn();
+        draft.lastConnectedAt = fresh.lastConnectedAt;
+        _ip.text = draft.wifi!.ip;
+        _port.text = '${draft.wifi!.port}';
+        _markSaved();
+      });
+      _onCar();
+    }
+    if (msgs.isNotEmpty) _snack(msgs.join(' · '));
+  }
+
+  /// Trim nhanh kênh Lái ngay trên thanh trên cùng (có tác dụng ngay khi đang nối, Lưu để giữ)
+  void _trimSteer(int delta) {
+    final s = draft.steering;
+    if (s == null) return;
+    final nv = (s.trimUs + delta).clamp(-200, 200).toInt();
+    if (nv != s.trimUs) setState(() => s.trimUs = nv);
+  }
+
+  Future<void> _editStatusItems() async {
+    final r = await pickStatusItems(context, draft);
+    if (r != null && mounted) setState(() => draft.statusItems = r);
   }
 
   /// Hướng màn hình của màn này: xoay tự do (đặt lại sau khi màn khác khoá hướng)
@@ -275,6 +350,8 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
         builder: (ctx) => ChannelDetailScreen(
           profile: draft,
           index: index,
+          controller: c,
+          onChanged: () => setState(() {}),
           onOpenMix: () {
             Navigator.pop(ctx);
             _tabs.animateTo(SettingsScreen.mixTab);
@@ -443,21 +520,81 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
               body: SafeArea(
                 top: false,
                 bottom: false,
-                child: TabBarView(
-                  controller: _tabs,
-                  children: [
-                    _inputsTab(),
-                    _mixTab(),
-                    _channelsTab(),
-                    _generalTab(),
-                    _layoutTab(),
-                  ],
-                ),
+                child: Column(children: [
+                  _liveBar(),
+                  Expanded(
+                    child: TabBarView(
+                      controller: _tabs,
+                      children: [
+                        _inputsTab(),
+                        _mixTab(),
+                        _channelsTab(),
+                        _generalTab(),
+                        _layoutTab(),
+                      ],
+                    ),
+                  ),
+                ]),
               ),
               bottomNavigationBar: compact ? _compactErrorBar(errors) : _bottomBar(errors),
             ),
         );
       },
+    );
+  }
+
+  /// Thanh trên cùng: tai thỏ (giá trị chọn được) · trim Lái · Thử trên xe · Kết nối / Ngắt.
+  /// Kết nối được giữ khi vào Cấu hình: chỉnh gì xe đổi theo ngay, bật "Thử" để kênh ra theo cấu hình.
+  Widget _liveBar() {
+    final t = context.tokens;
+    final here = _connectedHere;
+    final width = MediaQuery.sizeOf(context).width;
+    final narrow = width < 600, tiny = width < 460; // tiny: nút chỉ còn icon
+    final steer = draft.steering;
+    final String? alarm = !here
+        ? tr('Chưa kết nối xe', 'Car not connected')
+        : c.state == LinkState.lost
+            ? tr('Mất tín hiệu', 'Signal lost')
+            : (_errors.isNotEmpty ? tr('Hồ sơ lỗi: chưa áp dụng', 'Profile errors: not applied') : null);
+    final notch = StatusNotch(controller: c, profile: draft, alarm: alarm, onTap: _editStatusItems);
+    final controls = <Widget>[
+      if (here && steer != null) ...[
+        HoldRepeat(
+          onStep: steer.trimUs > -200 ? (_) => _trimSteer(-5) : null,
+          child: IconButton(
+            tooltip: tr('Trim Lái −5 µs', 'Steering trim −5 µs'),
+            onPressed: steer.trimUs > -200 ? () => _trimSteer(-5) : null,
+            icon: const Text('◀'),
+          ),
+        ),
+        Text('Trim ${steer.trimUs} µs',
+            style: AppText.label.copyWith(
+                color: t.text, fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
+        HoldRepeat(
+          onStep: steer.trimUs < 200 ? (_) => _trimSteer(5) : null,
+          child: IconButton(
+            tooltip: tr('Trim Lái +5 µs', 'Steering trim +5 µs'),
+            onPressed: steer.trimUs < 200 ? () => _trimSteer(5) : null,
+            icon: const Text('▶'),
+          ),
+        ),
+      ],
+      if (narrow && here) const Spacer(),
+      if (here) ...[const SizedBox(width: Gap.s), LiveTestToggle(controller: c, compact: tiny)],
+      const SizedBox(width: Gap.s),
+      LinkButton(controller: c, connKey: _savedKey, onConnect: _connect, compact: tiny),
+    ];
+    return Container(
+      decoration: BoxDecoration(color: t.surface, border: Border(bottom: BorderSide(color: t.line))),
+      padding: const EdgeInsets.symmetric(horizontal: Gap.m, vertical: Gap.xs),
+      // Màn hẹp (dọc) đang nối: tai thỏ một hàng, trim / thử / ngắt một hàng; còn lại chung một hàng
+      child: narrow && here
+          ? Column(mainAxisSize: MainAxisSize.min, children: [
+              Center(child: notch),
+              const SizedBox(height: Gap.xs),
+              Row(children: controls),
+            ])
+          : Row(children: [Expanded(child: Center(child: notch)), const SizedBox(width: Gap.s), ...controls]),
     );
   }
 
@@ -902,7 +1039,9 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
       port: draft.wifi?.port,
       bleId: draft.ble?.mac,
       controller: c,
-      connectedKey: c.connectedKey,
+      // Đang sửa IP/port khác bản đã nối thì ping địa chỉ mới, không dùng kết nối cũ
+      connectedHere: _connectedHere && draft.connKey == _savedKey,
+      expectId: draft.connType == ConnType.wifi ? draft.wifi?.carId : null,
     );
     if (!mounted) return;
     setState(() {
@@ -945,6 +1084,15 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
             ),
             onChanged: (v) => setState(() => draft.wifi!.ip = v.trim()),
           ),
+          // App chỉ nối xe có đúng mã này; thay mạch xe thì quên mã, lần nối sau tự nhớ mã mới
+          if (draft.wifi!.carId != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => setState(() => draft.wifi!.carId = null),
+                child: Text(tr('Quên mã xe', 'Forget car ID')),
+              ),
+            ),
           const SizedBox(height: Gap.m),
           TextField(
             controller: _port,

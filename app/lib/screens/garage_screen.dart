@@ -3,22 +3,17 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../controller/car_controller.dart';
 import '../data/profile_repository.dart';
 import '../l10n/lang.dart';
 import '../models/car_profile.dart';
-import '../services/car_discovery.dart';
-import '../services/quick_ping.dart';
+import '../services/car_connector.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_controller.dart';
 import '../theme/tokens.dart';
-import '../transport/ble_transport.dart';
-import '../transport/transport.dart';
-import '../transport/udp_transport.dart';
 import '../widgets/status_badge.dart';
 import 'app_settings_screen.dart';
 import 'control_screen.dart';
@@ -26,7 +21,14 @@ import 'profile_wizard_screen.dart';
 import 'settings_screen.dart';
 
 class GarageScreen extends StatefulWidget {
-  const GarageScreen({super.key, required this.controller, required this.repo, required this.theme, this.pickPhoto});
+  const GarageScreen({
+    super.key,
+    required this.controller,
+    required this.repo,
+    required this.theme,
+    this.pickPhoto,
+    this.autoConnect = false,
+  });
 
   final CarController controller;
   final ProfileRepository repo;
@@ -35,14 +37,14 @@ class GarageScreen extends StatefulWidget {
   /// Chọn ảnh, trả về đường dẫn file (null = huỷ). Mặc định mở thư viện ảnh của máy; test truyền hàm giả.
   final Future<String?> Function()? pickPhoto;
 
+  /// Mở app thì tự nối xe đang chọn (như bật tay RC). Test để tắt vì không có xe thật.
+  final bool autoConnect;
+
   @override
   State<GarageScreen> createState() => _GarageScreenState();
 }
 
 class _GarageScreenState extends State<GarageScreen> {
-  final Map<String, QuickPingResult> _ping = {};
-  final Set<String> _pinging = {};
-  String? _connectingId;
 
   CarController get c => widget.controller;
   ProfileRepository get repo => widget.repo;
@@ -59,7 +61,17 @@ class _GarageScreenState extends State<GarageScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showMigrationReport());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showMigrationReport();
+      if (widget.autoConnect) _connectSelected();
+    });
+  }
+
+  /// Nối xe đang chọn khi mở app. Không báo lỗi: xe tắt thì thẻ vẫn hiện nút Kết nối.
+  Future<void> _connectSelected() async {
+    final id = repo.selectedId;
+    if (id == null || c.isConnected || c.connectingKey != null) return;
+    await CarConnector.connect(c, repo, id);
   }
 
   /// Báo cáo một lần các hồ sơ vừa được tự chuyển sang mô hình Input → Mixer (Sprint 4 — J4)
@@ -123,113 +135,18 @@ class _GarageScreenState extends State<GarageScreen> {
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
   }
 
-  /// Bấm vào thẻ xe: vào thẳng màn Lái; chưa nối thì kết nối trước (nối xong tự vào màn Lái)
-  void _open(CarProfile p) {
-    if (_isConnected(p)) {
-      _drive(p);
-    } else if (c.state != LinkState.connecting && _connectingId == null) {
-      _connect(p);
-    }
-  }
-
+  /// Bấm vào thẻ xe: vào thẳng màn Lái, chưa nối thì màn Lái tự kết nối (nối không được vẫn ở màn Lái)
   Future<void> _drive(CarProfile p) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => ControlScreen(controller: c, repo: repo, profileId: p.id)),
+      MaterialPageRoute(builder: (_) => ControlScreen(controller: c, repo: repo, profileId: p.id, connectOnOpen: true)),
     );
   }
 
-  /// Chế độ Router: IP do router cấp có thể đổi → dò xe theo mã xe, cập nhật hồ sơ nếu IP/port khác.
-  /// Trả về hồ sơ (có thể đã sửa) và cờ "có thấy xe trong mạng".
-  Future<(CarProfile, bool)> _locate(CarProfile p) async {
-    final id = p.wifi?.carId;
-    if (p.connType != ConnType.wifi || id == null) return (p, true);
-    final hit = (await CarDiscovery.scan(id: id, timeout: const Duration(milliseconds: 1200)))
-        .where((f) => f.id == id.toUpperCase())
-        .firstOrNull;
-    if (hit == null) return (p, false);
-    final w = p.wifi!;
-    if (hit.ip == w.ip && hit.port == w.port) return (p, true);
-    final fresh = repo.get(p.id) ?? p;
-    fresh.wifi!
-      ..ip = hit.ip
-      ..port = hit.port;
-    await repo.save(fresh, touch: false);
-    return (fresh, true);
-  }
-
-  Future<void> _connect(CarProfile profile) async {
-    setState(() => _connectingId = profile.id);
-    final (p, found) = await _locate(profile);
-    if (!mounted) return;
-    final CarTransport t;
-    if (p.connType == ConnType.ble) {
-      final mac = p.ble?.mac ?? '';
-      if (mac.isEmpty) {
-        setState(() => _connectingId = null);
-        _snack(tr('Hồ sơ chưa có MAC. Bấm Sửa để chọn xe BLE.', 'This profile has no MAC yet. Tap Edit to pick a BLE car.'));
-        return;
-      }
-      try {
-        await FlutterBluePlus.stopScan();
-      } catch (_) {}
-      t = BleTransport(BluetoothDevice.fromId(mac));
-    } else {
-      t = UdpTransport(p.wifi!.ip, p.wifi!.port);
-    }
-    await c.connect(t, key: p.connKey);
-    if (!mounted) return;
-    setState(() => _connectingId = null);
-    if (c.error != null) {
-      _snack(found
-          ? c.error!
-          : tr(
-              '${c.error!}. Không thấy xe trong mạng: kiểm tra điện thoại và xe cùng router (không dùng mạng khách). '
-                  'Xe không vào được router thì sau 15 giây tự phát WiFi riêng.',
-              '${c.error!}. Car not found on the network: make sure the phone and the car use the same router '
-                  '(not a guest network). If the car cannot join the router it starts its own WiFi after 15 seconds.'));
-      return;
-    }
-    final fresh = repo.get(p.id);
-    if (fresh != null) {
-      fresh.lastConnectedAt = DateTime.now();
-      await repo.save(fresh, touch: false);
-      // Không có bước "đọc từ xe": hồ sơ trong app luôn được đưa xuống xe (E6)
-      try {
-        await c.syncProfile(fresh);
-        final n = c.carChannels;
-        if (!c.multiChannel) {
-          _snack(tr('Firmware xe cũ: chỉ lái được CH1/CH2. Nạp firmware mới để dùng đủ kênh.',
-              'Old car firmware: only CH1/CH2 can be driven. Flash the new firmware to use every channel.'));
-        } else if (fresh.channels.any((ch) => ch.enabled && ch.index > n)) {
-          _snack(tr('Xe chỉ có $n kênh: các kênh sau CH$n không xuất ra', 'The car has only $n channels: channels after CH$n are not output'));
-        }
-      } catch (e) {
-        _snack(tr('Không đồng bộ được cấu hình với xe: ${e.toString().replaceFirst('Exception: ', '')}', 'Could not sync the configuration with the car: ${e.toString().replaceFirst('Exception: ', '')}'));
-      }
-    }
-    if (mounted) await _drive(p);
-  }
-
-  Future<void> _test(CarProfile profile) async {
-    setState(() {
-      _pinging.add(profile.id);
-      _ping.remove(profile.id);
-    });
-    final (p, _) = _isConnected(profile) ? (profile, true) : await _locate(profile);
-    final r = await QuickPing.run(
-      ble: p.connType == ConnType.ble,
-      ip: p.wifi?.ip,
-      port: p.wifi?.port,
-      bleId: p.ble?.mac,
-      controller: c,
-      connectedKey: p.connKey,
-    );
-    if (!mounted) return;
-    setState(() {
-      _pinging.remove(p.id);
-      _ping[p.id] = r;
-    });
+  /// Nút Kết nối trên thẻ: nối tại chỗ, không rời màn chính
+  Future<void> _connect(CarProfile p) async {
+    final msgs = await CarConnector.connect(c, repo, p.id);
+    if (msgs.isNotEmpty) _snack(msgs.join(' · '));
   }
 
   Future<void> _rename(CarProfile p) async {
@@ -399,7 +316,9 @@ class _GarageScreenState extends State<GarageScreen> {
     return ListenableBuilder(
       listenable: Listenable.merge([repo, c, widget.theme, LangController.instance]),
       builder: (context, _) {
-        final list = repo.list();
+        final sel = repo.selectedId;
+        // Xe đang chọn luôn nằm đầu danh sách
+        final list = repo.list()..sort((a, b) => (b.id == sel ? 1 : 0) - (a.id == sel ? 1 : 0));
         return Scaffold(
           appBar: AppBar(
             title: const Text('PCC TX Control'),
@@ -497,19 +416,18 @@ class _GarageScreenState extends State<GarageScreen> {
   Widget _card(CarProfile p) {
     final t = context.tokens;
     final connected = _isConnected(p);
-    final connecting = _connectingId == p.id;
-    final busy = c.state == LinkState.connecting || _connectingId != null;
-    final ping = _ping[p.id];
-    final pinging = _pinging.contains(p.id);
+    final selected = repo.selectedId == p.id;
+    final connecting = c.connectingKey == p.connKey;
+    final busy = c.state == LinkState.connecting || c.connectingKey != null;
     return Card(
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(Radii.card),
-        side: BorderSide(color: connected ? t.accent : t.line),
+        side: BorderSide(color: connected || selected ? t.accent : t.line, width: selected ? 2 : 1),
       ),
       // Bấm vào thẻ (ngoài các nút) là vào màn Lái
       child: InkWell(
-        onTap: () => _open(p),
+        onTap: () => _drive(p),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(Gap.l, Gap.m, Gap.xs, Gap.m),
           child: Column(
@@ -556,12 +474,12 @@ class _GarageScreenState extends State<GarageScreen> {
                   ),
                 ],
               ),
-              if (connected || ping != null)
+              if (selected || connected)
                 Padding(
                   padding: const EdgeInsets.only(top: Gap.s),
                   child: Wrap(spacing: Gap.s, runSpacing: Gap.xs, children: [
+                    if (selected) Pill(color: t.accent, label: tr('Đang chọn', 'Selected')),
                     if (connected) StatusBadge(state: c.state),
-                    if (ping != null) Pill(color: ping.ok ? t.ok : t.bad, label: ping.label),
                   ]),
                 ),
               const SizedBox(height: Gap.m),
@@ -569,36 +487,29 @@ class _GarageScreenState extends State<GarageScreen> {
                 spacing: Gap.s,
                 runSpacing: Gap.s,
                 children: [
-                  if (connected) ...[
-                    FilledButton.icon(
-                      onPressed: () => _drive(p),
-                      icon: const CustomIconView(CustomIcon.steering, size: 20),
-                      label: Text(tr('Lái', 'Drive')),
-                    ),
+                  if (connected)
                     OutlinedButton.icon(
                       onPressed: c.disconnect,
                       icon: const AppIcon(AppIcons.disconnect, mini: true),
                       label: Text(tr('Ngắt', 'Disconnect')),
-                    ),
-                  ] else
-                    FilledButton.icon(
+                    )
+                  else
+                    OutlinedButton.icon(
                       onPressed: busy ? null : () => _connect(p),
                       icon: connecting
                           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                           : const AppIcon(AppIcons.connect, mini: true),
-                      label: Text(connecting ? tr('Đang kết nối', 'Connecting') : tr('Kết nối', 'Connect')),
+                      // Xe khác: chọn xe này = ngắt xe đang nối rồi nối xe này
+                      label: Text(connecting
+                          ? tr('Đang kết nối', 'Connecting')
+                          : selected
+                              ? tr('Kết nối', 'Connect')
+                              : tr('Chọn xe', 'Select car')),
                     ),
                   OutlinedButton.icon(
                     onPressed: () => _edit(p),
                     icon: const AppIcon(AppIcons.config, mini: true),
                     label: Text(tr('Sửa', 'Edit')),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: pinging ? null : () => _test(p),
-                    icon: pinging
-                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const AppIcon(AppIcons.signal, mini: true),
-                    label: Text(tr('Kiểm tra', 'Test')),
                   ),
                 ],
               ),

@@ -28,6 +28,9 @@ class BleTransport implements CarTransport {
       'BLE ${device.platformName.isNotEmpty ? device.platformName : device.remoteId}';
 
   @override
+  Duration get controlPeriod => const Duration(milliseconds: 20); // 50 Hz
+
+  @override
   Stream<Uint8List> get incoming => _in.stream;
 
   @override

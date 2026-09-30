@@ -1,8 +1,11 @@
 // Ping nhanh (F4): kiểm tra xe có phản hồi không mà không cần kết nối hẳn.
+import 'dart:async';
+
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../controller/car_controller.dart';
 import '../l10n/lang.dart';
+import '../protocol/protocol.dart';
 import '../transport/ble_transport.dart';
 import '../transport/transport.dart';
 import '../transport/udp_transport.dart';
@@ -25,18 +28,19 @@ class QuickPingResult {
 
 abstract final class QuickPing {
   /// WiFi: 3 gói UDP thẳng tới IP:port. BLE: kết nối tạm → 3 ping → ngắt.
-  /// Nếu đang kết nối đúng xe này thì ping qua kết nối hiện có.
+  /// `connectedHere`: đang kết nối đúng hồ sơ này (cùng IP/port) → ping qua kết nối hiện có.
+  /// `expectId` (WiFi): mã xe của hồ sơ; PONG không mang mã xe nên hỏi INFO trước, sai xe thì báo lỗi.
   static Future<QuickPingResult> run({
     required bool ble,
     String? ip,
     int? port,
     String? bleId,
     CarController? controller,
-    String? connectedKey,
+    bool connectedHere = false,
+    String? expectId,
   }) async {
-    final key = ble ? 'ble:$bleId' : 'wifi:$ip:$port';
     final c = controller;
-    if (c != null && c.isConnected && c.transport != null && connectedKey == key) {
+    if (connectedHere && c != null && c.isConnected && c.transport != null) {
       return _measure(c.transport!, close: false);
     }
     final CarTransport t;
@@ -55,7 +59,37 @@ abstract final class QuickPing {
       } catch (_) {}
       return QuickPingResult.fail(ble ? tr('Không kết nối được', 'Could not connect') : tr('IP không hợp lệ', 'Invalid IP'));
     }
+    if (!ble && expectId != null) {
+      final got = await _carId(t);
+      if (got != null && got != expectId.toUpperCase()) {
+        try {
+          await t.close();
+        } catch (_) {}
+        return QuickPingResult.fail(tr('Sai xe: IP này là xe $got', 'Wrong car: this IP is car $got'));
+      }
+    }
     return _measure(t, close: true);
+  }
+
+  /// Hỏi INFO lấy mã xe; null = không trả lời hoặc firmware cũ không gửi mã (khi đó để ping tự báo)
+  static Future<String?> _carId(CarTransport t) async {
+    final got = Completer<String?>();
+    final sub = t.incoming.listen((d) {
+      final f = decodeFrame(d);
+      if (f == null || f.type != PacketType.info || got.isCompleted) return;
+      got.complete(CarInfo.parse(f.payload)?.id);
+    });
+    try {
+      for (var i = 0; i < 3 && !got.isCompleted; i++) {
+        try {
+          await t.send(encodeFrame(PacketType.infoGet));
+        } catch (_) {}
+        await Future.any([got.future, Future<void>.delayed(const Duration(milliseconds: 300))]);
+      }
+      return got.isCompleted ? await got.future : null;
+    } finally {
+      await sub.cancel();
+    }
   }
 
   static Future<QuickPingResult> _measure(CarTransport t, {required bool close}) async {

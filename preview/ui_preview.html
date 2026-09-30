@@ -7,9 +7,15 @@
 <!-- Bản xem trước app Flutter (app/lib) — chạy thẳng trong trình duyệt, dữ liệu giả lập, không kết nối xe thật.
      Logic được port từ: models/*, services/{input_manager, condition_engine, mixer_engine, output_pipeline, arm_controller, car_discovery}.dart,
      protocol/net_protocol.dart, layout/*, screens/*, widgets/{condition_builder, mix_preview, mix_rule_card}.dart. Sửa app thì sửa cả file này.
+     Phần tử hiển thị (Ô đồng hồ / Đèn LED / Thanh giá trị / Vector 2D) đọc nguồn giá trị (models/data_source.dart); thanh trượt dạng viên; 8 tay nắm đổi cỡ (layout/layout_canvas.dart).
      Xe giả lập có 3 chế độ mạng (AP / Router / Cấu hình) như firmware net_manager (dac_ta_wifi_3_che_do.md).
      Phần tử màn Lái có màu riêng (ItemStyle.color); nút −/+ nhấn giữ để lặp (widgets/hold_repeat.dart).
-     Ngôn ngữ: app dịch đủ VN/EN (l10n/lang.dart); bản xem trước mới dịch màn chính và màn Cài đặt, màn khác giữ tiếng Việt. -->
+     Ngôn ngữ: app dịch đủ VN/EN (l10n/lang.dart); bản xem trước mới dịch màn chính và màn Cài đặt, màn khác giữ tiếng Việt.
+     Chọn xe kiểu tay RC (garage_screen.dart, 2026-09-29): xe đang chọn nằm đầu, nhãn "Đang chọn", viền đậm; xe khác có nút "Chọn xe"; mở trang tự nối xe đang chọn.
+     Tắt cơ chế ARM thì không còn ô "Đang lái"; nút Sửa trên thanh Lái chỉ hiện khi bố cục đã mở khoá.
+     Màn Lái (control_screen.dart, 2026-09-29): 1 chạm chọn phần tử để kéo/đổi cỡ, nhấn đúp mới mở bảng thuộc tính;
+     ô Trim bấm giữa mở bảng trim từng kênh nổi góc phải; nút Ngắt kết nối chỉ khoá khi cơ chế ARM đang bật và đang ARMED
+     (tắt cơ chế ARM thì ngắt được cả khi đang lái, vì không có nút DISARM). -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -62,6 +68,9 @@ button { font-family: inherit; }
   font-family: Barlow, system-ui, sans-serif; font-size: 15px; font-variant-numeric: tabular-nums; }
 .device.portrait { width: 390px; height: 800px; }
 .device.landscape { width: 820px; height: 380px; }
+/* barPillHeight: tai thỏ = nút Kết nối / Ngắt = 8.5% cạnh ngắn màn, kẹp 30–40 */
+.device.portrait { --pillh: 33px; }
+.device.landscape { --pillh: 32px; }
 .screen { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .device svg.ic { width: 24px; height: 24px; flex: none; }
 .device svg.ic.mini { width: 20px; height: 20px; }
@@ -90,6 +99,7 @@ button { font-family: inherit; }
 
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; margin: 4px 0; }
 .card.sel { border-color: var(--accent); }
+.card.cur { border-width: 2px; margin: 3px -1px; }
 .caption { font-size: 12px; font-weight: 500; letter-spacing: .96px; color: var(--textMuted); }
 .muted { color: var(--textMuted); }
 .lbl { font-size: 14px; font-weight: 500; }
@@ -112,7 +122,7 @@ button { font-family: inherit; }
 .field input:focus, .field select:focus { border: 1.5px solid var(--accent); }
 .field label { position: absolute; left: 15px; top: 8px; font-size: 12px; color: var(--textMuted); pointer-events: none; }
 .field input:focus + label { color: var(--accent); }
-.field.err input { border-color: var(--bad); }
+.field.err input, .field.err select { border-color: var(--bad); }
 .field .errtxt { color: var(--bad); font-size: 12px; font-weight: 500; padding: 4px 14px 0; }
 .field .count { text-align: right; font-size: 12px; color: var(--textMuted); padding: 4px 4px 0; }
 .field.dense input, .field.dense select { height: 48px; padding-top: 18px; }
@@ -198,18 +208,60 @@ input[type=range]:disabled { cursor: default; opacity: .4; }
 .trash { min-width: 0; overflow: hidden; }
 .trash span { overflow: hidden; text-overflow: ellipsis; }
 .drivebar { height: 48px; display: flex; align-items: center; gap: 4px; flex: none; }
+/* Tai thỏ (widgets/status_strip.dart): viên thuốc tối, giá trị người dùng chọn; bấm để chọn */
+.notch { display: inline-flex; align-items: center; gap: 12px; height: var(--pillh); padding: 0 12px; border-radius: 999px; background: #0B0B0D; color: #F2F2F4;
+  font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; max-width: 100%; cursor: pointer; font-variant-numeric: tabular-nums; }
+.notch.ro { cursor: default; }
+.notch.alarm-on { box-shadow: inset 0 0 0 1.5px var(--bad); }
+.notch .ni { display: inline-flex; align-items: center; gap: 4px; }
+.notch .ni .k { color: #9A9AA2; font-size: 11px; font-weight: 600; }
+.notch .ni svg { color: #9A9AA2; }
+/* Ô giá trị rộng cố định theo chuỗi dài nhất của nguồn: số đổi không làm tai thỏ co giãn */
+.notch .ni .v { display: inline-block; text-align: right; overflow: hidden; }
+.btn.linkb { min-height: 0; height: var(--pillh); border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.btn.linkb svg { width: 16px; height: 16px; }
+.notch .al { display: inline-flex; align-items: center; gap: 4px; color: var(--bad); }
+.notch .hint { color: #9A9AA2; font-weight: 500; font-size: 12px; }
+.testtg { display: inline-flex; align-items: center; gap: 4px; height: var(--pillh); padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--text);
+  font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; background: transparent; }
+.testtg.on { background: var(--accentFill); border-color: var(--accentFill); color: var(--onAccentFill); }
+.testtg.off { color: var(--disabled); }
+.livebar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; padding: 4px 12px; border-bottom: 1px solid var(--line); background: var(--surface); flex: none; }
+/* Màn dọc: tai thỏ một hàng, nút một hàng */
+.livebar .lbn { flex: 1; min-width: 0; display: flex; justify-content: center; }
+.portrait .livebar.two .lbn { flex: 0 0 100%; }
+/* Màn dọc hẹp (< 460): Thử trên xe / Kết nối chỉ còn icon */
+.portrait .livebar .tl { display: none; }
+.portrait .livebar .testtg, .portrait .livebar .btn.small { padding: 0 10px; }
+.portrait .livebar .lbsp { flex: 1; }
+.livebar .trimv { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .alarm { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--bad); color: var(--bad);
   background: color-mix(in srgb, var(--bad) 18%, transparent); font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; max-width: 100%; }
 .canvas { position: relative; flex: 1; margin-top: 4px; touch-action: none; user-select: none; }
-.canvas.editing { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size: calc(100% / 24) calc(100% / 12); outline: 1px dashed var(--line); border-radius: 4px; }
+/* Lưới dày 48×24: vạch mảnh từng ô, vạch đậm mỗi 4 ô */
+.canvas.editing { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--line) 45%, transparent) 0.5px, transparent 0.5px), linear-gradient(90deg, color-mix(in srgb, var(--line) 45%, transparent) 0.5px, transparent 0.5px);
+  background-size: calc(100% / 12) calc(100% / 6), calc(100% / 12) calc(100% / 6), calc(100% / 48) calc(100% / 24), calc(100% / 48) calc(100% / 24);
+  outline: 1px dashed var(--line); border-radius: 4px; }
 .item { position: absolute; padding: 3px; }
 .item > .in { width: 100%; height: 100%; }
 .canvas.editing .item > .in { pointer-events: none; }
 .canvas.editing .item { cursor: grab; }
 .canvas.editing .item.sel > .in { outline: 2px solid var(--accent); border-radius: 16px; }
-.canvas.editing .item .rz { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; border-radius: 50%; background: var(--accentFill); border: 3px solid var(--bg); cursor: nwse-resize; display: none; }
+/* 8 tay nắm đổi cỡ: 4 cạnh (thanh dẹp) + 4 góc (ô vuông) */
+.canvas.editing .item.sel { z-index: 2; }
+.canvas.editing .item .rz { position: absolute; z-index: 3; display: none; background: var(--accentFill); border: 1.5px solid var(--onAccentFill); }
 .canvas.editing .item.sel .rz { display: block; }
+.rz::before { content: ""; position: absolute; inset: -9px; }
+.rz.t, .rz.b { width: 28px; height: 7px; left: calc(50% - 14px); border-radius: 3px; cursor: ns-resize; }
+.rz.l, .rz.r { width: 7px; height: 28px; top: calc(50% - 14px); border-radius: 3px; cursor: ew-resize; }
+.rz.t { top: -3px; } .rz.b { bottom: -3px; } .rz.l { left: -3px; } .rz.r { right: -3px; }
+.rz.tl, .rz.tr, .rz.bl, .rz.br { width: 14px; height: 14px; border-radius: 4px; z-index: 4; }
+.rz.tl { left: -7px; top: -7px; cursor: nwse-resize; } .rz.br { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.rz.tr { right: -7px; top: -7px; cursor: nesw-resize; } .rz.bl { left: -7px; bottom: -7px; cursor: nesw-resize; }
+#sizelbl { position: absolute; z-index: 6; pointer-events: none; transform: translateX(-50%); padding: 2px 8px; border-radius: 999px; background: var(--accentFill); color: var(--onAccentFill);
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#sizelbl.bad { background: var(--bad); color: #fff; }
 #guides { position: absolute; inset: 0; pointer-events: none; }
 #guides .gl { position: absolute; background: var(--accent); opacity: .7; }
 .frameitem { height: 100%; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 8px; }
@@ -220,9 +272,9 @@ input[type=range]:disabled { cursor: default; opacity: .4; }
 .axis { position: absolute; inset: 0; background: var(--surface2); cursor: pointer; touch-action: none; }
 .axis.pv { position: relative; height: 44px; margin-top: 4px; }
 .axis .cl { position: absolute; background: var(--line); }
-.axis .bar { position: absolute; background: color-mix(in srgb, var(--accentFill) 35%, transparent); border-radius: 999px; }
-.axis .th { position: absolute; border-radius: 50%; background: var(--accentFill); }
-.axis .th::after { content: ""; position: absolute; inset: 32%; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--onAccentFill) 25%, transparent); }
+.axis .bar { position: absolute; background: color-mix(in srgb, var(--accentFill) 30%, transparent); }
+.axis .th { position: absolute; background: var(--accentFill); }
+.axis .th::after { content: ""; position: absolute; left: 50%; top: 50%; width: var(--gw, 0px); height: var(--gh, 0px); transform: translate(-50%, -50%); border-radius: 2px; background: color-mix(in srgb, var(--onAccentFill) 40%, transparent); }
 .s2 { position: absolute; inset: 0; cursor: pointer; touch-action: none; }
 .s2 .b2 { position: absolute; border-radius: 50%; background: var(--surface2); }
 .s2 .h2, .s2 .v2 { position: absolute; background: var(--line); }
@@ -242,12 +294,47 @@ input[type=range]:disabled { cursor: default; opacity: .4; }
 .gauge .gh svg { width: 14px; height: 14px; }
 .gauge .gv { font-size: 18px; font-weight: 700; }
 .gauge .gs { font-size: 11px; color: var(--textMuted); }
+/* Đèn LED (LedLamp), thanh giá trị (ValueBar), vector 2D (VectorPad) */
+.led { height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 2px 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.led .ld { flex: none; box-sizing: border-box; border-radius: 50%; border: 1.5px solid var(--line); background: var(--surface2); }
+.led .ld.unset { background: transparent; }
+.led .ld.on { background: var(--accentFill); border-color: var(--accentFill); box-shadow: 0 0 12px color-mix(in srgb, var(--accentFill) 60%, transparent); }
+.led .ll { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--textMuted); }
+.led.lit .ll { color: var(--text); }
+@keyframes ledb { 50% { background: var(--surface2); border-color: var(--line); box-shadow: none; } }
+.led .ld.on.slow { animation: ledb 1s step-end infinite; }
+.led .ld.on.fast { animation: ledb .3s step-end infinite; }
+.vbar, .vpad { position: absolute; inset: 0; }
+.vbar .bt { position: absolute; overflow: hidden; background: var(--surface2); }
+.vbar .bz { position: absolute; background: var(--line); }
+.vbar .bf { position: absolute; background: color-mix(in srgb, var(--accentFill) 55%, transparent); }
+.vbar .bl { position: absolute; border-radius: 2px; background: var(--accentFill); }
 .rowctl { display: flex; align-items: center; gap: 4px; height: 100%; }
 .rowctl .mid { flex: 1; text-align: center; min-width: 0; }
 .panel { width: 340px; flex: none; background: var(--surface); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
 .panel .body { padding: 8px 16px 24px; }
+/* Bảng trim từng kênh: nổi ở góc phải dưới thanh trên, không chặn cần gạt bên dưới (bấm giữa ô Trim để mở) */
+.trimfloat { position: absolute; z-index: 5; top: 56px; right: 8px; width: min(320px, 50%); max-height: calc(100% - 64px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  display: flex; flex-direction: column; overflow: hidden; }
+.trimfloat .hd { display: flex; align-items: center; gap: 8px; padding: 10px 6px 6px 16px; flex: none; }
+.trimfloat .hd .h-title { flex: 1; }
+.trimfloat .rows { overflow-y: auto; padding: 0 10px 8px; }
+.trimfloat .trow { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.trimfloat .trow .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; font-weight: 500; }
+.trimfloat .trow .btn.small { min-width: 40px; min-height: 36px; padding: 0; }
+.trimfloat .trow .tv { width: 76px; text-align: center; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer; }
+.trimfloat .trow .tv.zero { color: var(--textMuted); cursor: default; }
 .trash.hot { border-color: var(--bad) !important; color: var(--bad) !important; }
-.trash.over { background: color-mix(in srgb, var(--bad) 25%, transparent); }
+/* Thùng rác nổi giữa đáy lưới, chỉ hiện khi nhấn giữ kéo phần tử; thả vào là xoá ngay */
+#trashbin { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 4px;
+  pointer-events: none; z-index: 20; color: var(--bad); font-size: 13px; font-weight: 700; transition: transform .12s; }
+#trashbin.show { display: flex; }
+#trashbin .bin { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--bad); background: color-mix(in srgb, var(--surface) 92%, transparent);
+  display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,.38); transition: background .12s; }
+#trashbin .bin svg { width: 30px; height: 30px; }
+#trashbin.over { transform: translateX(-50%) scale(1.25); }
+#trashbin.over .bin { background: var(--bad); color: #fff; }
 
 /* Mix */
 .mixcard.dropto { box-shadow: 0 -3px 0 var(--accent); }
@@ -370,6 +457,8 @@ const P = {
   // Icon tự vẽ (app/assets/icons)
   bluetooth: 'M7 7.5 17 16.5 12 21V3l5 4.5-10 9',
   car: 'M3.75 14.25V12l1.8-4.5A1.5 1.5 0 0 1 6.94 6.5h10.12a1.5 1.5 0 0 1 1.39.94L20.25 12v2.25a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5ZM3.75 12h16.5M6 15.75v1.5a.75.75 0 0 0 .75.75h1.5a.75.75 0 0 0 .75-.75v-1.5m6 0v1.5a.75.75 0 0 0 .75.75h1.5a.75.75 0 0 0 .75-.75v-1.5M7.5 13.5h.01M16.5 13.5h.01',
+  chartBar: 'M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z',
+  viewfinder: 'M7.5 3.75H6A2.25 2.25 0 0 0 3.75 6v1.5M16.5 3.75H18A2.25 2.25 0 0 1 20.25 6v1.5m0 9V18A2.25 2.25 0 0 1 18 20.25h-1.5m-9 0H6A2.25 2.25 0 0 1 3.75 18v-1.5M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
   speedometer: 'M3.75 16.5a8.25 8.25 0 1 1 16.5 0M12 16.5l3.75-4.5M12 16.5h.01M6 16.5h1.5M16.5 16.5H18M12 8.25v1.5M7.05 10.8l1.06 1.06',
   steering: 'M20.25 12a8.25 8.25 0 1 1-16.5 0 8.25 8.25 0 0 1 16.5 0ZM14.25 12a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0ZM3.9 10.5l5.85 1.5M20.1 10.5l-5.85 1.5M12 14.25v6',
 };
@@ -884,20 +973,66 @@ class ArmController {
 //  Bố cục màn Lái (models/control_layout.dart, layout/*)
 // ============================================================================
 // Phần tử gắn vào Input (I3), không gắn thẳng vào kênh
-const KIND = { stickH: 'Cần gạt ngang', stickV: 'Cần gạt dọc', stick2D: 'Cần 2 trục', button: 'Nút nhấn giữ', toggle: 'Nút bật/tắt', switch3: 'Công tắc 3 nấc', knob: 'Núm xoay', gauge: 'Ô đồng hồ', trim: 'Trim lái', statusBadge: 'Trạng thái' };
+const KIND = { stickH: 'Cần gạt ngang', stickV: 'Cần gạt dọc', stick2D: 'Cần 2 trục', button: 'Nút nhấn giữ', toggle: 'Nút bật/tắt', switch3: 'Công tắc 3 nấc', knob: 'Núm xoay', gauge: 'Ô đồng hồ', trim: 'Trim lái', statusBadge: 'Trạng thái', led: 'Đèn LED', bar: 'Thanh giá trị', vector: 'Vector 2D' };
+/** Phần tử chỉ hiện một nguồn giá trị (DataSource), không điều khiển */
+const isDisplay = (k) => k === 'gauge' || k === 'led' || k === 'bar' || k === 'vector';
 const isControl = (k) => ['stickH', 'stickV', 'stick2D', 'button', 'toggle', 'switch3', 'knob'].includes(k);
 const isStickK = (k) => k === 'stickH' || k === 'stickV' || k === 'stick2D';
 const isSwitchLike = (k) => k === 'button' || k === 'toggle' || k === 'switch3';
-const GAUGES = { battery: 'Pin', current: 'Dòng', speed: 'Tốc độ', ping: 'Ping', rssi: 'RSSI', channels: 'Kênh đầu ra' };
-const LIMITS = { stickH: [6, 2, 24, 4], stickV: [2, 6, 4, 12], stick2D: [5, 5, 12, 12], button: [2, 2, 6, 4], toggle: [2, 2, 6, 4], switch3: [3, 2, 8, 4], knob: [3, 3, 6, 6], gauge: [3, 2, 8, 4], statusBadge: [3, 2, 8, 4], trim: [4, 2, 12, 4] };
-const DEF_SIZE = { stickH: [8, 3], stickV: [3, 8], stick2D: [6, 6], button: [3, 2], toggle: [3, 2], switch3: [4, 2], knob: [3, 3], gauge: [4, 2], statusBadge: [4, 2], trim: [6, 2] };
+/** models/data_source.dart — khoá nguồn: số đo xe ('battery'…), trạng thái ('arm', 'link', 'failsafe'), 'ch:N' kênh N sau mixer, 'in:<mã>' giá trị Input, 'channels' ô theo dõi 10 kênh */
+const SRC_GROUPS = { car: 'Đo từ xe', state: 'Trạng thái', channel: 'Kênh ra (sau mixer)', input: 'Input' };
+const CAR_KEYS = ['battery', 'current', 'speed', 'ping', 'rssi'], STATE_KEYS = ['arm', 'link', 'failsafe'];
+const srcCh = (n) => `ch:${n}`;
+const srcIn = (id) => `in:${id}`;
+const srcChOf = (k) => (k && k.startsWith('ch:') ? parseInt(k.slice(3), 10) || null : null);
+const srcInOf = (k) => (k && k.startsWith('in:') ? k.slice(3) : null);
+/** Thông tin nguồn; null nếu khoá không hợp lệ (vd Input đã bị xoá) */
+function srcInfo(key, p) {
+  const mk = (label, group, o = {}) => {
+    const i = { key, label, group, unit: '', decimals: 0, min: -100, max: 100, flag: false, alarm: 0, alarmBelow: false, onText: '', offText: '', ...o };
+    i.format = (v) => {
+      if (i.flag) return v >= 0.5 ? i.onText : i.offText;
+      const t = v.toFixed(i.decimals);
+      return !i.unit ? t : i.unit === '%' ? `${t}%` : `${t} ${i.unit}`;
+    };
+    return i;
+  };
+  switch (key) {
+    case 'battery': return mk('Pin', 'car', { unit: 'V', decimals: 2, min: 6, max: 8.4, alarm: 7, alarmBelow: true });
+    case 'current': return mk('Dòng', 'car', { unit: 'A', decimals: 1, min: 0, max: 20, alarm: 10 });
+    case 'speed': return mk('Tốc độ', 'car', { unit: 'km/h', decimals: 1, min: 0, max: 40, alarm: 20 });
+    case 'ping': return mk('Ping', 'car', { unit: 'ms', min: 0, max: 200, alarm: 100 });
+    case 'rssi': return mk('RSSI', 'car', { unit: 'dBm', min: -90, max: -30, alarm: -80, alarmBelow: true });
+    case 'arm': return mk('ARM', 'state', { flag: true, min: 0, max: 1, onText: 'ARMED', offText: 'DISARMED' });
+    case 'link': return mk('Kết nối', 'state', { flag: true, min: 0, max: 1, onText: 'OK', offText: 'MẤT' });
+    case 'failsafe': return mk('Failsafe', 'state', { flag: true, min: 0, max: 1, onText: 'CÓ', offText: 'KHÔNG' });
+    case 'channels': return mk('Kênh đầu ra', 'channel');
+  }
+  const n = srcChOf(key);
+  if (n != null) return n < 1 || n > p.channels.length ? null : mk(profChLabel(p, n), 'channel', { unit: '%' });
+  const d = findInput(p, srcInOf(key));
+  return d ? mk(d.name, 'input', { unit: '%', min: isUnipolar(d) ? 0 : -100 }) : null;
+}
+/** Các nguồn chọn được cho một loại phần tử, theo nhóm */
+const srcOptions = (p, kind) => [...CAR_KEYS, ...(kind === 'gauge' || kind === 'led' ? STATE_KEYS : []), ...(kind === 'gauge' ? ['channels'] : []),
+  ...p.channels.map((_, i) => srcCh(i + 1)), ...p.inputs.map((d) => srcIn(d.id))];
+/** Nhãn mặc định của phần tử hiển thị: tên nguồn (vector: "X / Y") */
+function srcLabelOf(it, p) {
+  const x = srcInfo(it.source, p)?.label ?? KIND[it.kind];
+  return it.kind === 'vector' ? `${x} / ${srcInfo(it.sourceY, p)?.label ?? '?'}` : x;
+}
+/** SizeLimits: chỉ có cỡ nhỏ nhất (theo ô lưới dày) — to tuỳ ý, miễn trong lưới và không đè phần tử khác */
+const LIMITS = { stickH: [2, 2], stickV: [2, 2], stick2D: [2, 2], knob: [2, 2], switch3: [3, 2], trim: [3, 2], button: [1, 1], toggle: [1, 1], gauge: [1, 1], statusBadge: [1, 1], led: [1, 1], bar: [1, 1], vector: [1, 1] };
+/** Lưới dày: mỗi ô của lưới cũ 24×12 chia 4. Mẫu / cỡ mặc định viết theo lưới cũ rồi nhân GK. */
+const GK = 2;
+const DEF_SIZE = Object.fromEntries(Object.entries({ stickH: [8, 3], stickV: [3, 8], stick2D: [6, 6], button: [3, 2], toggle: [3, 2], switch3: [4, 2], knob: [3, 3], gauge: [4, 2], statusBadge: [4, 2], trim: [6, 2], led: [3, 1], bar: [6, 2], vector: [4, 4] }).map(([k, [w, h]]) => [k, [w * GK, h * GK]]));
 const KNOB = { small: ['Nhỏ', 0.28], medium: ['Vừa', 0.38], large: ['Lớn', 0.5] };
 const VALUE_DISPLAY = { pct: '%', us: 'µs', hidden: 'Ẩn' };
 const RET_MODE = { spring: 'Tự về', hold: 'Giữ vị trí', halfSpring: 'Về một nửa' };
 const RET_CURVE = { linear: 'Tuyến tính', easeOut: 'Chậm dần cuối' };
 /** AppIcons.pickable: khoá lưu trong hồ sơ → tên icon trong P */
 const PICK_ICONS = { 'light-bulb': 'light', megaphone: 'horn', bolt: 'current', fire: 'fire', star: 'star', flag: 'flag', 'bell-alert': 'bellAlert', play: 'apply', 'arrow-path': 'arrowPath', home: 'home', truck: 'truck' };
-const COLS = 24, ROWS = 12;
+const COLS = 48, ROWS = 24;
 
 const newRet = (o = {}) => ({ mode: 'spring', target: 0, delay: 0, duration: 0, curve: 'linear', posOnly: false, negOnly: false, remember: false, ...o });
 const RET_PRESETS = [['Về 0% ngay', {}], ['Về 0% êm', { duration: 300, curve: 'easeOut' }], ['Giữ vị trí', { mode: 'hold' }]];
@@ -931,9 +1066,10 @@ const RM = {
   dz(v, d) { if (d <= 0) return v; const a = Math.abs(v); if (a < d) return 0; return Math.sign(v) * (a - d) / (100 - d) * 100; },
 };
 
+const newDisplay = () => ({ min: null, max: null, threshold: null, below: null, blink: 'off', trail: true });
 const newStyle = () => ({ label: null, showLabel: true, icon: null, valueDisplay: 'pct', knobSize: 'medium', deadzone: 0, haptic: true, opacity: 100, color: null });
 function mkItem(kind, x, y, w, h, o = {}) {
-  return { id: newId(), kind, input: null, inputY: null, gauge: null, x, y, w, h, style: newStyle(),
+  return { id: newId(), kind, input: null, inputY: null, source: null, sourceY: null, x, y, w, h, style: newStyle(), display: newDisplay(),
     ret: isStickK(kind) ? newRet() : null, retY: kind === 'stick2D' ? newRet() : null, saved: null, savedY: null, ...o };
 }
 /** Các Input mà phần tử điều khiển (cần 2 trục có hai: X, Y) */
@@ -948,10 +1084,19 @@ function returnFor(it, id) {
 const touchable = (it) => isControl(it.kind) || it.kind === 'trim';
 /** SizeLimits.forCell: vùng chạm tối thiểu 48 dp */
 function limitsFor(kind, cw, chh, touch) {
-  const [a, b, c, d] = LIMITS[kind];
-  if (!touch || cw <= 0 || chh <= 0) return [a, b, c, d];
-  const mw = Math.max(a, Math.ceil(48 / cw)), mh = Math.max(b, Math.ceil(48 / chh));
-  return [mw, mh, Math.max(c, mw), Math.max(d, mh)];
+  const [a, b] = LIMITS[kind];
+  if (!touch || cw <= 0 || chh <= 0) return [a, b, COLS, ROWS];
+  return [Math.max(a, Math.ceil(48 / cw)), Math.max(b, Math.ceil(48 / chh)), COLS, ROWS];
+}
+/** LayoutGrid.largestFree: kéo to đụng phần tử khác thì dừng sát phần tử đó (cạnh đối diện đứng yên) */
+function largestFree(layout, id, s, t, hx, hy) {
+  let best = null, area = -1;
+  for (let w = Math.max(s.w, t.w); w >= Math.min(s.w, t.w); w--) for (let h = Math.max(s.h, t.h); h >= Math.min(s.h, t.h); h--) {
+    if (w * h <= area) break;
+    const r = { x: hx < 0 ? t.x + t.w - w : t.x, y: hy < 0 ? t.y + t.h - h : t.y, w, h };
+    if (fits(layout, r, id)) { best = r; area = w * h; }
+  }
+  return best;
 }
 function overlaps(a, b) { return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
 function fits(layout, r, ignoreId) {
@@ -976,19 +1121,21 @@ function addControl(layout, kind, inputId = null) {
   if (it && inputId != null) bindInput(layout, it, inputId);
   return it;
 }
+/** Phần tử của mẫu: toạ độ viết theo lưới cũ 24×12, nhân lên lưới dày */
+const mkT = (kind, x, y, w, h, o) => mkItem(kind, x * GK, y * GK, w * GK, h * GK, o);
 /** Bố cục trống (mẫu "Trống"): chỉ trạng thái và đồng hồ; cần gạt, trim người dùng tự thêm */
 function blankLayout() {
   return { id: newId('lay'), name: 'Mặc định', locked: true, items: [
-    mkItem('statusBadge', 5, 0, 6, 2),
-    mkItem('gauge', 5, 2, 4, 2, { gauge: 'battery' }), mkItem('gauge', 9, 2, 4, 2, { gauge: 'current' }),
-    mkItem('gauge', 5, 4, 4, 2, { gauge: 'speed' }), mkItem('gauge', 9, 4, 4, 2, { gauge: 'ping' }),
+    mkT('statusBadge', 5, 0, 6, 2),
+    mkT('gauge', 5, 2, 4, 2, { source: 'battery' }), mkT('gauge', 9, 2, 4, 2, { source: 'current' }),
+    mkT('gauge', 5, 4, 4, 2, { source: 'speed' }), mkT('gauge', 9, 4, 4, 2, { source: 'ping' }),
   ] };
 }
 /** "Mặc định": Input Ga vào cần gạt dọc trái, Lái vào cần gạt ngang phải, đồng hồ ở giữa */
 function standardLayout(steer = 'steer', thr = 'throttle') {
   const l = blankLayout();
-  l.items.push(mkItem('trim', 14, 6, 10, 2),
-    mkItem('stickV', 0, 1, 4, 11, { input: thr }), mkItem('stickH', 14, 9, 10, 3, { input: steer }));
+  l.items.push(mkT('trim', 14, 6, 10, 2),
+    mkT('stickV', 0, 1, 4, 11, { input: thr }), mkT('stickH', 14, 9, 10, 3, { input: steer }));
   return l;
 }
 /** ControlLayout.bindInput — một Input chỉ có một phần tử trên bố cục (I3); id = null để bỏ gắn. Trả về phần tử bị gỡ Input. */
@@ -1016,8 +1163,8 @@ function layoutValidate(l, thrInputs = new Set(), steerInputs = new Set()) {
   const seen = new Set();
   for (const i of l.items) {
     if (i.x < 0 || i.y < 0 || i.x + i.w > COLS || i.y + i.h > ROWS) return `${KIND[i.kind]} nằm ngoài lưới`;
-    const [a, b, c, d] = LIMITS[i.kind];
-    if (i.w < a || i.h < b || i.w > c || i.h > d) return `${KIND[i.kind]} có kích thước ngoài giới hạn`;
+    const [a, b] = LIMITS[i.kind];
+    if (i.w < a || i.h < b) return `${KIND[i.kind]} quá nhỏ`;
     if (l.items.some((o) => o.id !== i.id && overlaps(o, i))) return 'Có phần tử chồng lên nhau';
     for (const id of itemIns(i)) { if (seen.has(id)) return `Input "${id}" có nhiều hơn một phần tử trên màn`; seen.add(id); }
     const err = (i.ret && retError(i.ret)) || (i.retY && retError(i.retY));
@@ -1330,7 +1477,7 @@ function discover(id, done) {
 // ============================================================================
 const S = {
   theme: 'dark', accent: 'lime', lang: 'vi', screen: 'garage', history: [], profiles: [],
-  connectedId: null, link: 'disconnected', connectingId: null, ping: {}, pinging: {}, carCfg: {},
+  connectedId: null, selectedId: null, link: 'disconnected', connectingId: null, ping: {}, pinging: {}, carCfg: {},
   wizard: null, settings: null, chEdit: null, mixEdit: null, inEdit: null, net: null, ctl: null,
   pos: {}, swPos: {}, tel: null, overlay: null, raw: {}, cbGroup: {}, arm: new ArmController(),
 };
@@ -1380,6 +1527,9 @@ function accentVars(key, t, always = false) {
   return v;
 }
 const prof = (id) => S.profiles.find((p) => p.id === id);
+/** ProfileRepository.selectedId: xe đang chọn (như model trên tay RC); chưa chọn thì là xe nối gần nhất */
+const selectedId = () => S.profiles.some((x) => x.id === S.selectedId) ? S.selectedId
+  : [...S.profiles].sort((a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0))[0]?.id ?? null;
 const isConnected = (p) => !!p && S.connectedId === p.id && (S.link === 'connected' || S.link === 'lost');
 /** CarController._onArmChanged: DISARM → hysteresis + khoá an toàn về ban đầu */
 let renderQueued = false;
@@ -1518,8 +1668,10 @@ function locate(p, done) {
     done(true);
   });
 }
-function connect(p) {
-  if (p.conn === 'ble' && !p.ble.mac) { snack('Hồ sơ chưa có MAC. Bấm Sửa để chọn xe BLE.'); return; }
+/** CarConnector.connect: nối xe nào thì xe đó thành xe đang chọn. quiet: nối lúc mở app, không báo lỗi */
+function connect(p, quiet = false) {
+  if (p.conn === 'ble' && !p.ble.mac) { if (!quiet) snack('Hồ sơ chưa có MAC. Bấm Sửa để chọn xe BLE.'); return; }
+  S.selectedId = p.id;
   if (S.connectedId) disconnect();
   S.connectingId = p.id;
   locate(p, (found) => {
@@ -1528,6 +1680,7 @@ function connect(p) {
       S.connectingId = null;
       if (!carReachable(p.conn, p.wifi.ip, p.wifi.port, p.ble.mac)) {
         S.connectedId = null; S.link = 'disconnected'; render();
+        if (quiet) return;
         const err = 'Kết nối thất bại: xe không trả lời cấu hình';
         snack(found ? err : `${err}. Không thấy xe trong mạng: kiểm tra điện thoại và xe cùng router (không dùng mạng khách). Xe không vào được router thì sau 15 giây tự phát WiFi riêng.`);
         return;
@@ -1535,13 +1688,85 @@ function connect(p) {
       S.link = document.getElementById('simLost').checked ? 'lost' : 'connected';
       p.lastConnectedAt = Date.now();
       S.arm.onConnected(); // CONNECTED "Đang đồng bộ…": chưa ARM được tới khi đồng bộ failsafe xong
-      openControl(p.id);
+      render();
       // Không có bước "đọc từ xe": hồ sơ trong app luôn được đưa xuống xe (E6); xong thì READY
       setTimeout(() => { if (S.connectedId === p.id && S.link !== 'disconnected') { syncProfile(p); render(); } }, 700);
     }, 900);
   });
 }
-function disconnect() { S.connectedId = null; S.link = 'disconnected'; S.tel = null; S.arm.onDisconnected(); }
+function disconnect() { S.connectedId = null; S.link = 'disconnected'; S.tel = null; S.testing = false; S.arm.onDisconnected(); }
+
+// ---------- Thanh trên cùng: tai thỏ + Kết nối / Ngắt (widgets/status_strip.dart) ----------
+const DEF_STATUS = ['link', 'battery', 'rssi'], MAX_STATUS = 6;
+const statusItemsOf = (p) => p.statusItems || (p.statusItems = [...DEF_STATUS]);
+const statusOptions = (p) => ['battery', 'current', 'speed', 'ping', 'rssi', 'arm', 'link', 'failsafe', ...CHS.map(srcCh), ...p.inputs.map((d) => srcIn(d.id))];
+const STATUS_ICON = { battery: 'batteryHalf', current: 'current', speed: 'speedometer', ping: 'signal', rssi: 'signal', arm: 'locked', link: 'connect', failsafe: 'warning' };
+/** Tai thỏ: `alarm` hiện đỏ trước các giá trị; `onTap` = null khi không cho sửa (đang ARM) */
+function notch(p, alarm, onTap) {
+  const draft = S.screen === 'settings' && S.settings?.draft === p;
+  return `<div class="notch${onTap ? '' : ' ro'}${alarm ? ' alarm-on' : ''}" data-notch="${p.id}" ${draft ? 'data-draft="1"' : ''} data-alarm="${esc(alarm ?? '')}" data-tap="${onTap ? 1 : 0}"
+    title="Thanh trạng thái${onTap ? ' · bấm để chọn giá trị' : ''}" ${onTap ? `data-act="${A(onTap)}"` : ''}>${notchBody(p, alarm, !!onTap)}</div>`;
+}
+/** Nội dung tai thỏ; vẽ lại theo telemetry (updateGauges) mà không dựng lại cả màn */
+function notchBody(p, alarm, tappable) {
+  const here = S.connectedId === p.id;
+  const items = statusItemsOf(p).filter((k) => srcInfo(k, p)).map((k) => {
+    const info = srcInfo(k, p), v = here || !['battery', 'current', 'speed', 'rssi', 'failsafe'].includes(k) ? readSrc(p, k) : null;
+    let col = '#F2F2F4';
+    if (v != null && info.flag) col = k === 'link' ? (v >= 0.5 ? 'var(--ok)' : 'var(--bad)') : k === 'failsafe' ? (v >= 0.5 ? 'var(--bad)' : col) : v >= 0.5 ? 'var(--accent)' : '#9A9AA2';
+    else if (v != null && info.group === 'car' && (info.alarmBelow ? v < info.alarm : v > info.alarm)) col = 'var(--warn)';
+    const icon = STATUS_ICON[k] ? ic(k === 'link' && v !== 1 ? 'disconnect' : k === 'arm' && v === 1 ? 'unlocked' : STATUS_ICON[k], { size: 16 }) : `<span class="k">${esc(info.label)}</span>`;
+    return `<span class="ni">${icon}<span class="v" style="color:${col};width:${slotCh(info)}ch">${v == null ? '--' : esc(info.format(v))}</span></span>`;
+  });
+  return (alarm ? `<span class="al">${ic('warning', { size: 16 })}${esc(alarm)}</span>` : '') + items.join('') +
+    (!items.length && !alarm && tappable ? '<span class="hint">Bấm để chọn giá trị hiện</span>' : '');
+}
+/** Số ký tự của chuỗi dài nhất nguồn hiện ra trong khoảng min..max (chữ số dạng bảng) */
+function slotCh(info) {
+  if (info.flag) return Math.max(info.onText.length, info.offText.length, 2);
+  const digits = String(Math.trunc(Math.max(Math.abs(info.min), Math.abs(info.max)))).length;
+  return info.format(0).replace(/^[0-9.]+/, (info.min < 0 ? '-' : '') + '8'.repeat(digits) + (info.decimals > 0 ? '.' + '8'.repeat(info.decimals) : '')).length;
+}
+/** Chọn giá trị hiện trên tai thỏ (thứ tự theo lúc chọn, tối đa 6) */
+function pickStatusItems(p, done) {
+  const picked = [...statusItemsOf(p)];
+  S.overlay = { type: 'sheet', html: () => `<div class="handle"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div class="h-title" style="flex:1">Thanh trạng thái (${picked.length}/${MAX_STATUS})</div>
+      <button class="btn text small" data-act="${A(() => { picked.splice(0, picked.length, ...DEF_STATUS); })}">Mặc định</button>
+      <button class="btn filled small" data-act="${A(() => { done(picked); closeOverlay(); })}">Xong</button></div>
+    ${statusOptions(p).filter((k) => srcInfo(k, p)).map((k) => {
+      const on = picked.includes(k), dis = !on && picked.length >= MAX_STATUS, info = srcInfo(k, p);
+      return `<div class="row" style="${dis ? 'opacity:.45' : ''}" ${dis ? '' : `data-act="${A(() => { on ? picked.splice(picked.indexOf(k), 1) : picked.push(k); })}"`}>
+        <span style="width:22px;height:22px;flex:none;border-radius:6px;border:2px solid ${on ? 'var(--accentFill)' : 'var(--line)'};background:${on ? 'var(--accentFill)' : 'transparent'};color:var(--onAccentFill);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">${on ? picked.indexOf(k) + 1 : ''}</span>
+        <div><div>${esc(info.label)}</div><div class="muted" style="font-size:12px">${{ car: 'Đo từ xe', state: 'Trạng thái', channel: 'Kênh ra (sau mixer)', input: 'Input' }[info.group]}</div></div></div>`;
+    }).join('')}` };
+  render();
+}
+/** Nút Kết nối / Ngắt / Nối lại của xe đang mở. Tắt cơ chế ARM thì xe tự ARM ngay khi đủ điều kiện
+ *  và không có nút DISARM: không chặn việc ngắt; chỉ chặn khi cơ chế ARM đang bật và đang ARMED. */
+function linkButton(p) {
+  const here = S.connectedId === p.id && S.link !== 'disconnected';
+  if (S.connectingId === p.id || (here && S.link === 'connecting')) return `<button class="btn outlined small linkb" disabled>${spinner}<span class="tl">Đang nối</span></button>`;
+  if (here && S.link === 'connected') {
+    const locked = S.arm.enabled && S.arm.armed;
+    return locked ? `<button class="btn outlined small linkb" disabled title="DISARM trước khi ngắt">${ic('disconnect', { mini: true })}<span class="tl">Ngắt</span></button>`
+      : `<button class="btn outlined small linkb" title="Ngắt kết nối" data-act="${A(() => { disconnect(); snack('Đã ngắt kết nối'); })}">${ic('disconnect', { mini: true })}<span class="tl">Ngắt</span></button>`;
+  }
+  const busy = S.connectingId != null;
+  return `<button class="btn filled small linkb" ${busy ? 'disabled' : ''} data-act="${A(() => connect(p))}">${ic('connect', { mini: true })}<span class="tl">${here ? 'Nối lại' : 'Kết nối'}</span></button>`;
+}
+/** Thử trên xe (màn Cấu hình): lý do chưa bật được, null nếu được */
+function testBlock(p) {
+  if (!isConnected(p)) return 'Chưa kết nối xe';
+  if (S.link === 'lost') return 'Mất tín hiệu';
+  if (S.arm.state !== 'ready') return `Chưa sẵn sàng (${ARM_LABEL[S.arm.state] ?? S.arm.state})`;
+  return null;
+}
+function testToggle(p) {
+  const on = !!S.testing, block = testBlock(p);
+  return `<button class="testtg${on ? ' on' : block ? ' off' : ''}" title="${esc(on ? 'Đang thử: kênh ra theo cấu hình đang sửa. Bấm để tắt' : block ?? 'Thử trên xe: kênh ra theo cấu hình đang sửa')}"
+    data-act="${A(() => { if (!on && block) { snack(block); return; } S.testing = !on; })}">${ic(on ? 'signal' : 'signalOff', { mini: true })}<span class="tl">${on ? 'Đang thử' : 'Thử trên xe'}</span></button>`;
+}
 /** Báo cáo một lần các hồ sơ vừa được tự chuyển sang mô hình Input → Mixer (garage_screen.dart, J4) */
 function migrationReport() {
   const reports = [[S.profiles[0]?.name ?? 'Xe tải đỏ', ['Đã bỏ hộp số: ga không còn bị giới hạn theo số (30/60/100%). Muốn giảm ga tối đa, hạ Max của kênh Ga.']], [S.profiles[1]?.name ?? 'Buggy xanh', []]];
@@ -1619,7 +1844,9 @@ function langMenu(ev) {
   ]);
 }
 function renderGarage() {
-  const list = document.getElementById('simEmpty').checked ? [] : S.profiles;
+  const sel = selectedId();
+  // Xe đang chọn luôn nằm đầu danh sách
+  const list = document.getElementById('simEmpty').checked ? [] : [...S.profiles].sort((a, b) => (b.id === sel) - (a.id === sel));
   let body;
   if (!list.length) {
     body = `<div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;text-align:center"><div>
@@ -1635,10 +1862,15 @@ function renderGarage() {
     <button class="langbtn" title="${tr('Ngôn ngữ', 'Language')}" data-menu="${A(langMenu)}">${ic('language', { mini: true })}${S.lang === 'en' ? 'EN' : 'VN'}</button>
     <button class="iconbtn" title="${tr('Cài đặt', 'Settings')}" data-act="${A(() => go('appSettings'))}">${ic('settings')}</button></div>${body}`;
 }
+/** Bấm thẻ xe: vào thẳng màn Lái; chưa nối thì tự kết nối, nối không được vẫn ở màn Lái (có nút Kết nối) */
+function driveCar(p) {
+  openControl(p.id);
+  if (!isConnected(p) && S.connectingId == null) connect(p);
+}
 function garageCard(p) {
-  const connected = isConnected(p), connecting = S.connectingId === p.id, busy = S.link === 'connecting' || S.connectingId != null;
+  const connected = isConnected(p), selected = selectedId() === p.id, connecting = S.connectingId === p.id, busy = S.link === 'connecting' || S.connectingId != null;
   const ping = S.ping[p.id], pinging = S.pinging[p.id];
-  return `<div class="card${connected ? ' sel' : ''}" style="padding:12px 4px 12px 16px">
+  return `<div class="card${connected || selected ? ' sel' : ''}${selected ? ' cur' : ''}" style="padding:12px 4px 12px 16px;cursor:pointer" data-act="${A(() => driveCar(p))}">
     <div style="display:flex;align-items:center;gap:12px">
       <div title="${p.photo ? tr('Đổi ảnh xe', 'Change car photo') : tr('Chọn ảnh cho xe', 'Choose a car photo')}" data-act="${A(() => carPhoto(p))}" style="width:56px;height:56px;flex:none;border-radius:12px;overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;background:${connected ? 'var(--accentContainer)' : 'var(--surface2)'};color:${connected ? 'var(--onAccentContainer)' : 'var(--textMuted)'}">${p.photo
         ? `<img src="${esc(p.photo)}" alt="" style="width:100%;height:100%;object-fit:cover">` : ic('car')}</div>
@@ -1649,12 +1881,12 @@ function garageCard(p) {
       </div>
       <button class="iconbtn" style="color:var(--textMuted)" data-menu="${A((e) => garageMenu(e, p))}">${ic('more')}</button>
     </div>
-    ${connected || ping ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${connected ? statusPill(S.link) : ''}${ping ? pill(ping.ok ? 'var(--ok)' : 'var(--bad)', ping.label) : ''}</div>` : ''}
+    ${selected || connected || ping ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${selected ? pill('var(--accent)', tr('Đang chọn', 'Selected')) : ''}${connected ? statusPill(S.link) : ''}${ping ? pill(ping.ok ? 'var(--ok)' : 'var(--bad)', ping.label) : ''}</div>` : ''}
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+      <button class="btn filled" data-act="${A(() => driveCar(p))}">${ic('steering', { mini: true })}${tr('Lái', 'Drive')}</button>
       ${connected
-        ? `<button class="btn filled" data-act="${A(() => openControl(p.id))}">${ic('steering', { mini: true })}${tr('Lái', 'Drive')}</button>
-           <button class="btn outlined" data-act="${A(disconnect)}">${ic('disconnect', { mini: true })}${tr('Ngắt', 'Disconnect')}</button>`
-        : `<button class="btn filled" ${busy ? 'disabled' : ''} data-act="${A(() => connect(p))}">${connecting ? spinner : ic('connect', { mini: true })}${connecting ? tr('Đang kết nối', 'Connecting') : tr('Kết nối', 'Connect')}</button>`}
+        ? `<button class="btn outlined" data-act="${A(disconnect)}">${ic('disconnect', { mini: true })}${tr('Ngắt', 'Disconnect')}</button>`
+        : `<button class="btn outlined" ${busy ? 'disabled' : ''} data-act="${A(() => connect(p))}">${connecting ? spinner : ic('connect', { mini: true })}${connecting ? tr('Đang kết nối', 'Connecting') : selected ? tr('Kết nối', 'Connect') : tr('Chọn xe', 'Select car')}</button>`}
       <button class="btn outlined" data-act="${A(() => openSettings(p.id))}">${ic('config', { mini: true })}${tr('Sửa', 'Edit')}</button>
       <button class="btn outlined" ${pinging ? 'disabled' : ''} data-act="${A(() => testPing(p))}">${pinging ? spinner : ic('signal', { mini: true })}${tr('Kiểm tra', 'Test')}</button>
     </div></div>`;
@@ -1789,9 +2021,11 @@ function openSettings(pid, tab = 0) {
   go('settings');
 }
 const settingsDirty = () => draftJson(S.settings.draft) !== S.settings.saved;
+/** Rời Cấu hình: tắt Thử trên xe, xe về theo hồ sơ đã lưu */
+const leaveSettings = () => { S.testing = false; back(); };
 function settingsBack() {
-  if (settingsDirty()) confirmDlg('Bỏ thay đổi?', 'Các thay đổi chưa lưu sẽ bị mất.', 'Bỏ', back);
-  else back();
+  if (settingsDirty()) confirmDlg('Bỏ thay đổi?', 'Các thay đổi chưa lưu sẽ bị mất.', 'Bỏ', leaveSettings);
+  else leaveSettings();
 }
 /** Chọn kênh làm Ga / Lái (hoặc không có), kèm cảnh báo nếu kênh đã chọn chưa có luật / phần tử */
 function rolePicker(d, throttle) {
@@ -1891,7 +2125,7 @@ function mixTab(d) {
 function layoutTab(d) {
   const l = d.layout, controls = l.items.filter((i) => isControl(i.kind)).length;
   const label = (it) => it.style.showLabel && it.style.label && it.style.label.trim() ? it.style.label
-    : it.kind === 'gauge' ? GAUGES[it.gauge] : (findInput(d, it.input)?.name ?? KIND[it.kind]);
+    : isDisplay(it.kind) ? srcLabelOf(it, d) : (findInput(d, it.input)?.name ?? KIND[it.kind]);
   const tiles = l.items.map((it) => `<div class="lp-it${isControl(it.kind) ? ' c' : ''}" style="${itemVars(it)}left:${it.x / COLS * 100}%;top:${it.y / ROWS * 100}%;width:${it.w / COLS * 100}%;height:${it.h / ROWS * 100}%"><span>${esc(label(it))}</span></div>`).join('');
   return hint('Bố cục là cách cần gạt, nút, công tắc và đồng hồ được xếp trên màn Lái (màn ngang). Sửa bố cục để kéo thả, đổi cỡ, thêm phần tử, gắn Input và chỉnh kiểu hiển thị của từng phần tử.') +
     `<div class="card" style="padding:12px;cursor:pointer" data-act="${A(editLayoutFromSettings)}"><div class="lprev">${tiles}</div></div>
@@ -1960,6 +2194,16 @@ function saveSettings() {
   if (!isConnected(prof(st.pid))) snack('Đã lưu vào máy');
   else snack(syncProfile(d) ? 'Đã lưu và đồng bộ failsafe với xe' : 'Đã lưu, có tác dụng ngay');
 }
+/** Thanh trên cùng của Cấu hình: kết nối được giữ khi vào Cấu hình, chỉnh gì xe đổi theo ngay (bản nháp hợp lệ),
+ *  trim Lái nhanh, bật "Thử trên xe" để kênh ra theo cấu hình đang sửa khi chưa ARM */
+function liveBar(p, d, errors) {
+  const here = isConnected(p), steer = d.steeringCh ? d.channels[d.steeringCh - 1] : null;
+  const alarm = !here ? 'Chưa kết nối xe' : S.link === 'lost' ? 'Mất tín hiệu' : errors.length ? 'Hồ sơ lỗi: chưa áp dụng' : null;
+  const trim = (dv) => { steer.trim = clamp(steer.trim + dv, -200, 200); };
+  return `<div class="livebar${here ? ' two' : ''}"><div class="lbn">${notch(d, alarm, () => pickStatusItems(d, (r) => { d.statusItems = r; }))}</div>
+    ${here && steer ? `<button class="iconbtn" title="Trim Lái −5 µs" ${steer.trim > -200 ? '' : 'disabled'} data-act="${A(() => trim(-5))}">◀</button><span class="trimv">Trim ${steer.trim} µs</span><button class="iconbtn" title="Trim Lái +5 µs" ${steer.trim < 200 ? '' : 'disabled'} data-act="${A(() => trim(5))}">▶</button>` : ''}
+    <span class="lbsp"></span>${here ? testToggle(p) : ''}${linkButton(p)}</div>`;
+}
 function renderSettings() {
   const st = S.settings, d = st.draft, p = prof(st.pid);
   const connected = isConnected(p);
@@ -1973,6 +2217,7 @@ function renderSettings() {
   const reset = () => confirmDlg('Khôi phục mặc định?', 'Kênh, luật mix, failsafe và ARM về mặc định (chỉ giữ luật vào kênh Ga/Lái đã chọn). Tên, kết nối, Input, bố cục và việc chọn kênh Ga/Lái được giữ lại. Chỉ ghi vào máy khi bấm Lưu.', 'Khôi phục', () => resetConfig(d));
   return `<div class="appbar" style="border-bottom:0"><button class="iconbtn" data-act="${A(settingsBack)}">${ic('back')}</button><div class="title">${esc(d.name.trim() || 'Cấu hình')}</div></div>
     <div class="tabs">${SET_TABS.map((t, i) => `<button class="${st.tab === i ? 'on' : ''}" data-act="${A(() => { st.tab = i; })}">${t}</button>`).join('')}</div>
+    ${liveBar(p, d, errors)}
     <div class="body" data-scroll="set${st.tab}">${content}</div>${tabFoot(d, st.tab)}
     <div class="bottombar">
       ${!valid ? `<div style="display:flex;gap:8px;align-items:center;color:var(--bad);font-size:14px;font-weight:500;margin-bottom:8px">${ic('warning', { mini: true })}${esc(errors[0])}</div>`
@@ -2258,11 +2503,14 @@ function renderChannel() {
     switchRow('Đảo chiều (Reverse)', c.reverse, () => { c.reverse = !c.reverse; }) +
     numField('Failsafe', c.failsafe, { min: 500, max: 2500, step: 10, unit: ' µs', err: e.failsafe }, upd('failsafe'));
   if (isMain && (c.min < 800 || c.max > 2200)) h += `<div style="display:flex;gap:8px;align-items:center;color:var(--warn);font-size:14px;font-weight:500;margin-top:8px">${ic('warning', { mini: true })}Firmware xe hiện tại chỉ nhận 800–2200 µs cho CH1/CH2.</div>`;
-  h += `<div class="divider"></div><div class="h-title">Xem trước</div><div class="lbl muted" style="margin-top:4px">Kéo thử để thấy giá trị xe sẽ xuất ra.</div>` +
+  h += `<div class="divider"></div><div class="h-title">Xem trước</div><div class="lbl muted" style="margin-top:4px">${S.testing
+    ? 'Đang thử trên xe: kéo là kênh trên xe chạy theo, thả tay kênh về vị trí nghỉ.'
+    : 'Kéo thử để thấy giá trị xe sẽ xuất ra. Bật "Thử trên xe" để kênh trên xe chạy theo.'}</div>` +
     slider({ min: -100, max: 100, value: ce.preview, disabled: !ok,
       set: (v) => { ce.preview = v; }, after: () => { const el = document.getElementById('chm'); if (el) el.innerHTML = chMetrics(c, ce.preview, ok); } }) +
     `<div class="metrics" id="chm">${chMetrics(c, ce.preview, ok)}</div><div style="height:24px"></div>`;
-  return `<div class="appbar"><button class="iconbtn" data-act="${A(back)}">${ic('back')}</button><div class="title">${chLabel(c)} · ${esc(c.name)}</div></div>
+  const pr = prof(S.settings.pid);
+  return `<div class="appbar"><button class="iconbtn" data-act="${A(back)}">${ic('back')}</button><div class="title">${chLabel(c)} · ${esc(c.name)}</div>${isConnected(pr) ? `<div style="margin-right:8px">${testToggle(pr)}</div>` : ''}</div>
     <div class="body" data-scroll="ch${c.index}">${h}</div>`;
 }
 
@@ -2492,7 +2740,7 @@ const ctlLayout = () => S.ctl && (S.ctl.editing ? S.ctl.draft : ctlProfile()?.la
 /** editOnly: mở từ Cấu hình ▸ Bố cục — vào thẳng Sửa bố cục, Lưu / Huỷ thì về Cấu hình */
 function openControl(pid, editOnly = false) {
   const p = prof(pid);
-  S.ctl = { pid, editOnly, editing: false, draft: null, sel: null, undo: [], redo: [], snap: null, pipe: null, armCond: null, errors: [] };
+  S.ctl = { pid, editOnly, editing: false, draft: null, sel: null, panel: null, trimOpen: false, undo: [], redo: [], snap: null, pipe: null, armCond: null, errors: [] };
   loadPipe();
   initValues();
   go('control');
@@ -2565,7 +2813,7 @@ function leaveControl() {
 function itemLabel(p, it) {
   if (!it.style.showLabel) return null;
   if (it.style.label && it.style.label.trim()) return it.style.label;
-  if (it.kind === 'gauge') return GAUGES[it.gauge];
+  if (isDisplay(it.kind)) return srcLabelOf(it, p);
   return findInput(p, it.input)?.name ?? KIND[it.kind];
 }
 /** Giá trị trên phần tử: % của Input, hoặc µs của kênh nếu Input được gắn nhanh tới một kênh */
@@ -2577,6 +2825,11 @@ function valText(p, it, id) {
   return ch == null || !out ? `${Math.round(pct)}%` : `${toUs(p.channels[ch - 1], out[ch - 1])} µs`;
 }
 function trailingText(p, it) {
+  if (it.kind === 'bar' || it.kind === 'vector') {
+    if (it.style.valueDisplay === 'hidden') return null;
+    return it.kind === 'bar' ? fmtSrc(p, it, it.source, readSrc(p, it.source))
+      : `${fmtSrc(p, it, it.source, readSrc(p, it.source))} · ${fmtSrc(p, it, it.sourceY, readSrc(p, it.sourceY))}`;
+  }
   if (it.input == null) return null;
   if (it.kind === 'stick2D') {
     const xs = valText(p, it, it.input), ys = it.inputY == null ? null : valText(p, it, it.inputY);
@@ -2587,16 +2840,58 @@ function trailingText(p, it) {
 function frame(label, trailing, inner, style = '') {
   return `<div class="frameitem" style="${style}">${label != null || trailing != null ? `<div class="hd"><span class="caption">${esc(label ?? '')}</span>${trailing != null ? `<span class="val">${trailing}</span>` : ''}</div>` : ''}<div class="ct">${inner}</div></div>`;
 }
-function gaugeData(key) {
-  const t = S.tel;
+/** Giá trị hiện tại của một nguồn (null = chưa có dữ liệu). Trạng thái đúng/sai trả về 1/0. */
+function readSrc(p, key) {
+  const t = S.connectedId === p.id ? S.tel : null, ctl = S.ctl;
   switch (key) {
-    case 'battery': return [t ? 'batteryHalf' : 'batteryEmpty', t ? `${t.v.toFixed(2)} V` : '--', null];
-    case 'current': return ['current', t ? `${t.a.toFixed(1)} A` : '--', null];
-    case 'speed': return ['speedometer', t ? `${t.kmh.toFixed(1)} km/h` : '--', null];
-    // Ping ngầm khi lái (F6) chưa làm — như app: tạm hiện RSSI ở dòng phụ
-    case 'ping': return ['signal', '--', t && t.rssi ? `RSSI ${t.rssi} dBm` : null];
-    case 'rssi': return [t && t.rssi ? 'signal' : 'signalOff', t && t.rssi ? `${t.rssi} dBm` : '--', null];
+    case 'battery': return t ? t.v : null;
+    case 'current': return t ? t.a : null;
+    case 'speed': return t ? t.kmh : null;
+    case 'rssi': return t && t.rssi ? t.rssi : null;
+    case 'ping': return null; // chưa đo ping ngầm khi lái
+    case 'arm': return S.arm.armed ? 1 : 0;
+    case 'link': return S.connectedId === p.id && S.link === 'connected' ? 1 : 0;
+    case 'failsafe': return t ? (t.failsafe ? 1 : 0) : null;
   }
+  const n = srcChOf(key);
+  if (n != null) { const out = ctl?.pipe?.lastPct; return !out || n < 1 || n > out.length ? null : out[n - 1]; }
+  const id = srcInOf(key);
+  if (id != null && findInput(p, id)) return ctl?.pipe ? ctl.pipe.inputs.valueOf(id) : S.pos[id] ?? 0;
+  return null;
+}
+/** Chữ hiện giá trị của nguồn; kênh ra hiện µs nếu phần tử chọn µs */
+function fmtSrc(p, it, key, v) {
+  const info = srcInfo(key, p);
+  if (!info || v == null) return '--';
+  const n = srcChOf(key);
+  if (n != null && it.style.valueDisplay === 'us') return `${toUs(p.channels[n - 1], v)} µs`;
+  return info.format(v);
+}
+/** Giá trị về −1…+1 theo khoảng mặc định của nguồn (trục vector) */
+function normSrc(p, key, v) {
+  const info = srcInfo(key, p);
+  return !info || v == null || info.max <= info.min ? null : (v - info.min) / (info.max - info.min) * 2 - 1;
+}
+/** Trạng thái đèn LED lần trước, để có trễ quanh ngưỡng (pin sụt áp khi tăng ga không làm đèn nháy loạn) */
+const LED_LAST = {};
+function ledOn(p, it) {
+  const info = srcInfo(it.source, p), v = readSrc(p, it.source);
+  if (!info || v == null) return null;
+  if (info.flag) return v >= 0.5;
+  const th = it.display.threshold ?? info.alarm, below = it.display.below ?? info.alarmBelow;
+  const hyst = Math.abs(info.max - info.min) * 0.02, was = LED_LAST[it.id] ?? false;
+  const on = below ? v < (was ? th + hyst : th) : v > (was ? th - hyst : th);
+  LED_LAST[it.id] = on;
+  return on;
+}
+function gaugeIcon(key) {
+  const t = S.tel, sig = t && t.rssi ? 'signal' : 'signalOff';
+  return { battery: t ? 'batteryHalf' : 'batteryEmpty', current: 'current', speed: 'speedometer', ping: sig, rssi: sig }[key] ?? null;
+}
+/** [chữ giá trị, dòng phụ] của ô đồng hồ. Ping chưa đo khi lái: tạm hiện RSSI ở dòng phụ */
+function gaugeText(p, it) {
+  const t = S.tel;
+  return [fmtSrc(p, it, it.source, readSrc(p, it.source)), it.source === 'ping' && t && t.rssi ? `RSSI ${t.rssi} dBm` : null];
 }
 /** Ô "Kênh đầu ra": 10 thanh nhỏ hiện % của CH1–CH10 sau mixer (U6) */
 const monitorHtml = () => `<div class="mon" data-mon="1">${CHS.map((i) => `<div class="mb"><div class="mt"><div class="mf"></div></div><span>${i}</span></div>`).join('')}</div>`;
@@ -2713,28 +3008,30 @@ function renderItem(p, it) {
       return frame(lbl, trail, `<div class="knob" data-knob="${it.id}"></div>`);
     }
     case 'gauge': {
-      const glabel = it.style.showLabel ? (it.style.label ?? GAUGES[it.gauge]) : '';
-      if (it.gauge === 'channels') return frame(glabel || null, null, monitorHtml(), 'padding:4px 4px 2px');
-      const [icon, v, sub] = gaugeData(it.gauge);
-      return `<div class="gauge" data-gauge="${it.id}"><div class="gh">${ic(icon)}<span class="caption">${esc(glabel.toUpperCase())}</span></div><div class="gv">${v}</div><div class="gs">${sub ?? ''}</div></div>`;
+      const glabel = lbl ?? '';
+      if (it.source === 'channels') return frame(glabel || null, null, monitorHtml(), 'padding:4px 4px 2px');
+      const icon = gaugeIcon(it.source), [v, sub] = gaugeText(p, it);
+      return `<div class="gauge" data-disp="${it.id}"><div class="gh">${icon ? ic(icon) : ''}<span class="caption">${esc(glabel.toUpperCase())}</span></div><div class="gv">${esc(v)}</div><div class="gs">${esc(sub ?? '')}</div></div>`;
     }
+    case 'led':
+      return `<div class="led" data-disp="${it.id}"><span class="ld"></span>${lbl ? `<span class="ll caption">${esc(lbl.toUpperCase())}</span>` : ''}</div>`;
+    case 'bar':
+      return frame(lbl, trail, `<div class="vbar" data-disp="${it.id}"><div class="bt"><div class="bz"></div><div class="bf"></div><div class="bl"></div></div></div>`, 'padding:4px 8px');
+    case 'vector':
+      return frame(lbl, trail, `<div class="vpad" data-disp="${it.id}"></div>`, 'padding:4px');
     case 'trim': {
       // Trim nhanh cho kênh Lái đã chọn trong hồ sơ
       if (p.steeringCh == null) {
+        // Bấm giữa vẫn mở được bảng trim từng kênh dù chưa chọn kênh Lái
         return frame(lbl, null, `<div class="rowctl"><button class="btn outlined small" disabled>◀</button>
-          <div class="mid muted" style="font-size:14px;font-weight:500;white-space:nowrap">Chưa chọn kênh Lái</div>
+          <div class="mid muted" style="font-size:14px;font-weight:500;white-space:nowrap;cursor:pointer" title="Bấm để trim từng kênh" data-act="${A(() => { S.ctl.trimOpen = !S.ctl.trimOpen; })}">Chưa chọn kênh Lái</div>
           <button class="btn outlined small" disabled>▶</button></div>`, 'padding:4px');
       }
       const s = p.channels[p.steeringCh - 1];
-      const trim = (d) => {
-        const nv = clamp(s.trim + d, -200, 200);
-        if (nv === s.trim) return;
-        s.trim = nv;
-        if (isConnected(p)) S.carCfg[p.id] = carConfigOf(p);
-      };
-      return frame(lbl, null, `<div class="rowctl"><button class="btn outlined small" ${s.trim > -200 ? '' : 'disabled'} data-rep="trim:-" data-act="${A(() => trim(-5))}">◀</button>
-        <div class="mid" style="font-size:18px;font-weight:700;white-space:nowrap">Trim ${s.trim} µs</div>
-        <button class="btn outlined small" ${s.trim < 200 ? '' : 'disabled'} data-rep="trim:+" data-act="${A(() => trim(5))}">▶</button></div>`, 'padding:4px');
+      // Bấm giữa: bảng trim từng kênh đang bật
+      return frame(lbl, null, `<div class="rowctl"><button class="btn outlined small" ${s.trim > -200 ? '' : 'disabled'} data-rep="trim:-" data-act="${A(() => trimChannel(p, s, -5))}">◀</button>
+        <div class="mid" style="font-size:18px;font-weight:700;white-space:nowrap;cursor:pointer" title="Bấm để trim từng kênh" data-act="${A(() => { S.ctl.trimOpen = !S.ctl.trimOpen; })}">Trim ${s.trim} µs</div>
+        <button class="btn outlined small" ${s.trim < 200 ? '' : 'disabled'} data-rep="trim:+" data-act="${A(() => trimChannel(p, s, 5))}">▶</button></div>`, 'padding:4px');
     }
     case 'statusBadge':
       return `<div style="height:100%;display:flex;align-items:center;justify-content:center">${statusPill(S.connectedId === p.id ? S.link : 'disconnected')}</div>`;
@@ -2743,18 +3040,14 @@ function renderItem(p, it) {
 }
 
 // ---------- Nút ARM / DISARM: nhấn giữ 1 s để ARM (có vòng tiến trình), bấm một lần để DISARM.
-//            Hồ sơ tắt cơ chế ARM thì chỉ là ô trạng thái: "Đang lái" hoặc lý do chưa lái được ----------
+//            Hồ sơ tắt cơ chế ARM thì không hiện gì ----------
 let armHold = null;
 const armRing = (t) => `<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--line)" stroke-width="2.5"/>
   <circle cx="10" cy="10" r="8" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="${(t * 50.27).toFixed(2)} 60" transform="rotate(-90 10 10)"/></svg>`;
 function armButton() {
   const a = S.arm, armed = a.armed, ready = a.state === 'ready';
-  if (!a.enabled) {
-    const text = armed ? 'Đang lái' : (a.canArm(armCheck()) ?? ARM_LABEL[a.state]);
-    return `<div class="armbtn${armed ? ' armed' : ''}" id="armBtn" data-armstatus="1" title="${esc(text)}"
-      style="max-width:30vw;color:${armed ? 'var(--onAccentFill)' : 'var(--textMuted)'}"><span class="armic">${ic('steering', { mini: true })}</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(text)}</span></div>`;
-  }
+  // Tắt cơ chế ARM: tự ARM khi đủ điều kiện, không hiện nút hay ô trạng thái (chỗ này để trống)
+  if (!a.enabled) return '';
   return `<div class="armbtn${armed ? ' armed' : ready ? ' ready' : ''}" id="armBtn" data-arm="1" style="color:${armed ? 'var(--onAccentFill)' : ready ? 'var(--text)' : 'var(--disabled)'}">
     <span class="armic">${ic(armed ? 'unlocked' : 'locked', { mini: true })}</span>${armed ? 'ARMED' : ready ? 'Giữ để ARM' : ARM_LABEL[a.state]}</div>`;
 }
@@ -2783,11 +3076,10 @@ function armCancel() { if (armHold) { armHold = null; render(); } }
 
 function driveMenu(ev) {
   const l = ctlProfile().layout;
-  const settings = (tab) => () => { S.arm.disarm('Mở Cấu hình'); openSettings(S.ctl.pid, tab); };
+  const settings = (tab) => () => { S.arm.disarm('Mở Cấu hình'); S.ctl.trimOpen = false; openSettings(S.ctl.pid, tab); };
   openMenu(ev, [
     { icon: 'settings', label: 'Cấu hình', run: settings(0) },
     { icon: 'mix', label: 'Luật mix', run: settings(MIX_TAB) },
-    { icon: 'edit', label: 'Sửa bố cục', sub: l.locked ? 'Đang khoá' : null, disabled: l.locked, run: startEdit },
     { icon: l.locked ? 'locked' : 'unlocked', label: l.locked ? 'Mở khoá bố cục' : 'Khoá bố cục', run: () => { l.locked = !l.locked; snack(l.locked ? 'Đã khoá bố cục' : 'Đã mở khoá bố cục'); } },
   ]);
 }
@@ -2799,11 +3091,11 @@ function startEdit(force = false) {
   if (c.pipe && !c.pipe.throttleAtRest(p.layout)) { snack('Thả cần ga trước khi sửa bố cục'); return; }
   resetSticks(false);
   S.arm.disarm('Đang sửa bố cục'); // chưa ARM → không gửi lệnh lái suốt thời gian sửa (H5, R3)
-  Object.assign(c, { editing: true, draft: clone(p.layout), snap: JSON.stringify(p), sel: null, undo: [], redo: [] });
+  Object.assign(c, { editing: true, draft: clone(p.layout), snap: JSON.stringify(p), sel: null, panel: null, trimOpen: false, undo: [], redo: [] });
 }
 function endEdit() {
   const c = S.ctl;
-  Object.assign(c, { editing: false, draft: null, sel: null, snap: null });
+  Object.assign(c, { editing: false, draft: null, sel: null, panel: null, snap: null });
   if (c.editOnly) {
     const st = S.settings;
     if (st?.pid === c.pid) { st.draft = clone(prof(st.pid)); st.saved = draftJson(st.draft); }
@@ -2832,17 +3124,28 @@ function saveEdit() {
 function pushUndo() { const c = S.ctl; c.undo.push(clone(c.draft)); if (c.undo.length > 30) c.undo.shift(); c.redo = []; }
 function addSheet() {
   const d = S.ctl.draft;
-  const pick = (fn) => { pushUndo(); const it = fn(); S.overlay = null; if (it) S.ctl.sel = it.id; else snack('Không còn chỗ trống đủ lớn trên màn'); };
+  // Phần tử mới mở luôn bảng để gắn Input
+  const pick = (fn) => { pushUndo(); const it = fn(); S.overlay = null; if (it) S.ctl.sel = S.ctl.panel = it.id; else snack('Không còn chỗ trống đủ lớn trên màn'); };
   const hintOf = { stickH: '−100…+100%, tự về khi thả (chỉnh được)', stickV: '−100…+100%, tự về khi thả (chỉnh được)', stick2D: 'Hai Input X/Y',
-    button: 'Bật khi giữ, thả ra là tắt', toggle: 'Mỗi lần bấm đổi trạng thái', switch3: 'Trái / giữa / phải', knob: 'Giữ nguyên vị trí' };
+    button: 'Bật khi giữ, thả ra là tắt', toggle: 'Mỗi lần bấm đổi trạng thái', switch3: 'Trái / giữa / phải', knob: 'Giữ nguyên vị trí',
+    gauge: 'Hiện số: pin, tốc độ, kênh, Input…', led: 'Sáng theo trạng thái hoặc khi vượt ngưỡng', bar: 'Thanh ngang/dọc theo một giá trị', vector: 'Chấm X/Y từ hai giá trị, vd Lái / Ga' };
+  const dispIcon = { gauge: 'speedometer', led: 'light', bar: 'chartBar', vector: 'viewfinder' };
+  /** Nguồn mặc định khi thêm phần tử hiển thị: ô đồng hồ lấy số đo xe chưa có trên màn, thanh lấy kênh Ga, vector lấy Lái (X) / Ga (Y), LED lấy trạng thái ARM */
+  const defSrc = (k, y = false) => {
+    const p = ctlProfile(), thr = p.throttleCh, st = p.steeringCh;
+    if (k === 'gauge') return CAR_KEYS.find((key) => !d.items.some((i) => i.kind === 'gauge' && i.source === key)) ?? 'battery';
+    if (k === 'bar') return thr == null ? 'battery' : srcCh(thr);
+    if (k === 'vector') return y ? srcCh(thr ?? 2) : srcCh(st ?? 1);
+    return 'arm';
+  };
   S.overlay = { type: 'sheet', html: () => {
     const controls = Object.keys(KIND).filter(isControl);
-    const gauges = Object.keys(GAUGES).filter((g) => !d.items.some((i) => i.gauge === g));
     const extras = ['trim', 'statusBadge'].filter((k) => !d.items.some((i) => i.kind === k));
     return `<div class="handle"></div><div class="h-title" style="margin-bottom:8px">Thêm điều khiển</div>
     ${controls.map((k) => `<div class="row" data-act="${A(() => pick(() => addControl(d, k)))}">${ic('addControl', { color: 'var(--textMuted)' })}<div><div>${KIND[k]}</div><div class="muted" style="font-size:13px">${hintOf[k]}</div></div></div>`).join('')}
-    ${gauges.length || extras.length ? '<div class="divider"></div>' : ''}
-    ${gauges.map((g) => `<div class="row" data-act="${A(() => pick(() => place(d, 'gauge', { gauge: g })))}">${ic('speedometer', { color: 'var(--textMuted)' })}Ô ${GAUGES[g]}</div>`).join('')}
+    <div class="divider"></div><div class="h-title" style="margin:4px 0 8px">Hiển thị</div>
+    ${['gauge', 'led', 'bar', 'vector'].map((k) => `<div class="row" data-act="${A(() => pick(() => place(d, k, { source: defSrc(k), sourceY: k === 'vector' ? defSrc(k, true) : null })))}">${ic(dispIcon[k], { color: 'var(--textMuted)' })}<div><div>${KIND[k]}</div><div class="muted" style="font-size:13px">${hintOf[k]}</div></div></div>`).join('')}
+    ${extras.length ? '<div class="divider"></div>' : ''}
     ${extras.map((k) => `<div class="row" data-act="${A(() => pick(() => place(d, k)))}">${ic('addControl', { color: 'var(--textMuted)' })}${KIND[k]}</div>`).join('')}
     <div class="muted" style="font-size:12px;margin-top:8px">Thêm xong, chọn phần tử để gắn Input, chọn kênh và chỉnh cấu hình riêng của nó.</div>`;
   } };
@@ -2916,13 +3219,53 @@ function returnEditor(it, axis) {
     <div class="axis pv" data-axis="${pvKey}"><div class="cl"></div><div class="bar"></div><div class="th"></div></div>`;
   return h;
 }
+/** _SourcePicker: chọn nguồn giá trị theo nhóm (đo từ xe, trạng thái, kênh, Input) */
+function srcSelect(p, kind, label, value, on) {
+  const keys = srcOptions(p, kind), groups = {};
+  for (const key of keys) { const i = srcInfo(key, p); if (i) (groups[i.group] ||= []).push(i); }
+  const valid = keys.includes(value) && srcInfo(value, p) != null;
+  const opts = Object.entries(groups).map(([g, list]) => `<optgroup label="${esc(SRC_GROUPS[g])}">${list.map((i) =>
+    `<option value="${esc(i.key)}" ${i.key === value ? 'selected' : ''}>${esc(!i.unit || i.unit === '%' ? i.label : `${i.label} (${i.unit})`)}</option>`).join('')}</optgroup>`).join('');
+  return `<div class="field dense${valid ? '' : ' err'}"><select data-sel="${I(on)}">${valid ? '' : '<option value="" selected disabled>— Chọn —</option>'}${opts}</select><label>${esc(label)}</label>${valid ? '' : '<div class="errtxt">Chọn giá trị để hiển thị</div>'}</div>`;
+}
+/** _DecimalField: để trống = dùng giá trị mặc định của nguồn */
+function decField(label, fid, value, hintV, set, unit) {
+  return field(unit ? `${label} (${unit})` : label, value == null ? '' : String(value), { fid, hint: `Mặc định ${hintV}`, type: 'decimal', on: (v) => {
+    const t = v.trim().replace(',', '.');
+    if (t === '') set(null);
+    else { const n = parseFloat(t); if (!Number.isNaN(n)) set(n); }
+  } });
+}
+/** Phần thuộc tính riêng của phần tử hiển thị (properties_panel.dart) */
+function displaySections(p, it) {
+  const k = it.kind, info = srcInfo(it.source, p), sec = (title, inner) => `<div class="caption" style="margin:16px 0 6px">${esc(title.toUpperCase())}</div>${inner}`;
+  let h = sec('Giá trị hiển thị', srcSelect(p, k, k === 'vector' ? 'Trục X' : 'Nguồn', it.source, (v) => { pushUndo(); it.source = v; }) +
+    (k === 'vector' ? '<div style="height:8px"></div>' + srcSelect(p, k, 'Trục Y', it.sourceY, (v) => { pushUndo(); it.sourceY = v; }) : ''));
+  if (k === 'led' && info && !info.flag) {
+    h += sec('Ngưỡng sáng đèn', segs([['above', 'Sáng khi trên'], ['below', 'Sáng khi dưới']], (it.display.below ?? info.alarmBelow) ? 'below' : 'above', (v) => { pushUndo(); it.display.below = v === 'below'; }, 'sm') +
+      '<div style="height:8px"></div>' + decField('Ngưỡng', `th-${it.id}-${it.source}`, it.display.threshold, info.alarm, (v) => { it.display.threshold = v; }, info.unit));
+  }
+  if (k === 'led') h += sec('Khi sáng', segs([['off', 'Sáng liền'], ['slow', 'Nháy chậm'], ['fast', 'Nháy nhanh']], it.display.blink, (v) => { pushUndo(); it.display.blink = v; }, 'sm'));
+  if (k === 'bar' && info) {
+    const lo = it.display.min ?? info.min, hi = it.display.max ?? info.max;
+    h += sec('Khoảng thanh', `<div style="display:flex;gap:8px"><div style="flex:1">${decField('Min', `min-${it.id}-${it.source}`, it.display.min, info.min, (v) => { it.display.min = v; }, info.unit)}</div>
+      <div style="flex:1">${decField('Max', `max-${it.id}-${it.source}`, it.display.max, info.max, (v) => { it.display.max = v; }, info.unit)}</div></div>` +
+      (lo >= hi ? '<div style="color:var(--bad);font-size:12px;font-weight:500">Min phải nhỏ hơn Max</div>' : ''));
+  }
+  if (k === 'bar' || k === 'vector') h += switchRow('Hiện số', it.style.valueDisplay !== 'hidden', () => { pushUndo(); it.style.valueDisplay = it.style.valueDisplay === 'hidden' ? 'pct' : 'hidden'; });
+  if ((k === 'gauge' || k === 'bar' || k === 'vector') && it.style.valueDisplay !== 'hidden' && (srcChOf(it.source) != null || srcChOf(it.sourceY) != null)) {
+    h += sec('Kênh hiện theo', segs([['pct', '%'], ['us', 'µs']], it.style.valueDisplay === 'us' ? 'us' : 'pct', (v) => { pushUndo(); it.style.valueDisplay = v; }, 'sm'));
+  }
+  if (k === 'vector') h += switchRow('Vệt chuyển động', it.display.trail, () => { pushUndo(); it.display.trail = !it.display.trail; });
+  return h;
+}
 function renderPanel(p, it) {
   const k = it.kind, stick = isStickK(k), hasValue = stick || k === 'knob', isThr = itemIns(it).some((id) => isThrottleInput(p, id));
   const sec = (title, inner) => `<div class="caption" style="margin:16px 0 6px">${esc(title.toUpperCase())}</div>${inner}`;
   let h = '';
   if (isControl(k)) h += sec('Input', inputSlot(p, it, false) + (k === 'stick2D' ? '<div style="height:16px"></div>' + inputSlot(p, it, true) : ''));
-  if (k === 'gauge') h += sec('Ô đồng hồ', selectField('Loại', it.gauge, Object.entries(GAUGES), (v) => { pushUndo(); it.gauge = v; }, true));
-  h += sec('Nhãn', `<input class="tin" data-in="${I((v) => { it.style.label = v.trim() ? v : null; })}" data-fid="plabel-${it.id}" value="${esc(it.style.label ?? '')}" placeholder="${esc(findInput(p, it.input)?.name ?? KIND[k])}">` +
+  if (isDisplay(k)) h += displaySections(p, it);
+  h += sec('Nhãn', `<input class="tin" data-in="${I((v) => { it.style.label = v.trim() ? v : null; })}" data-fid="plabel-${it.id}" value="${esc(it.style.label ?? '')}" placeholder="${esc(isDisplay(k) ? srcLabelOf(it, p) : findInput(p, it.input)?.name ?? KIND[k])}">` +
     switchRow('Hiện nhãn', it.style.showLabel, () => { pushUndo(); it.style.showLabel = !it.style.showLabel; }));
   if (isSwitchLike(k)) {
     h += sec('Icon', `<div class="chips">${chip('Không', it.style.icon == null, () => { pushUndo(); it.style.icon = null; })}${Object.entries(PICK_ICONS).map(([key, name]) =>
@@ -2948,10 +3291,29 @@ function renderPanel(p, it) {
   h += slider({ min: 30, max: 100, step: 5, value: it.style.opacity, capLabel: true, label: (v) => `ĐỘ TRONG SUỐT: ${Math.round(v)}%`, start: pushUndo,
     set: (v) => { it.style.opacity = v; }, after: (v) => { const el = scr.querySelector(`[data-item="${it.id}"]`); if (el) el.style.opacity = v / 100; } });
   if (isThr && isControl(k)) h += '<div class="muted" style="font-size:12px;font-weight:500;margin-top:8px">Phần tử này điều khiển kênh Ga — bố cục bắt buộc phải có.</div>';
-  h += `<button class="btn outlined" style="margin-top:16px;color:var(--bad)" data-act="${A(() => { pushUndo(); S.ctl.draft.items = S.ctl.draft.items.filter((i) => i.id !== it.id); S.ctl.sel = null; })}">${ic('delete', { mini: true })}Xoá khỏi màn</button>`;
+  h += `<button class="btn outlined" style="margin-top:16px;color:var(--bad)" data-act="${A(() => { pushUndo(); S.ctl.draft.items = S.ctl.draft.items.filter((i) => i.id !== it.id); S.ctl.sel = null; S.ctl.panel = null; })}">${ic('delete', { mini: true })}Xoá khỏi màn</button>`;
   return `<div class="panel"><div class="appbar" style="height:48px"><div class="title" style="font-size:16px">${KIND[k]}</div>
-    <button class="iconbtn" data-act="${A(() => { S.ctl.sel = null; })}">${ic('close')}</button></div>
+    <button class="iconbtn" data-act="${A(() => { S.ctl.panel = null; })}">${ic('close')}</button></div>
     <div class="body" data-scroll="panel${it.id}">${h}</div></div>`;
+}
+/** Trim kênh `c` thêm `delta` µs (hoặc đặt thẳng nếu `set`); ghi hồ sơ và gửi xuống xe khi đang nối */
+function trimChannel(p, c, delta, set = false) {
+  const nv = clamp(set ? 0 : c.trim + delta, -200, 200);
+  if (nv === c.trim) return;
+  c.trim = nv;
+  if (isConnected(p)) S.carCfg[p.id] = carConfigOf(p);
+}
+/** Bảng trim từng kênh đang bật (mở bằng cách bấm giữa ô Trim): ◀ ▶ đổi 5 µs, giữ để đổi liên tục,
+ *  bấm số µs để về 0. Nổi trên màn Lái, không chặn cần gạt (chỉ mở khi người dùng chủ động bấm). */
+function trimPanel(p) {
+  const chs = p.channels.filter((c) => c.enabled);
+  return `<div class="trimfloat"><div class="hd"><div class="h-title">Trim từng kênh</div>
+    <button class="iconbtn" style="width:32px;height:32px" data-act="${A(() => { S.ctl.trimOpen = false; })}">${ic('close', { mini: true })}</button></div>
+    ${chs.length === 0 ? '<div class="muted" style="padding:0 16px 12px;font-size:13px">Chưa có kênh nào được bật</div>' : `<div class="rows">${chs.map((c) => `
+    <div class="trow"><div class="nm">${esc(chName(p.channels, c.index))}</div>
+      <button class="btn outlined small" ${c.trim > -200 ? '' : 'disabled'} data-rep="trimch${c.index}:-" data-act="${A(() => trimChannel(p, c, -5))}">◀</button>
+      <div class="tv${c.trim === 0 ? ' zero' : ''}" ${c.trim === 0 ? '' : `title="Bấm để về 0" data-act="${A(() => trimChannel(p, c, 0, true))}"`}>${c.trim > 0 ? '+' : ''}${c.trim} µs</div>
+      <button class="btn outlined small" ${c.trim < 200 ? '' : 'disabled'} data-rep="trimch${c.index}:+" data-act="${A(() => trimChannel(p, c, 5))}">▶</button></div>`).join('')}</div>`}</div>`;
 }
 function renderControl() {
   const p = ctlProfile(), c = S.ctl, l = ctlLayout();
@@ -2961,24 +3323,28 @@ function renderControl() {
     ? `<button class="btn text" data-act="${A(cancelEdit)}">${ic('close', { mini: true })}Huỷ</button>
        <button class="iconbtn" title="Hoàn tác" ${c.undo.length ? '' : 'disabled'} data-act="${A(() => { c.redo.push(clone(c.draft)); c.draft = c.undo.pop(); })}">${ic('undo')}</button>
        <button class="iconbtn" title="Làm lại" ${c.redo.length ? '' : 'disabled'} data-act="${A(() => { c.undo.push(clone(c.draft)); c.draft = c.redo.pop(); })}">${ic('redo')}</button>
-       <div style="flex:1;display:flex;justify-content:center;min-width:0"><div class="pill trash" id="trash" style="color:var(--textMuted);border-color:var(--line);font-weight:500;background:transparent">${ic('delete', { mini: true })}<span id="trashTxt">Sửa bố cục · kéo để di chuyển</span></div></div>
+       <div style="flex:1;display:flex;justify-content:center;min-width:0"><div class="pill trash" id="trash" style="color:var(--textMuted);border-color:var(--line);font-weight:500;background:transparent"><span id="trashTxt">Sửa bố cục · kéo để di chuyển · nhấn đúp để cấu hình</span></div></div>
        <button class="btn outlined" data-act="${A(addSheet)}">${ic('plus', { mini: true })}Thêm</button>
        <button class="btn filled" data-act="${A(saveEdit)}">${ic('save', { mini: true })}Lưu</button>`
     : `<button class="iconbtn" data-act="${A(back)}">${ic('back')}</button>
        <div class="h-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto">${esc(p.name)}</div><div style="width:8px"></div>
-       ${armButton()}<div style="width:8px"></div>
-       <div style="flex:1;min-width:0">${alarm ? `<span class="alarm">${ic('warning', { mini: true })}${!here ? 'Chưa kết nối xe' : S.tel?.netSetup ? 'Xe đang ở chế độ cấu hình mạng: không lái được' : 'Failsafe: xe đang ở chế độ an toàn'}</span>` : ''}</div>
+       ${S.arm.enabled ? `${armButton()}<div style="width:8px"></div>` : ''}
+       <div style="flex:1;min-width:0;display:flex;justify-content:center">${notch(p, alarm ? (!here ? 'Chưa kết nối xe' : S.link === 'lost' ? 'Mất tín hiệu' : S.tel?.netSetup ? 'Xe ở chế độ cấu hình mạng' : 'Failsafe') : null,
+         S.arm.armed ? null : () => pickStatusItems(p, (r) => { p.statusItems = r; }))}</div>
+       ${linkButton(p)}
+       ${l.locked ? '' : `<button class="btn text" title="Sửa bố cục" data-act="${A(() => startEdit())}">${ic('edit', { mini: true })}Sửa</button>`}
        <button class="iconbtn" title="Tuỳ chọn" data-menu="${A(driveMenu)}">${ic('config')}</button>`;
   const items = l.items.map((it) => {
     const mixed = !c.editing && isControl(it.kind) && itemIns(it).some((id) => isMixed(p, id));
     return `<div class="item${c.sel === it.id ? ' sel' : ''}" data-item="${it.id}" ${mixed ? 'data-mixitem="1"' : ''} style="${itemVars(it)}left:${it.x / COLS * 100}%;top:${it.y / ROWS * 100}%;width:${it.w / COLS * 100}%;height:${it.h / ROWS * 100}%;opacity:${clamp(it.style.opacity / 100, 0.3, 1)}">
-      <div class="in">${renderItem(p, it)}${mixed ? '<span class="mixdot"></span>' : ''}</div><div class="rz" data-rz="${it.id}"></div></div>`;
+      <div class="in">${renderItem(p, it)}${mixed ? '<span class="mixdot"></span>' : ''}</div>${c.editing && c.sel === it.id ? ['t', 'r', 'b', 'l', 'tl', 'tr', 'br', 'bl'].map((hd) => `<div class="rz ${hd}" data-rz="${it.id}" data-h="${hd}"></div>`).join('') : ''}</div>`;
   }).join('');
-  const sel = c.editing ? l.items.find((i) => i.id === c.sel) : null;
+  const openPanel = c.editing ? l.items.find((i) => i.id === c.panel) : null;
   return `<div style="display:flex;height:100%"><div class="screen drive" style="position:relative;flex:1">
       <div class="drivebar">${bar}</div>
-      <div class="canvas${c.editing ? ' editing' : ''}" id="canvas">${items}<div id="guides"></div></div></div>
-    ${sel ? renderPanel(p, sel) : ''}</div>`;
+      <div class="canvas${c.editing ? ' editing' : ''}" id="canvas">${items}<div id="guides"></div>${c.editing ? `<div id="trashbin"><div class="bin">${ic('delete')}</div><span id="binTxt">Xoá</span></div>` : ''}</div>
+      ${!c.editing && c.trimOpen ? trimPanel(p) : ''}</div>
+    ${openPanel ? renderPanel(p, openPanel) : ''}</div>`;
 }
 /** CarController._sendControl: mỗi chu kỳ chạy mixer và tick ARM (R2, R3); chỉ khi ARMED mới gửi kết quả mixer */
 setInterval(() => {
@@ -2987,23 +3353,31 @@ setInterval(() => {
   S.ctl.pipe.mixed();
   if (S.connectedId === p.id && (S.link === 'connected' || S.link === 'lost')) S.arm.tick({ ...armCheck(), armConditionOk: armConditionOk() });
   updateLive();
+  paintDisplays();
 }, 50);
 
 // ---------- Vẽ cần gạt (tương đương _AxisPainter / _Stick2DPainter / _KnobPainter) ----------
 function paintAxis(el, raw, d) {
   const vertical = d.vertical, w = el.clientWidth, h = el.clientHeight, short = Math.min(w, h);
   if (!w || !h) return;
-  el.style.borderRadius = short / 2 + 'px';
+  // Rãnh bo đồng tâm với khung thẻ (bo 16, lề 8 → 8): khung ngoài bo sao thì rãnh, vệt kéo, núm bo theo đúng dáng đó
+  const INSET = 3, outer = Math.min(8, short / 2), inner = Math.max(outer - INSET, 2);
+  el.style.borderRadius = outer + 'px';
   const pos = raw / 100;
-  const thumbR = clamp(short * (0.45 + d.knob) / 2, 10, short / 2);
-  const along = (vertical ? h : w) / 2 - thumbR;
-  const cx = vertical ? w / 2 : w / 2 + pos * along, cy = vertical ? h / 2 - pos * along : h / 2;
+  // Núm dẹp nằm ngang qua rãnh: bề ngang gần hết rãnh, bề dày mỏng theo cỡ núm
+  const long = Math.max(w, h), across = Math.max(short - INSET * 2, 4);
+  const thick = clamp(short * (0.08 + d.knob * 0.28), Math.min(8, across), across);
+  const travel = Math.max(0, long / 2 - thick / 2 - INSET);
+  const cx = vertical ? w / 2 : w / 2 + pos * travel, cy = vertical ? h / 2 - pos * travel : h / 2;
   const [cl, bar, th] = el.children;
   Object.assign(cl.style, vertical ? { left: w * .2 + 'px', width: w * .6 + 'px', top: h / 2 - 1 + 'px', height: '2px' } : { top: h * .2 + 'px', height: h * .6 + 'px', left: w / 2 - 1 + 'px', width: '2px' });
-  const bw = short * 0.3;
-  if (vertical) Object.assign(bar.style, { left: w / 2 - bw / 2 + 'px', width: bw + 'px', top: Math.min(cy, h / 2) - bw / 2 + 'px', height: Math.abs(cy - h / 2) + bw + 'px' });
-  else Object.assign(bar.style, { top: h / 2 - bw / 2 + 'px', height: bw + 'px', left: Math.min(cx, w / 2) - bw / 2 + 'px', width: Math.abs(cx - w / 2) + bw + 'px' });
-  Object.assign(th.style, { left: cx - thumbR + 'px', top: cy - thumbR + 'px', width: thumbR * 2 + 'px', height: thumbR * 2 + 'px' });
+  // Vệt đã kéo: cùng bề ngang và cùng góc bo với núm
+  if (vertical) Object.assign(bar.style, { left: w / 2 - across / 2 + 'px', width: across + 'px', top: Math.min(cy, h / 2) + 'px', height: Math.abs(cy - h / 2) + 'px', borderRadius: inner + 'px' });
+  else Object.assign(bar.style, { top: h / 2 - across / 2 + 'px', height: across + 'px', left: Math.min(cx, w / 2) + 'px', width: Math.abs(cx - w / 2) + 'px', borderRadius: inner + 'px' });
+  const tw = vertical ? across : thick, thh = vertical ? thick : across, g = across / 2 - Math.max(inner, 4);
+  Object.assign(th.style, { left: cx - tw / 2 + 'px', top: cy - thh / 2 + 'px', width: tw + 'px', height: thh + 'px', borderRadius: Math.min(inner, thick / 2) + 'px' });
+  th.style.setProperty('--gw', (g > 2 ? (vertical ? g * 2 : 2) : 0) + 'px');
+  th.style.setProperty('--gh', (g > 2 ? (vertical ? 2 : g * 2) : 0) + 'px');
 }
 function paint2d(el, x, y, knob) {
   const w = el.clientWidth, h = el.clientHeight, side = Math.min(w, h), r = side / 2, cx = w / 2, cy = h / 2;
@@ -3036,16 +3410,87 @@ function drawAxes() {
   const p = ctlProfile(), l = ctlLayout();
   if (p && l) scr.querySelectorAll('[data-vt]').forEach((el) => { const it = l.items.find((i) => i.id === el.dataset.vt); if (it) el.textContent = trailingText(p, it) ?? ''; });
   scr.querySelectorAll('[data-pvl]').forEach((el) => { el.textContent = `Xem trước: kéo rồi thả — ${Math.round(ax(el.dataset.pvl).raw)}%`; });
+  paintDisplays();
+}
+/** Vẽ / cập nhật các phần tử hiển thị tại chỗ (không dựng lại màn): chữ ô đồng hồ, đèn LED, thanh giá trị, vector 2D */
+const VTR = {}; // vệt vector: id → [{x, y, t}]
+function paintDisplays() {
+  if (S.screen !== 'control' || !S.ctl) return;
+  const p = ctlProfile(), l = ctlLayout();
+  if (!p || !l) return;
+  const now = performance.now();
+  for (const it of l.items) {
+    if (!isDisplay(it.kind) || it.source === 'channels') continue;
+    const el = scr.querySelector(`[data-disp="${it.id}"]`);
+    if (!el) continue;
+    if (it.kind === 'gauge') {
+      const [v, sub] = gaugeText(p, it);
+      el.querySelector('.gv').textContent = v;
+      el.querySelector('.gs').textContent = sub ?? '';
+    } else if (it.kind === 'led') {
+      const on = ledOn(p, it), ld = el.querySelector('.ld'), ll = el.querySelector('.ll');
+      const d = clamp(el.clientHeight * 0.62, 8, 40);
+      ld.style.width = ld.style.height = d + 'px';
+      if (ll) ll.style.display = el.clientWidth - 18 < d * 2.5 ? 'none' : '';
+      ld.classList.toggle('on', on === true);
+      ld.classList.toggle('unset', on === null);
+      ld.classList.toggle('slow', it.display.blink === 'slow');
+      ld.classList.toggle('fast', it.display.blink === 'fast');
+      el.classList.toggle('lit', on === true);
+    } else if (it.kind === 'bar') {
+      const info = srcInfo(it.source, p), v = readSrc(p, it.source);
+      const lo = it.display.min ?? info?.min ?? -100;
+      let hi = it.display.max ?? info?.max ?? 100;
+      if (!(hi > lo)) hi = lo + 1;
+      paintBar(el, v, lo, hi);
+    } else if (it.kind === 'vector') {
+      paintVector(el, it, normSrc(p, it.source, readSrc(p, it.source)), normSrc(p, it.sourceY, readSrc(p, it.sourceY)), now);
+    }
+  }
 }
 function updateGauges() {
-  if (S.screen !== 'control' || !S.ctl) return;
-  ctlLayout().items.filter((i) => i.kind === 'gauge').forEach((it) => {
-    const el = scr.querySelector(`[data-gauge="${it.id}"]`);
-    if (!el) return;
-    const [, v, sub] = gaugeData(it.gauge);
-    el.querySelector('.gv').textContent = v;
-    el.querySelector('.gs').textContent = sub ?? '';
+  paintDisplays();
+  scr.querySelectorAll('[data-notch]').forEach((el) => {
+    const p = el.dataset.draft ? S.settings?.draft : prof(el.dataset.notch);
+    if (p) el.innerHTML = notchBody(p, el.dataset.alarm || null, el.dataset.tap === '1');
   });
+}
+/** _BarPainter: thanh bo tròn hai đầu như rãnh cần gạt, dày tối đa 28; tô từ vạch 0 (khoảng có số âm) hoặc từ đầu thanh */
+function paintBar(el, v, lo, hi) {
+  const W = el.clientWidth, H = el.clientHeight;
+  if (!W || !H) return;
+  const vertical = H > W, thick = Math.min(vertical ? W : H, 28), len = vertical ? H : W;
+  const [bz, bf, bl] = el.firstElementChild.children;
+  Object.assign(el.firstElementChild.style, vertical ? { left: (W - thick) / 2 + 'px', top: '0', width: thick + 'px', height: H + 'px' } : { left: '0', top: (H - thick) / 2 + 'px', width: W + 'px', height: thick + 'px' });
+  el.firstElementChild.style.borderRadius = thick / 2 + 'px';
+  const f = (x) => clamp((x - lo) / (hi - lo), 0, 1), at = (fr) => (vertical ? (1 - fr) * len : fr * len);
+  const zero = lo < 0 && hi > 0 ? f(0) : 0;
+  const seg = (e, a, b, t) => Object.assign(e.style, vertical ? { left: '0', width: thick + 'px', top: Math.min(a, b) + 'px', height: Math.max(t, Math.abs(a - b)) + 'px' } : { top: '0', height: thick + 'px', left: Math.min(a, b) + 'px', width: Math.max(t, Math.abs(a - b)) + 'px' });
+  bz.style.display = zero > 0 ? '' : 'none';
+  if (zero > 0) seg(bz, at(zero) - 1, at(zero) - 1, 2);
+  bf.style.display = bl.style.display = v == null ? 'none' : '';
+  if (v == null) return;
+  seg(bf, at(zero), at(f(v)), 0);
+  seg(bl, at(f(v)) - 1.5, at(f(v)) - 1.5, 3);
+}
+/** _VectorPainter: chấm X/Y (−1…+1) trong ô vuông, có vệt chuyển động mờ dần trong 600 ms */
+function paintVector(el, it, x, y, now) {
+  const W = el.clientWidth, H = el.clientHeight;
+  if (!W || !H) return;
+  const tr = VTR[it.id] ||= [];
+  if (!it.display.trail || x == null || y == null) tr.length = 0;
+  else {
+    const last = tr[tr.length - 1];
+    if (!last || last.x !== x || last.y !== y) { tr.push({ x, y, t: now }); if (tr.length > 48) tr.shift(); }
+  }
+  while (tr.length && now - tr[0].t > 600) tr.shift();
+  const side = Math.min(W, H), cx = W / 2, cy = H / 2, dr = clamp(side * 0.06, 4, 12), half = side / 2 - dr - 2;
+  const px = (v) => cx + clamp(v, -1, 1) * half, py = (v) => cy - clamp(v, -1, 1) * half;
+  const lines = tr.slice(1).map((b, i) => { const a = tr[i]; return `<line x1="${px(a.x)}" y1="${py(a.y)}" x2="${px(b.x)}" y2="${py(b.y)}" stroke="var(--accentFill)" stroke-opacity="${clamp((1 - (now - b.t) / 600) * 0.5, 0, 1)}" stroke-width="${dr * 0.8}" stroke-linecap="round"/>`; }).join('');
+  el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block">
+    <rect x="${cx - side / 2}" y="${cy - side / 2}" width="${side}" height="${side}" rx="8" fill="var(--surface2)"/>
+    <line x1="${cx - side / 2 + 6}" y1="${cy}" x2="${cx + side / 2 - 6}" y2="${cy}" stroke="var(--line)"/><line x1="${cx}" y1="${cy - side / 2 + 6}" x2="${cx}" y2="${cy + side / 2 - 6}" stroke="var(--line)"/>
+    ${lines}${x == null || y == null ? '' : `<circle cx="${px(x)}" cy="${py(y)}" r="${dr}" fill="var(--accentFill)"/>`}</svg>`;
 }
 function drawGuides(l, id, r, cw, chh) {
   const g = document.getElementById('guides');
@@ -3208,8 +3653,15 @@ scr.addEventListener('change', (e) => {
   if (el.dataset.sel) { const fn = INP[el.dataset.sel]; if (fn) { fn(el.value); render(); } }
 });
 scr.addEventListener('dblclick', (e) => {
+  const c = S.ctl;
+  if (c?.editing) {
+    // Nhấn đúp vào phần tử: mở bảng thuộc tính (1 chạm chỉ chọn để kéo / đổi cỡ)
+    const itEl = e.target.closest('[data-item]');
+    if (itEl) { c.sel = c.panel = itEl.dataset.item; render(); }
+    return;
+  }
   const k = e.target.closest('[data-knob]');
-  if (k && !S.ctl?.editing) { setRaw(k.dataset.knob + ':k', 0); drawAxes(); }
+  if (k) { setRaw(k.dataset.knob + ':k', 0); drawAxes(); }
 });
 
 // Chạm: cần gạt, núm, nút giữ, nút ARM, nhấn giữ xem luật, kéo/đổi cỡ khi sửa bố cục, kéo đổi thứ tự luật mix. Hỗ trợ nhiều ngón.
@@ -3228,11 +3680,6 @@ scr.addEventListener('pointerdown', (e) => {
   if (ro) {
     const [group, from] = ro.dataset.reorder.split(':').map(Number);
     drags.set(e.pointerId, { mode: 'reorder', group, from, to: null });
-    e.preventDefault();
-    return;
-  }
-  if (e.target.closest('[data-armstatus]')) { // tắt ARM: bấm ô trạng thái (khi chưa lái được) thì báo lý do
-    if (!S.arm.armed) snack(S.arm.canArm(armCheck()) ?? ARM_LABEL[S.arm.state]);
     e.preventDefault();
     return;
   }
@@ -3269,13 +3716,16 @@ scr.addEventListener('pointerdown', (e) => {
   if (editing) {
     if (!e.target.closest('#canvas')) return;
     const rz = e.target.closest('[data-rz]'), itEl = e.target.closest('[data-item]');
-    if (!itEl) { c.sel = null; render(); return; }
+    if (!itEl) { c.sel = null; c.panel = null; render(); return; }
     const it = c.draft.items.find((i) => i.id === itEl.dataset.item);
-    // Chọn phần tử làm hiện bảng thuộc tính → canvas hẹp lại, nên đo sau khi vẽ lại
-    if (c.sel !== it.id) { c.sel = it.id; render(); }
+    // 1 chạm chỉ chọn để kéo / đổi cỡ; chọn phần tử khác thì bảng thuộc tính cũ đóng lại (bảng hiện mở → canvas hẹp lại, nên đo sau khi vẽ lại)
+    const willChange = c.sel !== it.id || (c.panel != null && c.panel !== it.id);
+    c.sel = it.id;
+    if (c.panel !== it.id) c.panel = null;
+    if (willChange) render();
     const cv = document.getElementById('canvas'), r = cv.getBoundingClientRect();
     const scale = r.width / cv.offsetWidth;
-    drags.set(e.pointerId, { mode: rz ? 'resize' : 'move', it, start: { ...it }, sx: e.clientX, sy: e.clientY, cw: r.width / COLS, ch: r.height / ROWS, scale, pushed: false });
+    drags.set(e.pointerId, { mode: rz ? 'resize' : 'move', handle: rz?.dataset.h, it, start: { ...it }, sx: e.clientX, sy: e.clientY, cw: r.width / COLS, ch: r.height / ROWS, scale, pushed: false });
     e.preventDefault();
     return;
   }
@@ -3344,8 +3794,18 @@ window.addEventListener('pointermove', (e) => {
   let r;
   if (d.mode === 'move') r = { x: clamp(s.x + dx, 0, COLS - s.w), y: clamp(s.y + dy, 0, ROWS - s.h), w: s.w, h: s.h };
   else {
+    // Tay nắm đổi cỡ: 4 cạnh + 4 góc; hx/hy = −1 kéo cạnh trái/trên, 1 cạnh phải/dưới, 0 giữ nguyên trục đó
     const [mnW, mnH, mxW, mxH] = limitsFor(it.kind, d.cw / d.scale, d.ch / d.scale, touchable(it));
-    r = { x: s.x, y: s.y, w: clamp(s.w + dx, mnW, Math.min(mxW, COLS - s.x)), h: clamp(s.h + dy, mnH, Math.min(mxH, ROWS - s.y)) };
+    const hd = d.handle || 'br', hx = hd.includes('l') ? -1 : hd.includes('r') ? 1 : 0, hy = hd.includes('t') ? -1 : hd.includes('b') ? 1 : 0;
+    let x = s.x, y = s.y, w = s.w, h = s.h;
+    if (hx) { w = clamp(hx < 0 ? s.w - dx : s.w + dx, mnW, mxW); if (hx < 0) x = s.x + s.w - w; }
+    if (hy) { h = clamp(hy < 0 ? s.h - dy : s.h + dy, mnH, mxH); if (hy < 0) y = s.y + s.h - h; }
+    if (x < 0) { w += x; x = 0; }
+    if (x + w > COLS) w = COLS - x;
+    if (y < 0) { h += y; y = 0; }
+    if (y + h > ROWS) h = ROWS - y;
+    r = w < mnW || h < mnH ? { x: it.x, y: it.y, w: it.w, h: it.h } : { x, y, w, h };
+    if (!fits(c.draft, r, it.id)) r = largestFree(c.draft, it.id, s, r, hx, hy) || r;
   }
   if ((r.x !== it.x || r.y !== it.y || r.w !== it.w || r.h !== it.h) && fits(c.draft, r, it.id)) {
     if (!d.pushed) { const snap = clone(c.draft); Object.assign(snap.items.find((i) => i.id === it.id), { x: s.x, y: s.y, w: s.w, h: s.h }); c.undo.push(snap); if (c.undo.length > 30) c.undo.shift(); c.redo = []; d.pushed = true; }
@@ -3356,13 +3816,31 @@ window.addEventListener('pointermove', (e) => {
   }
   drawGuides(c.draft, it.id, it, d.cw / d.scale, d.ch / d.scale);
   if (d.mode === 'move') {
-    const trash = document.getElementById('trash');
-    const tr = trash.getBoundingClientRect();
-    d.over = e.clientX >= tr.left && e.clientX <= tr.right && e.clientY >= tr.top - 8 && e.clientY <= tr.bottom + 8;
-    trash.classList.add('hot'); trash.classList.toggle('over', d.over);
-    document.getElementById('trashTxt').textContent = 'Thả vào đây để xoá';
+    const trash = document.getElementById('trash'), bin = document.getElementById('trashbin');
+    bin.classList.add('show');
+    const tr = bin.querySelector('.bin').getBoundingClientRect();
+    const over = e.clientX >= tr.left - 8 && e.clientX <= tr.right + 8 && e.clientY >= tr.top - 8 && e.clientY <= tr.bottom + 8;
+    if (over && !d.over) navigator.vibrate?.(20);
+    d.over = over;
+    bin.classList.toggle('over', d.over);
+    document.getElementById('binTxt').textContent = d.over ? 'Thả để xoá' : 'Xoá';
+    trash.classList.add('hot');
+    document.getElementById('trashTxt').textContent = 'Kéo vào thùng rác để xoá';
   }
+  showSizeLabel(it, d.mode === 'move' && d.over);
 });
+/** Nhãn kích thước (số ô) khi đang kéo / đổi cỡ: nằm trên phần tử, hoặc dưới nếu sát mép trên */
+function showSizeLabel(it, bad) {
+  const cv = document.getElementById('canvas');
+  if (!cv) return;
+  let el = document.getElementById('sizelbl');
+  if (!el) { el = document.createElement('div'); el.id = 'sizelbl'; cv.appendChild(el); }
+  const above = it.y / ROWS * cv.offsetHeight >= 30;
+  el.textContent = `${it.w} × ${it.h}`;
+  el.classList.toggle('bad', !!bad);
+  el.style.left = (it.x + it.w / 2) / COLS * 100 + '%';
+  el.style.top = above ? `calc(${it.y / ROWS * 100}% - 30px)` : `calc(${(it.y + it.h) / ROWS * 100}% + 6px)`;
+}
 function endPointer(e) {
   stopRep();
   if (mixLp && mixLp.pid === e.pointerId) { clearTimeout(mixLp.timer); mixLp = null; }
@@ -3384,6 +3862,7 @@ function endPointer(e) {
       if (!d.pushed) pushUndo();
       S.ctl.draft.items = S.ctl.draft.items.filter((i) => i.id !== d.it.id);
       S.ctl.sel = null;
+      S.ctl.panel = null;
     }
     render();
   }
@@ -3424,8 +3903,10 @@ window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); appl
 // Telemetry giả lập khi đang kết nối
 let battery = 8.2;
 setInterval(() => {
-  if (S.screen !== 'control' || !S.ctl) return;
-  const p = ctlProfile();
+  // Màn Lái, hoặc màn Cấu hình / chi tiết kênh (kết nối được giữ khi vào Cấu hình)
+  const inSettings = (S.screen === 'settings' || S.screen === 'channel') && S.settings;
+  if (!inSettings && (S.screen !== 'control' || !S.ctl)) return;
+  const p = inSettings ? prof(S.settings.pid) : ctlProfile();
   if (!p) return;
   // Chế độ cấu hình: xe bỏ qua lệnh lái (nên failsafe), telemetry có cờ NET_SETUP
   const netSetup = CAR.mode === 'setup', failsafe = document.getElementById('simFail').checked || netSetup;
@@ -3433,7 +3914,7 @@ setInterval(() => {
   if (failsafe && S.arm.armed) S.arm.onCarFailsafe();
   const wasFail = !!S.tel?.failsafe;
   // Giao thức v1: chỉ khi ARMED mới gửi CH1/CH2 sau mixer; xe chạy theo CH2 (chân ga).
-  const thr = failsafe || !S.arm.armed || !S.ctl.pipe ? 0 : S.ctl.pipe.lastPct[1] / 100;
+  const thr = inSettings || failsafe || !S.arm.armed || !S.ctl.pipe ? 0 : S.ctl.pipe.lastPct[1] / 100;
   battery = Math.max(6.4, battery - 0.0004 - Math.abs(thr) * 0.002);
   S.tel = { failsafe, netSetup, v: battery - Math.abs(thr) * 0.35, a: 0.4 + Math.abs(thr) * 18 + Math.random() * 0.3, kmh: Math.abs(thr) * 42 + (thr ? Math.random() : 0), rssi: -55 - Math.round(Math.random() * 6) };
   if (wasFail !== failsafe) render(); else updateGauges();
@@ -3444,6 +3925,8 @@ render();
 const hash = location.hash.slice(1).split(',');
 if (hash.includes('light')) { S.theme = 'light'; render(); }
 if (hash.includes('connected')) { const p = S.profiles[0]; S.connectedId = p.id; S.link = 'connected'; S.arm.onConnected(); syncProfile(p); }
+// Mở app thì tự nối xe đang chọn (như bật tay RC); xe tắt thì im lặng, thẻ vẫn có nút Kết nối
+if (!hash.includes('connected') && selectedId()) connect(S.profiles.find((x) => x.id === selectedId()), true);
 const startNav = hash.find((h) => ['control', 'settings', 'wizard'].includes(h));
 if (startNav) document.querySelector(`[data-nav="${startNav}"]`).click();
 if (hash.includes('network') && S.profiles.length) { leaveControl(); S.history = []; S.screen = 'garage'; openSettings(S.profiles[0].id, SET_TABS.length - 1); openNetwork(); }

@@ -174,7 +174,7 @@ class _ProfileWizardScreenState extends State<ProfileWizardScreen> {
       port: p.wifi!.port,
       bleId: p.ble!.mac,
       controller: widget.controller,
-      connectedKey: widget.controller.connectedKey,
+      expectId: p.wifi?.carId,
     );
     if (!mounted) return;
     setState(() {

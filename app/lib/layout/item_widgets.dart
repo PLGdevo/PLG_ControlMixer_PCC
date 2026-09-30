@@ -1,6 +1,7 @@
 // Phần tử trên màn Lái: cần gạt 1 trục, cần 2 trục, nút, nút bật/tắt, công tắc 3 nấc, núm xoay, ô đồng hồ,
-// đèn LED, thanh giá trị, vector 2D.
+// đèn LED, thanh giá trị, vector 2D, thanh trim, bảng kênh.
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import '../models/control_layout.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/hold_repeat.dart';
 import 'return_motion.dart';
 
 /// Khung thẻ chung cho mọi phần tử
@@ -230,17 +232,25 @@ class _AxisPainter extends CustomPainter {
   final bool vertical;
   final Color track, fill, center, thumbEdge;
 
+  /// Góc rãnh đồng tâm với góc khung thẻ (ItemFrame: bo Radii.card, lề Gap.s): khung ngoài bo sao
+  /// thì rãnh, vệt kéo và núm bên trong bo theo đúng dáng đó
+  static const trackRadius = Radii.card - Gap.s;
+
+  /// Lề giữa rãnh và núm
+  static const inset = 3.0;
+
   @override
   void paint(Canvas canvas, Size s) {
     final short = min(s.width, s.height), long = max(s.width, s.height);
-    final r = RRect.fromRectAndRadius(Offset.zero & s, Radius.circular(short / 2));
-    canvas.drawRRect(r, Paint()..color = track);
+    final outer = min(trackRadius, short / 2);
+    canvas.drawRRect(RRect.fromRectAndRadius(Offset.zero & s, Radius.circular(outer)), Paint()..color = track);
     final mid = Offset(s.width / 2, s.height / 2);
     final p = pos / 100;
-    // Núm hình viên thuốc dẹp nằm ngang qua rãnh: bề ngang gần hết rãnh, bề dày theo cỡ núm
-    final across = short * 0.84;
-    final thick = (short * (0.2 + knob * 0.6)).clamp(min(14.0, across), across).toDouble();
-    final travel = max(0.0, long / 2 - thick / 2 - (short - across) / 2);
+    final inner = max(outer - inset, 2.0);
+    // Núm dẹp nằm ngang qua rãnh: bề ngang gần hết rãnh, bề dày mỏng theo cỡ núm
+    final across = max(short - inset * 2, 4.0);
+    final thick = (short * (0.08 + knob * 0.28)).clamp(min(8.0, across), across).toDouble();
+    final travel = max(0.0, long / 2 - thick / 2 - inset);
     final c = vertical ? mid.translate(0, -p * travel) : mid.translate(p * travel, 0);
     // Vạch tâm
     final cp = Paint()
@@ -251,24 +261,25 @@ class _AxisPainter extends CustomPainter {
     } else {
       canvas.drawLine(Offset(mid.dx, s.height * 0.2), Offset(mid.dx, s.height * 0.8), cp);
     }
-    // Đoạn đã kéo
-    final bar = Paint()
-      ..color = fill.withValues(alpha: 0.35)
-      ..strokeWidth = short * 0.3
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(mid, c, bar);
-    final pill = Rect.fromCenter(
+    // Đoạn đã kéo: cùng bề ngang và cùng góc bo với núm
+    final band = Rect.fromPoints(
+      vertical ? Offset(mid.dx - across / 2, mid.dy) : Offset(mid.dx, mid.dy - across / 2),
+      vertical ? Offset(mid.dx + across / 2, c.dy) : Offset(c.dx, mid.dy + across / 2),
+    );
+    canvas.drawRRect(RRect.fromRectAndRadius(band, Radius.circular(inner)), Paint()..color = fill.withValues(alpha: 0.3));
+    final knobRect = Rect.fromCenter(
       center: c,
       width: vertical ? across : thick,
       height: vertical ? thick : across,
     );
-    canvas.drawRRect(RRect.fromRectAndRadius(pill, Radius.circular(thick / 2)), Paint()..color = fill);
-    // Vạch cầm dọc theo thân viên thuốc
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(knobRect, Radius.circular(min(inner, thick / 2))), Paint()..color = fill);
+    // Vạch cầm dọc theo thân núm
     final grip = Paint()
-      ..color = thumbEdge.withValues(alpha: 0.4)
-      ..strokeWidth = 2
+      ..color = thumbEdge.withValues(alpha: 0.5)
+      ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round;
-    final g = across / 2 - thick / 2;
+    final g = across / 2 - max(inner, 4.0);
     if (g > 2) {
       if (vertical) {
         canvas.drawLine(c.translate(-g, 0), c.translate(g, 0), grip);
@@ -297,6 +308,8 @@ class Stick2D extends StatefulWidget {
     this.deadzonePct = 0,
     this.haptic = true,
     this.knobSize = KnobSize.medium,
+    this.axes = StickAxes.both,
+    this.gimbal = false,
   });
 
   final double x, y;
@@ -305,6 +318,12 @@ class Stick2D extends StatefulWidget {
   final double deadzonePct;
   final bool haptic;
   final KnobSize knobSize;
+
+  /// Trục dùng: chỉ 1 trục thì trục kia bị khoá ở giữa (như cần ga / cần lái của tay RC)
+  final StickAxes axes;
+
+  /// Vẽ kiểu tay RC (đế vuông, giếng tối, núm có khía)
+  final bool gimbal;
 
   @override
   State<Stick2D> createState() => _Stick2DState();
@@ -335,8 +354,8 @@ class _Stick2DState extends State<Stick2D> with SingleTickerProviderStateMixin {
 
   void _emit(double x, double y) {
     final wasCenter = _x == 0 && _y == 0;
-    _x = x.clamp(-100.0, 100.0).toDouble();
-    _y = y.clamp(-100.0, 100.0).toDouble();
+    _x = widget.axes.hasX ? x.clamp(-100.0, 100.0).toDouble() : 0;
+    _y = widget.axes.hasY ? y.clamp(-100.0, 100.0).toDouble() : 0;
     if (widget.haptic && _pointer != null && !wasCenter && _dz(_x) == 0 && _dz(_y) == 0) {
       HapticFeedback.selectionClick();
     }
@@ -346,7 +365,9 @@ class _Stick2DState extends State<Stick2D> with SingleTickerProviderStateMixin {
 
   void _fromLocal(Offset o, double side, Offset origin) {
     final d = o - origin;
-    _emit(d.dx / (side / 2) * 100, -d.dy / (side / 2) * 100);
+    // Kiểu tay RC: núm đi ít hơn nửa khung, lấy đúng quãng đi để núm nằm ngay dưới ngón tay
+    final full = widget.gimbal ? GimbalPainter.travelOf(side, widget.knobSize.factor, widget.axes) : side / 2;
+    _emit(d.dx / full * 100, -d.dy / full * 100);
   }
 
   void _onTick(Duration d) {
@@ -397,15 +418,26 @@ class _Stick2DState extends State<Stick2D> with SingleTickerProviderStateMixin {
         },
         child: CustomPaint(
           size: Size(c.maxWidth, c.maxHeight),
-          painter: _Stick2DPainter(
-            x: _x,
-            y: _y,
-            side: side,
-            knob: widget.knobSize.factor,
-            base: t.surface2,
-            line: t.line,
-            fill: t.accentFill,
-          ),
+          painter: widget.gimbal
+              ? GimbalPainter(
+                  x: _x,
+                  y: _y,
+                  side: side,
+                  knob: widget.knobSize.factor,
+                  axes: widget.axes,
+                  accent: t.accentFill,
+                  muted: t.textMuted,
+                  dark: Theme.of(context).brightness == Brightness.dark,
+                )
+              : _Stick2DPainter(
+                  x: _x,
+                  y: _y,
+                  side: side,
+                  knob: widget.knobSize.factor,
+                  base: t.surface2,
+                  line: t.line,
+                  fill: t.accentFill,
+                ),
         ),
       );
     });
@@ -444,6 +476,497 @@ class _Stick2DPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_Stick2DPainter o) => o.x != x || o.y != y || o.side != side || o.fill != fill || o.base != base;
+}
+
+/// Cần 2 trục kiểu tay RC: tấm đế vuông có ốc, giếng tối có vòng vạch, cao su chắn bụi, trục cần,
+/// núm có khía đổ bóng theo hướng nghiêng, vệt sáng trên vòng chỉ hướng đẩy. Chỉ 1 trục thì có rãnh dẫn.
+class GimbalPainter extends CustomPainter {
+  GimbalPainter({
+    required this.x,
+    required this.y,
+    required this.side,
+    required this.knob,
+    required this.axes,
+    required this.accent,
+    required this.muted,
+    required this.dark,
+  });
+
+  final double x, y, side, knob;
+  final StickAxes axes;
+  final Color accent, muted;
+  final bool dark;
+
+  /// Quãng đi của núm (dp) tính từ tâm. Hai trục: gimbal vuông, góc vẫn nằm trong giếng.
+  static double travelOf(double side, double knob, StickAxes axes) {
+    final r = side * 0.44, rc = r * (0.18 + knob * 0.3);
+    final t = r - rc - r * 0.07;
+    return axes == StickAxes.both ? t / sqrt2 * 1.18 : t;
+  }
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final c = Offset(s.width / 2, s.height / 2);
+    final sz = side;
+    final r = sz * 0.44, rc = r * (0.18 + knob * 0.3);
+    final travel = travelOf(sz, knob, axes);
+
+    // Tấm đế + 4 ốc
+    final plateRect = Rect.fromCenter(center: c, width: sz - 2, height: sz - 2);
+    final plate = RRect.fromRectAndRadius(plateRect, Radius.circular(sz * 0.13));
+    canvas.drawRRect(
+        plate,
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: dark ? const [Color(0xFF2E2F31), Color(0xFF1F2022)] : const [Color(0xFFF7F8F5), Color(0xFFE2E4DE)],
+          ).createShader(plateRect));
+    canvas.drawRRect(
+        plate,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = dark ? const Color(0xFF3D3E41) : const Color(0xFFD2D4CE));
+    final so = sz * 0.075, sr = sz * 0.022;
+    final slot = Paint()
+      ..color = Colors.black.withValues(alpha: 0.55)
+      ..strokeWidth = 1.2;
+    for (final p in [
+      plateRect.topLeft.translate(so, so),
+      plateRect.topRight.translate(-so, so),
+      plateRect.bottomLeft.translate(so, -so),
+      plateRect.bottomRight.translate(-so, -so),
+    ]) {
+      canvas.drawCircle(
+          p,
+          sr,
+          Paint()
+            ..shader = const RadialGradient(center: Alignment(-0.3, -0.3), colors: [Color(0xFF9DA0A6), Color(0xFF3B3D41)])
+                .createShader(Rect.fromCircle(center: p, radius: sr)));
+      final a = sr * 0.42;
+      canvas.drawLine(p.translate(-a, -a), p.translate(a, a), slot);
+      canvas.drawLine(p.translate(-a, a), p.translate(a, -a), slot);
+    }
+
+    // Viền nổi + giếng tối
+    final bez = Rect.fromCircle(center: c, radius: r + 4);
+    canvas.drawCircle(
+        c,
+        r + 4,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 5
+          ..shader = LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: dark
+                ? [Colors.white.withValues(alpha: 0.16), Colors.black.withValues(alpha: 0.6)]
+                : [Colors.white.withValues(alpha: 0.9), Colors.black.withValues(alpha: 0.25)],
+          ).createShader(bez));
+    canvas.drawCircle(
+        c,
+        r,
+        Paint()
+          ..shader = RadialGradient(
+            center: const Alignment(0, -0.2),
+            colors: dark ? const [Color(0xFF1B1C1E), Color(0xFF0C0D0E)] : const [Color(0xFF2C2D30), Color(0xFF1A1B1D)],
+          ).createShader(Rect.fromCircle(center: c, radius: r)));
+
+    // Vòng vạch chia
+    for (var i = 0; i < 48; i++) {
+      final a = i / 48 * 2 * pi;
+      final major = i % 12 == 0, mid = i % 6 == 0;
+      final r1 = r * (major ? 0.8 : (mid ? 0.85 : 0.885)), r2 = r * 0.93;
+      final d = Offset(cos(a), sin(a));
+      canvas.drawLine(
+          c + d * r1,
+          c + d * r2,
+          Paint()
+            ..color = major ? muted : const Color(0xFF4A4B4F)
+            ..strokeWidth = major ? 2 : 1);
+    }
+
+    final k = c.translate(x / 100 * travel, -y / 100 * travel);
+    final mag = min(1.0, sqrt(x * x + y * y) / 100);
+
+    // Vệt sáng trên vòng theo hướng đẩy cần
+    if (mag > 0.02) {
+      final a = atan2(-y, x), span = 0.25 + mag * 0.35;
+      final arc = Rect.fromCircle(center: c, radius: r * 0.965);
+      final p = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 3.5
+        ..color = accent.withValues(alpha: 0.35 + mag * 0.65);
+      final glow = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 5
+        ..color = accent.withValues(alpha: 0.5 * mag)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+      canvas.drawArc(arc, a - span, span * 2, false, glow);
+      canvas.drawArc(arc, a - span, span * 2, false, p);
+    }
+
+    // Rãnh dẫn khi chỉ dùng 1 trục, không thì chữ thập mờ
+    if (axes != StickAxes.both) {
+      final wid = rc * 0.75, len = travel * 2 + wid;
+      final rr = RRect.fromRectAndRadius(
+          Rect.fromCenter(center: c, width: axes == StickAxes.x ? len : wid, height: axes == StickAxes.x ? wid : len),
+          Radius.circular(wid / 2));
+      canvas.drawRRect(rr, Paint()..color = Colors.black.withValues(alpha: 0.45));
+      canvas.drawRRect(
+          rr,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1
+            ..color = Colors.white.withValues(alpha: 0.08));
+    } else {
+      final lp = Paint()
+        ..color = Colors.white.withValues(alpha: 0.06)
+        ..strokeWidth = 1;
+      canvas.drawLine(c.translate(-r * 0.75, 0), c.translate(r * 0.75, 0), lp);
+      canvas.drawLine(c.translate(0, -r * 0.75), c.translate(0, r * 0.75), lp);
+    }
+
+    // Cao su chắn bụi: vòng trong lệch theo cần nhiều hơn vòng ngoài
+    for (var i = 0; i < 3; i++) {
+      final f = i / 2, br = r * (0.3 - f * 0.12);
+      final b = Offset.lerp(c, k, f * 0.45)!;
+      canvas.drawCircle(
+          b,
+          br,
+          Paint()
+            ..shader = RadialGradient(
+              center: const Alignment(-0.3, -0.4),
+              colors: [i.isOdd ? const Color(0xFF2A2B2E) : const Color(0xFF232427), const Color(0xFF0D0E0F)],
+            ).createShader(Rect.fromCircle(center: b, radius: br)));
+      canvas.drawCircle(
+          b,
+          br,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1
+            ..color = Colors.white.withValues(alpha: 0.07));
+    }
+
+    // Trục cần
+    if ((k - c).distance > 0.5) {
+      canvas.drawLine(
+          c,
+          k,
+          Paint()
+            ..strokeWidth = r * 0.09
+            ..strokeCap = StrokeCap.round
+            ..shader = ui.Gradient.linear(c, k, const [Color(0xFF1B1C1E), Color(0xFF6E7179)]));
+    }
+
+    // Bóng núm lệch theo hướng nghiêng
+    canvas.drawCircle(
+        k.translate(x / 100 * 6 + 2, -y / 100 * 6 + 5),
+        rc,
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.6)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 7 + mag * 3));
+
+    // Thân núm graphite có khía
+    final capRect = Rect.fromCircle(center: k, radius: rc);
+    canvas.drawCircle(
+        k,
+        rc,
+        Paint()
+          ..shader = const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF3A3D43), Color(0xFF131417)],
+          ).createShader(capRect));
+    final knurl = Paint()
+      ..color = Colors.white.withValues(alpha: 0.16)
+      ..strokeWidth = 1.1;
+    for (var i = 0; i < 44; i++) {
+      final d = Offset(cos(i / 44 * 2 * pi), sin(i / 44 * 2 * pi));
+      canvas.drawLine(k + d * rc * 0.74, k + d * rc * 0.97, knurl);
+    }
+    // Mặt núm lõm + viền sáng + chấm màu nhấn
+    final top = rc * 0.7;
+    canvas.drawCircle(
+        k,
+        top,
+        Paint()
+          ..shader = const RadialGradient(center: Alignment(-0.35, -0.45), colors: [Color(0xFF5A5E66), Color(0xFF1D1F23)])
+              .createShader(Rect.fromCircle(center: k, radius: top)));
+    canvas.drawCircle(
+        k,
+        top,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = Colors.black.withValues(alpha: 0.35));
+    canvas.drawArc(
+        Rect.fromCircle(center: k, radius: rc - 0.8),
+        pi * 1.1,
+        pi * 0.65,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = Colors.white.withValues(alpha: 0.22));
+    canvas.drawCircle(
+        k,
+        rc * 0.16,
+        Paint()
+          ..color = accent
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+    canvas.drawCircle(k, rc * 0.16, Paint()..color = accent);
+  }
+
+  @override
+  bool shouldRepaint(GimbalPainter o) =>
+      o.x != x || o.y != y || o.side != side || o.knob != knob || o.axes != axes || o.accent != accent || o.dark != dark;
+}
+
+// ============================================================================
+//  Thanh trim kiểu tay RC: rãnh có vạch chia, vạch sáng chỉ vị trí, nút ◀ ▶ (▲ ▼) hai đầu.
+//  Khung cao hơn rộng thì nằm dọc. Bấm vào rãnh: onTapTrack (mở bảng trim từng kênh).
+// ============================================================================
+class TrimBar extends StatelessWidget {
+  const TrimBar({super.key, required this.value, required this.onStep, this.limit = 200, this.step = 5, this.onTapTrack});
+
+  final int value, limit, step;
+
+  /// Đổi trim thêm `delta` µs; null = khoá (vd chưa chọn kênh)
+  final ValueChanged<int>? onStep;
+  final VoidCallback? onTapTrack;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return LayoutBuilder(builder: (context, c) {
+      final vertical = c.maxHeight > c.maxWidth;
+      final short = vertical ? c.maxWidth : c.maxHeight;
+      final btn = min(44.0, max(short, 24.0));
+      Widget button(int dir) {
+        final can = onStep != null && (dir < 0 ? value > -limit : value < limit);
+        final glyph = vertical ? (dir > 0 ? '▲' : '▼') : (dir > 0 ? '▶' : '◀');
+        return HoldRepeat(
+          onStep: can ? (n) => onStep!(dir * step * n) : null,
+          fastTimes: 2,
+          child: SizedBox(
+            width: vertical ? short : btn,
+            height: vertical ? btn : short,
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.card - Gap.s)),
+              ),
+              onPressed: can ? () => onStep!(dir * step) : null,
+              child: Text(glyph, style: TextStyle(fontSize: min(14.0, btn * 0.4))),
+            ),
+          ),
+        );
+      }
+
+      final track = Expanded(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTapTrack,
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: vertical ? 0 : Gap.xs, vertical: vertical ? Gap.xs : 0),
+            child: CustomPaint(
+              size: Size.infinite,
+              painter: _TrimPainter(
+                value: value / limit,
+                vertical: vertical,
+                track: t.surface2,
+                tick: t.line,
+                center: t.textMuted,
+                mark: onStep == null ? t.disabled : t.accentFill,
+              ),
+            ),
+          ),
+        ),
+      );
+      final children = vertical ? [button(1), track, button(-1)] : [button(-1), track, button(1)];
+      return vertical ? Column(children: children) : Row(children: children);
+    });
+  }
+}
+
+class _TrimPainter extends CustomPainter {
+  _TrimPainter({
+    required this.value,
+    required this.vertical,
+    required this.track,
+    required this.tick,
+    required this.center,
+    required this.mark,
+  });
+
+  final double value; // −1…+1
+  final bool vertical;
+  final Color track, tick, center, mark;
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final long = vertical ? s.height : s.width, across = vertical ? s.width : s.height;
+    final th = min(10.0, across * 0.4);
+    Offset at(double along, double off) => vertical ? Offset(s.width / 2 + off, along) : Offset(along, s.height / 2 + off);
+    final rect = vertical
+        ? Rect.fromCenter(center: s.center(Offset.zero), width: th, height: long)
+        : Rect.fromCenter(center: s.center(Offset.zero), width: long, height: th);
+    canvas.drawRRect(RRect.fromRectAndRadius(rect, Radius.circular(th / 2)), Paint()..color = track);
+    // 21 vạch, vạch giữa đậm
+    const n = 21;
+    final pad = th / 2;
+    for (var i = 0; i < n; i++) {
+      final a = pad + (long - pad * 2) * i / (n - 1);
+      final mid = i == n ~/ 2;
+      final h = th / 2 + (mid ? 5 : 3);
+      canvas.drawLine(
+          at(a, -h),
+          at(a, h),
+          Paint()
+            ..color = mid ? center : tick
+            ..strokeWidth = mid ? 1.5 : 1);
+    }
+    // Vạch sáng vị trí trim (dọc: dương ở trên)
+    final p = (value.clamp(-1.0, 1.0) + 1) / 2;
+    final a = vertical ? long - pad - (long - pad * 2) * p : pad + (long - pad * 2) * p;
+    final m = vertical ? Rect.fromCenter(center: at(a, 0), width: th + 6, height: 6) : Rect.fromCenter(center: at(a, 0), width: 6, height: th + 6);
+    final mr = RRect.fromRectAndRadius(m, const Radius.circular(3));
+    canvas.drawRRect(
+        mr,
+        Paint()
+          ..color = mark.withValues(alpha: 0.6)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+    canvas.drawRRect(mr, Paint()..color = mark);
+  }
+
+  @override
+  bool shouldRepaint(_TrimPainter o) => o.value != value || o.vertical != vertical || o.mark != mark || o.track != track;
+}
+
+// ============================================================================
+//  Bảng kênh: mỗi kênh một dòng gọn — tên · thanh lệch từ giữa · số (µs hoặc %).
+//  Nhiều kênh mà khung thấp thì tự chia cột.
+// ============================================================================
+class ChannelRow {
+  const ChannelRow({required this.name, required this.pct, required this.value, this.on = true});
+  final String name;
+  final double pct; // −100…+100
+  final String? value; // null = ẩn số
+  final bool on;
+}
+
+class ChannelMonitor extends StatelessWidget {
+  const ChannelMonitor({super.key, required this.rows});
+
+  final List<ChannelRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    if (rows.isEmpty) {
+      return Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(tr('Chưa chọn kênh', 'No channel picked'), style: AppText.label.copyWith(color: t.textMuted)),
+        ),
+      );
+    }
+    return LayoutBuilder(builder: (context, c) {
+      const minRow = 14.0, minColW = 96.0;
+      final maxCols = max(1, (c.maxWidth / minColW).floor());
+      var cols = 1;
+      while (cols < maxCols && rows.length / cols * minRow > c.maxHeight) {
+        cols++;
+      }
+      final perCol = (rows.length / cols).ceil();
+      final rowH = c.maxHeight / perCol;
+      final fs = (rowH * 0.62).clamp(8.0, 13.0);
+      final colW = (c.maxWidth - (cols - 1) * Gap.s) / cols;
+      final nameW = min(colW * 0.34, fs * 5.2);
+      final showNum = rows.any((r) => r.value != null);
+      final valW = showNum ? min(colW * 0.3, fs * 3.4) : 0.0;
+      final style = TextStyle(fontSize: fs, fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()], height: 1);
+      Widget row(ChannelRow r) => SizedBox(
+            height: rowH,
+            child: Row(children: [
+              SizedBox(
+                width: nameW,
+                child: Text(r.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    softWrap: false,
+                    style: style.copyWith(color: t.textMuted, fontWeight: FontWeight.w600)),
+              ),
+              Expanded(
+                child: CustomPaint(
+                  size: Size.infinite,
+                  painter: _ChBarPainter(
+                    pct: r.pct,
+                    h: (rowH * 0.42).clamp(3.0, 8.0),
+                    track: t.surface2,
+                    center: t.textMuted,
+                    fill: r.on ? t.accentFill : t.disabled,
+                  ),
+                ),
+              ),
+              if (showNum)
+                SizedBox(
+                  width: valW,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(r.value ?? '', maxLines: 1, softWrap: false, style: style.copyWith(color: r.on ? t.text : t.textMuted)),
+                  ),
+                ),
+            ]),
+          );
+      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (var col = 0; col < cols; col++) ...[
+          if (col > 0) const SizedBox(width: Gap.s),
+          Expanded(
+            child: Column(children: [
+              for (final r in rows.skip(col * perCol).take(perCol)) row(r),
+            ]),
+          ),
+        ],
+      ]);
+    });
+  }
+}
+
+class _ChBarPainter extends CustomPainter {
+  _ChBarPainter({required this.pct, required this.h, required this.track, required this.center, required this.fill});
+
+  final double pct, h;
+  final Color track, center, fill;
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    const pad = 4.0;
+    final w = max(0.0, s.width - pad * 2);
+    final r = Rect.fromLTWH(pad, (s.height - h) / 2, w, h);
+    canvas.drawRRect(RRect.fromRectAndRadius(r, Radius.circular(h / 2)), Paint()..color = track);
+    final mid = r.center.dx, v = (pct / 100).clamp(-1.0, 1.0);
+    if (v != 0) {
+      final f = Rect.fromLTRB(min(mid, mid + v * w / 2), r.top, max(mid, mid + v * w / 2), r.bottom);
+      canvas.drawRRect(RRect.fromRectAndRadius(f, Radius.circular(h / 2)), Paint()..color = fill);
+    }
+    canvas.drawLine(
+        Offset(mid, r.top - 2),
+        Offset(mid, r.bottom + 2),
+        Paint()
+          ..color = center.withValues(alpha: 0.7)
+          ..strokeWidth = 1);
+  }
+
+  @override
+  bool shouldRepaint(_ChBarPainter o) => o.pct != pct || o.fill != fill || o.h != h || o.track != track;
 }
 
 // ============================================================================

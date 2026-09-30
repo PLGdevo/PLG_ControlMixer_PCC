@@ -58,13 +58,13 @@ class SourceInfo {
 }
 
 abstract final class DataSource {
-  static const battery = 'battery', current = 'current', speed = 'speed', ping = 'ping', rssi = 'rssi';
+  static const battery = 'battery', current = 'current', speed = 'speed', ping = 'ping', lq = 'lq', rssi = 'rssi';
   static const arm = 'arm', link = 'link', failsafe = 'failsafe';
 
   /// Ô theo dõi 10 kênh (chỉ ô đồng hồ)
   static const channels = 'channels';
 
-  static const carKeys = [battery, current, speed, ping, rssi];
+  static const carKeys = [battery, current, speed, ping, lq, rssi];
   static const stateKeys = [arm, link, failsafe];
 
   static String ch(int n) => 'ch:$n';
@@ -85,6 +85,9 @@ abstract final class DataSource {
         return SourceInfo(key!, tr('Tốc độ', 'Speed'), SourceGroup.car, unit: 'km/h', decimals: 1, min: 0, max: 40, alarm: 20);
       case ping:
         return SourceInfo(key!, 'Ping', SourceGroup.car, unit: 'ms', min: 0, max: 200, alarm: 100);
+      case lq:
+        return SourceInfo(key!, tr('Chất lượng liên kết (LQ)', 'Link quality (LQ)'), SourceGroup.car,
+            unit: '%', min: 0, max: 100, alarm: 70, alarmBelow: true);
       case rssi:
         return SourceInfo(key!, 'RSSI', SourceGroup.car, unit: 'dBm', min: -90, max: -30, alarm: -80, alarmBelow: true);
       case arm:

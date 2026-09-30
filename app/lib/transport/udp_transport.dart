@@ -19,6 +19,9 @@ class UdpTransport implements CarTransport {
   String get name => 'WiFi $host:$port';
 
   @override
+  Duration get controlPeriod => const Duration(milliseconds: 10); // 100 Hz
+
+  @override
   Stream<Uint8List> get incoming => _in.stream;
 
   @override

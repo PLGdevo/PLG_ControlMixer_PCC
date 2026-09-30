@@ -5,16 +5,19 @@ import '../models/data_source.dart';
 import 'layout_grid.dart';
 
 abstract final class LayoutTemplates {
+  /// Mẫu viết theo lưới thưa 24×12 cho dễ đọc, nhân lên lưới dày khi dựng
+  static const _k = ControlLayout.defaultCols ~/ 24;
+
   static ControlItem _it(ItemKind k, int x, int y, int w, int h, {String? input, String? source, ReturnConfig? ret}) =>
       ControlItem(
         id: ControlItem.newId(),
         kind: k,
         inputId: input,
         source: source,
-        x: x,
-        y: y,
-        w: w,
-        h: h,
+        x: x * _k,
+        y: y * _k,
+        w: w * _k,
+        h: h * _k,
         returnCfg: ret,
       );
 
@@ -38,8 +41,13 @@ abstract final class LayoutTemplates {
       ]);
   }
 
-  /// Kích thước mặc định khi thêm một loại phần tử
-  static (int, int) defaultSize(ItemKind k) => switch (k) {
+  /// Kích thước mặc định khi thêm một loại phần tử (ô lưới dày)
+  static (int, int) defaultSize(ItemKind k) {
+    final (w, h) = _coarseSize(k);
+    return (w * _k, h * _k);
+  }
+
+  static (int, int) _coarseSize(ItemKind k) => switch (k) {
         ItemKind.stickH => (8, 3),
         ItemKind.stickV => (3, 8),
         ItemKind.stick2D => (6, 6),
@@ -51,6 +59,8 @@ abstract final class LayoutTemplates {
         ItemKind.led => (3, 1),
         ItemKind.bar => (6, 2),
         ItemKind.vector => (4, 4),
+        ItemKind.channels => (6, 3),
+        ItemKind.trimBar => (6, 1),
       };
 
   /// Thêm một phần tử điều khiển (cần gạt, nút, ...) vào chỗ trống, gắn sẵn Input nếu có.

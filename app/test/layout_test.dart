@@ -10,6 +10,26 @@ import 'package:rc_controller/models/input_def.dart';
 import 'package:rc_controller/theme/tokens.dart';
 
 void main() {
+  test('Cần 2 trục dùng 1/2 trục, thanh trim theo kênh, bảng kênh chọn kênh: lưu và đọc lại', () {
+    ControlItem mk(ItemKind k) => ControlItem(id: 'a', kind: k, x: 0, y: 0, w: 4, h: 4);
+    final stick = mk(ItemKind.stick2D)..axes = StickAxes.y;
+    expect(ControlItem.fromJson(stick.toJson()).axes, StickAxes.y);
+    expect(ControlItem.fromJson(mk(ItemKind.stick2D).toJson()).axes, StickAxes.both);
+    expect(StickAxes.x.hasY || StickAxes.y.hasX, isFalse);
+    // Bố cục cũ chưa có khoá kiểu vẽ: cần 2 trục vẽ kiểu tay RC
+    expect(ItemStyle.fromJson({}).gimbal, isTrue);
+    expect(ItemStyle.fromJson((ItemStyle()..gimbal = false).toJson()).gimbal, isFalse);
+
+    final trim = mk(ItemKind.trimBar)..trimCh = 3;
+    expect(ControlItem.fromJson(trim.toJson()).trimCh, 3);
+    expect(ControlItem.fromJson(trim.toJson()).touchable, isTrue);
+
+    final mon = mk(ItemKind.channels)..chList = [1, 2, 5];
+    expect(ControlItem.fromJson(mon.toJson()).chList, [1, 2, 5]);
+    expect(ControlItem.fromJson(mk(ItemKind.channels).toJson()).chList, isNull); // null = mọi kênh đang bật
+    expect(ItemKind.channels.isControl || ItemKind.trimBar.isControl, isFalse);
+  });
+
   test('Màu riêng của phần tử: lưu theo tên màu, không có / tên lạ thì theo màu app', () {
     final st = ItemStyle(color: AccentColor.red);
     expect(st.toJson()['color'], 'red');
@@ -41,10 +61,36 @@ void main() {
       expect(LayoutGrid.fits(l, 'new', const GridRect(22, 11, 3, 2)), isFalse); // tràn lưới
     });
 
-    test('kẹp kích thước theo loại', () {
-      final lim = SizeLimits.of(ItemKind.button);
-      expect(LayoutGrid.clampSize(const GridRect(0, 0, 1, 9), lim, 24, 12), const GridRect(0, 0, 2, 4));
-      expect(LayoutGrid.clampSize(const GridRect(23, 0, 3, 2), lim, 24, 12), const GridRect(21, 0, 3, 2));
+    test('không giới hạn cỡ lớn nhất, chỉ kẹp trong lưới và cỡ nhỏ nhất', () {
+      final lim = SizeLimits.of(ItemKind.stick2D);
+      expect(LayoutGrid.clampSize(const GridRect(0, 0, 1, 20), lim, 48, 24), const GridRect(0, 0, 2, 20));
+      expect(LayoutGrid.clampSize(const GridRect(40, 0, 60, 30), lim, 48, 24), const GridRect(0, 0, 48, 24));
+      expect(LayoutGrid.clampSize(const GridRect(47, 0, 3, 2), lim, 48, 24), const GridRect(45, 0, 3, 2));
+    });
+
+    test('kéo to đụng phần tử khác thì dừng sát phần tử đó', () {
+      final l = ControlLayout(id: 'l', name: 'l', items: [
+        ControlItem(id: 'a', kind: ItemKind.button, x: 0, y: 0, w: 4, h: 4),
+        ControlItem(id: 'b', kind: ItemKind.button, x: 10, y: 0, w: 4, h: 4),
+      ]);
+      // Kéo cạnh phải của a tới cột 20: dừng ở cột 10 (sát b)
+      final r = LayoutGrid.largestFree(l, 'a', const GridRect(0, 0, 4, 4), const GridRect(0, 0, 20, 4), 1, 0);
+      expect(r, const GridRect(0, 0, 10, 4));
+      // Kéo góc dưới phải: được cao hết lưới, bề ngang vẫn dừng sát b
+      final r2 = LayoutGrid.largestFree(l, 'a', const GridRect(0, 0, 4, 4), const GridRect(0, 0, 20, 24), 1, 1);
+      expect(r2, const GridRect(0, 0, 10, 24));
+    });
+
+    test('bố cục lưới thưa cũ 24×12 được nhân lên lưới dày, giữ nguyên hình', () {
+      final old = {
+        'id': 'l', 'name': 'l', 'cols': 24, 'rows': 12,
+        'items': [ControlItem(id: 'a', kind: ItemKind.stickV, x: 1, y: 2, w: 3, h: 8).toJson()],
+      };
+      final l = ControlLayout.fromJson(old);
+      expect((l.cols, l.rows), (48, 24));
+      expect(GridRect.of(l.items.first), const GridRect(2, 4, 6, 16));
+      // Đã là lưới dày thì giữ nguyên
+      expect(GridRect.of(ControlLayout.fromJson(l.toJson()).items.first), const GridRect(2, 4, 6, 16));
     });
 
     test('vùng chạm ≥ 48 dp nâng kích thước nhỏ nhất', () {
@@ -79,7 +125,7 @@ void main() {
 
     test('một Input trên hai phần tử thì không cho lưu', () {
       final l = LayoutTemplates.standard();
-      l.items.add(ControlItem(id: 'dup', kind: ItemKind.knob, inputId: 'steer', x: 18, y: 0, w: 3, h: 3));
+      l.items.add(ControlItem(id: 'dup', kind: ItemKind.knob, inputId: 'steer', x: 36, y: 0, w: 6, h: 6));
       expect(LayoutGrid.validate(l), contains('nhiều hơn một phần tử'));
     });
 

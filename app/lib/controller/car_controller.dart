@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -10,6 +12,7 @@ import '../protocol/protocol.dart';
 import '../services/arm_controller.dart';
 import '../services/condition_engine.dart';
 import '../services/output_pipeline.dart';
+import '../services/ping_service.dart';
 import '../transport/transport.dart';
 
 enum LinkState { disconnected, connecting, connected, lost }
@@ -21,7 +24,6 @@ class CarController extends ChangeNotifier {
     arm.addListener(_onArmChanged);
   }
 
-  static const controlPeriod = Duration(milliseconds: 25); // 40 Hz
   static const linkTimeout = Duration(milliseconds: 1000); // không có telemetry -> "mất tín hiệu"
   static const _ackKey = 0x2000;
   static const _netKey = 0x4100; // NET_DATA theo section
@@ -56,6 +58,14 @@ class CarController extends ChangeNotifier {
   /// Khoá nhận diện kết nối hiện tại (vd "wifi:192.168.4.1:4210"), để ping nhanh dùng lại kết nối
   String? connectedKey;
 
+  /// Hồ sơ đang được nối (kể cả bước dò xe trong mạng trước khi mở kết nối); null = không nối xe nào
+  String? connectingKey;
+
+  void setConnecting(String? key) {
+    connectingKey = key;
+    notifyListeners();
+  }
+
   Telemetry? telemetry;
   DateTime? lastTelemetryAt;
   CarConfig? config;
@@ -78,7 +88,8 @@ class CarController extends ChangeNotifier {
   bool get isConnected => state == LinkState.connected || state == LinkState.lost;
 
   // ---------------- Kết nối ----------------
-  Future<void> connect(CarTransport t, {String? key}) async {
+  /// `expectId`: mã xe (MAC) của hồ sơ; xe trả lời mã khác thì từ chối (IP đã thuộc về xe khác)
+  Future<void> connect(CarTransport t, {String? key, String? expectId}) async {
     if (state != LinkState.disconnected) await disconnect();
     error = null;
     _setState(LinkState.connecting);
@@ -91,12 +102,21 @@ class CarController extends ChangeNotifier {
       // Bắt tay: xe phải trả lời cấu hình thì mới coi là kết nối thành công
       config = await _fetchConfig();
       carInfo = await _probeInfo();
+      final got = carInfo?.id;
+      if (expectId != null && got != null && got != expectId.toUpperCase()) {
+        throw Exception(tr(
+            'sai xe: địa chỉ này là xe $got, không phải xe $expectId của hồ sơ. '
+                'Đã thay mạch xe thì bấm "Quên mã xe" trong Cấu hình',
+            'wrong car: this address is car $got, not car $expectId of this profile. '
+                'If the car board was replaced, tap "Forget car ID" in Car settings'));
+      }
 
       connectedKey = key;
       arm.onConnected();
       lastTelemetryAt = DateTime.now();
-      _controlTimer = Timer.periodic(controlPeriod, (_) => _sendControl());
+      _controlTimer = Timer.periodic(t.controlPeriod, (_) => _sendControl()); // WiFi 100 Hz, BLE 50 Hz
       _watchdog = Timer.periodic(const Duration(milliseconds: 200), (_) => _checkLink());
+      _startLinkStats(t);
       WakelockPlus.enable();
       _setState(LinkState.connected);
     } catch (e) {
@@ -139,12 +159,16 @@ class CarController extends ChangeNotifier {
       if (!w.isCompleted) w.completeError(StateError(tr('Đã ngắt kết nối', 'Disconnected')));
     }
     _waiters.clear();
+    _stopLinkStats();
     try {
       await _transport?.close();
     } catch (_) {}
     _transport = null;
     connectedKey = null;
     telemetry = null;
+    testing = false;
+    testPct.clear();
+    _liveApply?.cancel();
     carInfo = null;
     _syncedHash = null;
     lastSentUs = const [];
@@ -259,16 +283,24 @@ class CarController extends ChangeNotifier {
     if (multiChannel) {
       // n kênh: app áp servo (O2), xe xuất thẳng µs. READY gửi failsafeUs (R1);
       // chưa vào màn Lái thì gửi 0 kênh để giữ kết nối, xe xuất failsafe của nó.
-      final all = pl == null ? const <int>[] : (arm.armed ? pl.toUsList(pct!) : pl.failsafeUs());
+      final List<int> all;
+      if (pl == null) {
+        all = const [];
+      } else if (arm.armed) {
+        all = pl.toUsList(pct!);
+      } else {
+        all = testing ? pl.toUsList(pl.testPct(testPct)) : pl.failsafeUs();
+      }
       lastSentUs = all.length > carChannels ? all.sublist(0, carChannels) : all;
       frame = _controlUsFrame(lastSentUs);
     } else {
       // Firmware cũ (2 kênh): xe tự áp servo, chỉ nhận CH1 (chân lái) và CH2 (chân ga).
       // Chưa ARM → gửi trung tính.
       var thr = 0.0, steer = 0.0;
-      if (pl != null && arm.armed) {
-        steer = pct![0] / 100;
-        thr = pct[1] / 100;
+      if (pl != null && (arm.armed || testing)) {
+        final v = arm.armed ? pct! : pl.testPct(testPct);
+        steer = v[0] / 100;
+        thr = v[1] / 100;
       }
       frame = _controlFrame(thr, steer);
     }
@@ -304,11 +336,76 @@ class CarController extends ChangeNotifier {
       if (t == null) return;
       telemetry = t;
       lastTelemetryAt = DateTime.now();
+      _telAt.add(_linkClock.elapsedMilliseconds);
       if (t.failsafe && arm.armed) arm.onCarFailsafe();
       if (state == LinkState.lost) state = LinkState.connected;
       notifyListeners();
     }
   }
+
+  // ---------------- Chất lượng liên kết (như tay RC) ----------------
+  static const _lqWindowMs = 2000;
+  static const _telemetryPeriodMs = 100; // firmware gửi telemetry 10 Hz
+
+  /// Ngưỡng báo "Tín hiệu yếu" trên màn Lái
+  static const weakLq = 70, slowPingMs = 200;
+
+  /// Ping ngầm 1 lần/giây suốt lúc kết nối (xe trả PONG ngay, không ảnh hưởng failsafe)
+  PingService? _pinger;
+  final _linkClock = Stopwatch();
+  final _telAt = Queue<int>(); // thời điểm nhận telemetry (ms theo _linkClock)
+  bool _background = false;
+
+  void _startLinkStats(CarTransport t) {
+    _telAt.clear();
+    _linkClock
+      ..reset()
+      ..start();
+    _pinger = PingService(t)..addListener(notifyListeners);
+    if (!_background) _pinger!.start(intervalMs: 1000);
+  }
+
+  void _stopLinkStats() {
+    _pinger?.dispose();
+    _pinger = null;
+    _linkClock.stop();
+    _telAt.clear();
+  }
+
+  /// App xuống nền thì ngừng ping ngầm, lên lại thì đo tiếp từ đầu
+  set background(bool v) {
+    if (_background == v) return;
+    _background = v;
+    final p = _pinger;
+    if (p == null) return;
+    if (v) {
+      p.stop();
+    } else {
+      p.window.clear();
+      p.start(intervalMs: 1000);
+    }
+  }
+
+  /// Ping trung bình 20 gói gần nhất (ms); null = chưa nối hoặc chưa có PONG nào
+  double? get pingMs => _pinger?.stats.avgMs;
+
+  /// LQ (%): tỉ lệ gói telemetry (10 Hz) về tới trong 2 giây gần nhất. null = chưa nối / mới nối
+  int? get linkQuality {
+    if (_pinger == null) return null;
+    final now = _linkClock.elapsedMilliseconds;
+    while (_telAt.isNotEmpty && now - _telAt.first > _lqWindowMs) {
+      _telAt.removeFirst();
+    }
+    final span = min(now, _lqWindowMs);
+    if (span < 500) return null;
+    // Cho lệch 1 gói: nhịp loop của xe làm chu kỳ telemetry dài hơn 100 ms một chút
+    final expected = span / _telemetryPeriodMs - 1;
+    return (_telAt.length * 100 / expected).round().clamp(0, 100);
+  }
+
+  /// Tín hiệu yếu nhưng chưa mất hẳn: LQ thấp hoặc ping cao
+  bool get weakLink =>
+      state == LinkState.connected && ((linkQuality ?? 100) < weakLq || (pingMs ?? 0) > slowPingMs);
 
   /// Gửi yêu cầu và chờ phản hồi, tự thử lại nếu hết thời gian
   Future<Frame> _request(
@@ -335,11 +432,13 @@ class CarController extends ChangeNotifier {
   }
 
   // ---------------- Cấu hình ----------------
-  /// Firmware n kênh trả INFO; firmware cũ không trả lời → null (lái 2 kênh như cũ)
+  /// Firmware n kênh trả INFO; firmware cũ không trả lời → null (lái 2 kênh như cũ).
+  /// Thử đủ lâu: xe vừa được nối lại có thể trả lời chậm, mà lỡ bị coi là firmware cũ thì cả phiên
+  /// chỉ còn CH1/CH2 và trim / các kênh khác không có tác dụng.
   Future<CarInfo?> _probeInfo() async {
     try {
       final f = await _request(encodeFrame(PacketType.infoGet), PacketType.info,
-          retries: 2, timeout: const Duration(milliseconds: 400));
+          retries: 3, timeout: const Duration(milliseconds: 500));
       return CarInfo.parse(f.payload);
     } on TimeoutException {
       return null;
@@ -439,6 +538,84 @@ class CarController extends ChangeNotifier {
     await applyConfig(n);
   }
 
+  // ---------------- Cấu hình trực tiếp ----------------
+  /// Màn Cấu hình mở trên xe đang nối: bản nháp được nạp vào vòng gửi, sửa gì có tác dụng ngay.
+  /// `true` khi hồ sơ trong vòng gửi do màn Cấu hình nạp (không có màn Lái bên dưới).
+  bool _liveOwnsPipeline = false;
+  bool _live = false;
+  Timer? _liveApply;
+
+  /// Thử trên xe: chưa ARM vẫn xuất kênh theo cấu hình đang sửa (cần gạt ở vị trí nghỉ, kênh đang
+  /// thử theo [testPct]) thay cho failsafe. Tự tắt khi ngắt kết nối hoặc rời màn Cấu hình.
+  bool testing = false;
+
+  /// Kênh đang được kéo thử ở màn Cấu hình: số kênh → %
+  final Map<int, double> testPct = {};
+
+  bool get live => _live;
+
+  /// Lý do chưa bật được Thử trên xe, null nếu được
+  String? get testBlock {
+    if (!_live || !isConnected) return tr('Chưa kết nối xe', 'Car not connected');
+    if (state == LinkState.lost) return tr('Mất tín hiệu', 'Signal lost');
+    if (arm.armed) return tr('Đang ARM ở màn Lái', 'Armed on the drive screen');
+    if (arm.state != ArmState.ready) {
+      return arm.syncFailed
+          ? tr('Không đồng bộ được failsafe với xe', 'Could not sync failsafe with the car')
+          : tr('Chưa sẵn sàng (${arm.state.label})', 'Not ready (${arm.state.label})');
+    }
+    return null;
+  }
+
+  /// Bắt đầu / cập nhật cấu hình trực tiếp với bản nháp hợp lệ `p` (truyền bản sao)
+  void updateLive(CarProfile p) {
+    if (!_live) {
+      _live = true;
+      _liveOwnsPipeline = pipeline == null;
+    }
+    loadProfile(p);
+    // Firmware cũ tự áp Center/trim/đảo chiều của CH1/CH2 → gửi cấu hình xuống xe (chưa lưu flash)
+    if (!multiChannel && isConnected) {
+      _liveApply?.cancel();
+      _liveApply = Timer(const Duration(milliseconds: 300), () => applyConfig(p.toCarConfig()).catchError((_) {}));
+    }
+    notifyListeners();
+  }
+
+  void setTesting(bool on) {
+    testing = on && testBlock == null;
+    if (!testing) testPct.clear();
+    notifyListeners();
+  }
+
+  /// Kéo thử kênh `ch` (null = thả tay, kênh về vị trí nghỉ)
+  void setTest(int ch, double? pct) {
+    if (pct == null) {
+      testPct.remove(ch);
+    } else {
+      testPct[ch] = pct.clamp(-100.0, 100.0).toDouble();
+    }
+  }
+
+  /// Rời màn Cấu hình: tắt thử, trả vòng gửi về hồ sơ đã lưu `saved`
+  void endLive(CarProfile? saved) {
+    if (!_live || _disposed) return;
+    _live = false;
+    testing = false;
+    testPct.clear();
+    _liveApply?.cancel();
+    if (_liveOwnsPipeline) {
+      unloadProfile();
+    } else if (saved != null) {
+      loadProfile(saved);
+    }
+    _liveOwnsPipeline = false;
+    if (!multiChannel && isConnected && saved != null) {
+      applyConfig(saved.toCarConfig()).catchError((_) {});
+    }
+    notifyListeners();
+  }
+
   // ---------------- Mạng của xe (dac_ta_wifi_3_che_do.md) ----------------
   /// Cấu hình mạng nằm trên xe (xe cần nó lúc khởi động), không nằm trong hồ sơ
   Future<NetStatus> readNetStatus() async {
@@ -499,8 +676,11 @@ class CarController extends ChangeNotifier {
 
   static String _msg(Object e) => e.toString().replaceFirst('Exception: ', '');
 
+  bool _disposed = false;
+
   @override
   void dispose() {
+    _disposed = true;
     arm.removeListener(_onArmChanged);
     _teardown();
     super.dispose();

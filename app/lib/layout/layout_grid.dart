@@ -50,6 +50,28 @@ abstract final class LayoutGrid {
     return GridRect(x, y, w, h);
   }
 
+  /// Đổi cỡ từ `start` về phía `target` (cạnh `hx`/`hy` đang kéo, cạnh đối diện đứng yên):
+  /// khung lớn nhất nằm giữa hai cỡ đó mà không đè phần tử khác. null nếu không có.
+  static GridRect? largestFree(ControlLayout l, String id, GridRect start, GridRect target, int hx, int hy) {
+    GridRect? best;
+    var bestArea = -1;
+    final wLo = min(start.w, target.w), wHi = max(start.w, target.w);
+    final hLo = min(start.h, target.h), hHi = max(start.h, target.h);
+    for (var w = wHi; w >= wLo; w--) {
+      for (var h = hHi; h >= hLo; h--) {
+        if (w * h <= bestArea) break;
+        final x = hx < 0 ? target.right - w : target.x;
+        final y = hy < 0 ? target.bottom - h : target.y;
+        final r = GridRect(x, y, w, h);
+        if (r.inside(l.cols, l.rows) && !collides(l, id, r)) {
+          best = r;
+          bestArea = w * h;
+        }
+      }
+    }
+    return best;
+  }
+
   /// Tìm chỗ trống đầu tiên (quét từ trên xuống, trái sang phải)
   static GridRect? findFreeSpot(ControlLayout l, int w, int h, {String id = ''}) {
     for (var y = 0; y + h <= l.rows; y++) {
@@ -88,8 +110,8 @@ abstract final class LayoutGrid {
       final r = GridRect.of(i);
       if (!r.inside(l.cols, l.rows)) return tr('${i.kind.label} nằm ngoài lưới', '${i.kind.label} is outside the grid');
       final lim = SizeLimits.of(i.kind);
-      if (i.w < lim.minW || i.h < lim.minH || i.w > lim.maxW || i.h > lim.maxH) {
-        return tr('${i.kind.label} có kích thước ngoài giới hạn', '${i.kind.label} has an out-of-range size');
+      if (i.w < lim.minW || i.h < lim.minH) {
+        return tr('${i.kind.label} quá nhỏ', '${i.kind.label} is too small');
       }
       if (collides(l, i.id, r)) return tr('Có phần tử chồng lên nhau', 'Some controls overlap');
       for (final id in i.inputIds) {

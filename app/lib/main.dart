@@ -18,11 +18,14 @@ Future<void> main() async {
 }
 
 class RcApp extends StatefulWidget {
-  const RcApp({super.key, required this.controller, required this.repo, required this.theme});
+  const RcApp({super.key, required this.controller, required this.repo, required this.theme, this.autoConnect = true});
 
   final CarController controller;
   final ProfileRepository repo;
   final ThemeController theme;
+
+  /// Mở app tự nối xe đang chọn; test tắt vì không có xe thật
+  final bool autoConnect;
 
   @override
   State<RcApp> createState() => _RcAppState();
@@ -31,14 +34,22 @@ class RcApp extends StatefulWidget {
 class _RcAppState extends State<RcApp> {
   final lang = LangController.instance;
 
+  /// App xuống nền thì ngừng ping ngầm
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
     lang.addListener(_relabel);
+    _lifecycle = AppLifecycleListener(
+      onHide: () => widget.controller.background = true,
+      onShow: () => widget.controller.background = false,
+    );
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     lang.removeListener(_relabel);
     super.dispose();
   }
@@ -68,7 +79,7 @@ class _RcAppState extends State<RcApp> {
         locale: lang.lang.locale,
         supportedLocales: [for (final l in AppLang.values) l.locale],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
-        home: GarageScreen(controller: widget.controller, repo: widget.repo, theme: theme),
+        home: GarageScreen(controller: widget.controller, repo: widget.repo, theme: theme, autoConnect: widget.autoConnect),
       ),
     );
   }

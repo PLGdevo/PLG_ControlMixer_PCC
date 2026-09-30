@@ -467,7 +467,7 @@ class FakeCar:
             self.last_cmd_at = time.monotonic()
 
         elif ptype == INFO_GET and not self.legacy:
-            self.sock.sendto(encode(INFO, bytes([PROTO_N_CH, self.channels])), addr)
+            self.sock.sendto(encode(INFO, bytes([PROTO_N_CH, self.channels]) + FAKE_ID), addr)
             self.log(f"-> INFO: giao thức n kênh, {self.channels} kênh")
 
         elif ptype == FS_WRITE and not self.legacy:

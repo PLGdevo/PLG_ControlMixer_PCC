@@ -19,16 +19,19 @@ import '../layout/layout_templates.dart';
 import '../layout/properties_panel.dart';
 import '../layout/return_motion.dart';
 import '../models/car_profile.dart';
+import '../models/channel_config.dart';
 import '../models/control_layout.dart';
 import '../models/data_source.dart';
 import '../models/mixer_rule.dart';
 import '../services/arm_controller.dart';
+import '../services/car_connector.dart';
 import '../services/output_pipeline.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/hold_repeat.dart';
 import '../widgets/status_badge.dart';
+import '../widgets/status_strip.dart';
 import 'settings_screen.dart';
 
 class ControlScreen extends StatefulWidget {
@@ -38,6 +41,7 @@ class ControlScreen extends StatefulWidget {
     required this.repo,
     required this.profileId,
     this.editOnly = false,
+    this.connectOnOpen = false,
   });
 
   final CarController controller;
@@ -47,6 +51,9 @@ class ControlScreen extends StatefulWidget {
   /// Mở từ Cấu hình ▸ Bố cục: vào thẳng chế độ Sửa bố cục (kể cả khi bố cục đang khoá),
   /// Lưu hoặc Huỷ thì đóng màn, không vào chế độ lái
   final bool editOnly;
+
+  /// Mở từ thẻ xe: chưa nối xe này thì tự kết nối (nối không được vẫn ở lại màn Lái, có nút Kết nối)
+  final bool connectOnOpen;
 
   @override
   State<ControlScreen> createState() => _ControlScreenState();
@@ -63,11 +70,17 @@ class _ControlScreenState extends State<ControlScreen> {
   List<String> _errors = const [];
   final history = LayoutHistory();
   String? selectedId;
+
+  /// Phần tử đang mở bảng thuộc tính (chạm hai lần); chạm một lần chỉ chọn để kéo / đổi cỡ
+  String? _panelId;
   bool _dragging = false, _overTrash = false;
   final _trashKey = GlobalKey();
 
   /// Trim nhấn giữ đổi liên tục: gom lại, ghi hồ sơ / gửi xe khi ngừng bấm
   Timer? _trimCommit;
+
+  /// Bảng trim từng kênh đang mở (bấm giữa ô Trim). Không chặn màn Lái: cần gạt vẫn dùng được
+  bool _trimOpen = false;
 
   /// Màn Lái đang bị che (mở Cấu hình) hoặc app xuống nền: không ARM, kể cả khi tắt cơ chế ARM
   bool _away = false;
@@ -97,6 +110,10 @@ class _ControlScreenState extends State<ControlScreen> {
     if (widget.editOnly) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_startEdit(force: true)) Navigator.pop(context);
+      });
+    } else if (widget.connectOnOpen && !_connectedHere && c.connectingKey == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _connect();
       });
     }
   }
@@ -131,6 +148,32 @@ class _ControlScreenState extends State<ControlScreen> {
       ..showSnackBar(SnackBar(content: Text(m)));
   }
 
+  // ---------------- Kết nối ----------------
+  /// Nối xe của hồ sơ này; lỗi / cảnh báo hiện ở thanh dưới, vẫn ở lại màn Lái
+  Future<void> _connect() async {
+    final msgs = await CarConnector.connect(c, widget.repo, profile.id);
+    if (!mounted) return;
+    // Dò xe (Router) có thể đã đổi IP trong hồ sơ đã lưu: lấy lại để khớp khoá kết nối
+    final fresh = widget.repo.get(profile.id);
+    if (fresh != null) {
+      setState(() {
+        profile
+          ..wifi = fresh.wifi
+          ..lastConnectedAt = fresh.lastConnectedAt;
+      });
+    }
+    if (msgs.isNotEmpty) _snack(msgs.join(' · '));
+  }
+
+  /// Chọn giá trị hiện trên tai thỏ. Không mở khi đang ARM (không che màn Lái).
+  Future<void> _editStatusItems() async {
+    if (c.arm.armed) return;
+    final r = await pickStatusItems(context, profile);
+    if (r == null || !mounted) return;
+    setState(() => profile.statusItems = r);
+    await widget.repo.save(profile, touch: false);
+  }
+
   // ---------------- Giá trị Input ----------------
   /// Nạp hồ sơ vào vòng gửi (sau khi mở màn / sửa cấu hình / sửa bố cục)
   void _loadProfile() {
@@ -149,15 +192,15 @@ class _ControlScreenState extends State<ControlScreen> {
   /// Vị trí ban đầu khi vào màn (H3b); nút nhấn giữ về tắt, nút bật/tắt và công tắc giữ trạng thái
   void _initValues() {
     for (final it in profile.activeLayout.items) {
+      final y = it.inputIdY;
+      if (it.kind == ItemKind.stick2D && y != null) {
+        c.setPosition(y, ReturnMotion.initial(it.returnCfgY ?? ReturnConfig(), it.savedPctY), notify: false);
+      }
       final id = it.inputId;
       if (id == null) continue;
       switch (it.kind) {
         case ItemKind.stickH || ItemKind.stickV || ItemKind.stick2D:
           c.setPosition(id, ReturnMotion.initial(it.returnCfg ?? ReturnConfig(), it.savedPct), notify: false);
-          final y = it.inputIdY;
-          if (it.kind == ItemKind.stick2D && y != null) {
-            c.setPosition(y, ReturnMotion.initial(it.returnCfgY ?? ReturnConfig(), it.savedPctY), notify: false);
-          }
         case ItemKind.button:
           c.setSwitch(id, 0, notify: false);
         default:
@@ -195,6 +238,7 @@ class _ControlScreenState extends State<ControlScreen> {
   Future<void> _openSettings({int tab = 0}) async {
     _away = true;
     c.arm.disarm(tr('Mở Cấu hình', 'Opened settings'));
+    _trimOpen = false;
     await _flushTrim(); // Cấu hình đọc hồ sơ đã lưu
     if (!mounted) return;
     final result = await Navigator.push<String>(
@@ -218,10 +262,18 @@ class _ControlScreenState extends State<ControlScreen> {
 
   /// Trim nhanh cho kênh Lái đã chọn trong hồ sơ
   void _trim(int delta) {
-    final s = profile.steering;
-    if (s == null) return;
-    final nv = (s.trimUs + delta).clamp(-200, 200).toInt();
+    final ch = profile.steeringCh;
+    if (ch != null) _trimCh(ch, delta);
+  }
+
+  /// Trim kênh `ch` thêm `delta` µs; `set` = đặt thẳng giá trị (vd về 0)
+  void _trimCh(int ch, int delta, {bool set = false}) {
+    final s = profile.ch(ch);
+    final nv = ((set ? 0 : s.trimUs) + delta).clamp(-200, 200).toInt();
     if (nv == s.trimUs) return;
+    // Vòng gửi phải đọc đúng bản hồ sơ đang trim (sau nối lại / mở Cấu hình có thể đang giữ bản khác)
+    final pl = c.pipeline;
+    if (pl != null && !identical(pl.profile, profile)) c.loadProfile(profile);
     setState(() => s.trimUs = nv);
     _trimCommit?.cancel();
     _trimCommit = Timer(const Duration(milliseconds: 250), _commitTrim);
@@ -265,10 +317,12 @@ class _ControlScreenState extends State<ControlScreen> {
     c.arm.disarm(tr('Đang sửa bố cục', 'Editing layout')); // chưa ARM → không gửi lệnh lái suốt thời gian sửa (H5, R3)
     setState(() {
       editing = true;
+      _trimOpen = false;
       draft = profile.activeLayout.copy();
       _profileSnapshot = jsonEncode(profile.toJson());
       history.clear();
       selectedId = null;
+      _panelId = null;
     });
     return true;
   }
@@ -282,6 +336,7 @@ class _ControlScreenState extends State<ControlScreen> {
       editing = false;
       draft = null;
       selectedId = null;
+      _panelId = null;
       _loadProfile();
       _initValues();
     });
@@ -353,7 +408,10 @@ class _ControlScreenState extends State<ControlScreen> {
 
   void _delete(String id) {
     _mutate((l) => l.items.removeWhere((i) => i.id == id));
-    if (selectedId == id) setState(() => selectedId = null);
+    setState(() {
+      if (selectedId == id) selectedId = null;
+      if (_panelId == id) _panelId = null;
+    });
   }
 
   Future<void> _toggleLock() async {
@@ -366,10 +424,12 @@ class _ControlScreenState extends State<ControlScreen> {
   Future<void> _openAddSheet() async {
     final d = draft!;
     final controls = ItemKind.controls;
-    const displays = [ItemKind.gauge, ItemKind.led, ItemKind.bar, ItemKind.vector];
-    final extras = [ItemKind.trim, ItemKind.statusBadge]
-        .where((k) => !d.items.any((i) => i.kind == k))
-        .toList();
+    const displays = [ItemKind.gauge, ItemKind.led, ItemKind.bar, ItemKind.vector, ItemKind.channels];
+    // Thanh trim thêm được nhiều (mỗi thanh một kênh); Trim lái và Trạng thái chỉ một
+    final extras = [
+      ItemKind.trimBar,
+      ...[ItemKind.trim, ItemKind.statusBadge].where((k) => !d.items.any((i) => i.kind == k)),
+    ];
     final t = context.tokens;
     final picked = await showModalBottomSheet<Object>(
       context: context,
@@ -402,10 +462,13 @@ class _ControlScreenState extends State<ControlScreen> {
               ListTile(
                 leading: const AppIcon(AppIcons.addControl),
                 title: Text(k.label),
+                subtitle: _kindHint(k).isEmpty ? null : Text(_kindHint(k)),
                 onTap: () => Navigator.pop(ctx, k),
               ),
             const SizedBox(height: Gap.s),
-            Text(tr('Thêm xong, chọn phần tử để gắn Input, chọn kênh và chỉnh cấu hình riêng của nó.', 'Once added, select the control to bind an Input, pick a channel and adjust its own settings.'),
+            Text(
+                tr('Thêm xong, nhấn đúp vào phần tử để gắn Input, chọn kênh và chỉnh cấu hình riêng của nó.',
+                    'Once added, double-tap the control to bind an Input, pick a channel and adjust its own settings.'),
                 style: AppText.label.copyWith(color: t.textMuted, fontSize: 12)),
           ],
         ),
@@ -422,9 +485,22 @@ class _ControlScreenState extends State<ControlScreen> {
         ItemKind k => LayoutTemplates.addWidget(d, k),
         _ => null,
       };
-      if (added != null) selectedId = added!.id;
+      final a = added;
+      if (a != null && a.kind == ItemKind.trimBar) a.trimCh = _nextTrimCh(d);
+      if (added != null) selectedId = _panelId = added!.id; // phần tử mới mở luôn bảng để gắn Input
     });
     if (added == null) _snack(tr('Không còn chỗ trống đủ lớn trên màn', 'No free space large enough on screen'));
+  }
+
+  /// Kênh cho thanh trim mới: kênh Lái nếu chưa có thanh nào, rồi tới kênh đang bật chưa có thanh trim
+  int? _nextTrimCh(ControlLayout d) {
+    final used = d.items.where((i) => i.kind == ItemKind.trimBar && i.trimCh != null).map((i) => i.trimCh!).toSet();
+    final steer = profile.steeringCh;
+    if (steer != null && !used.contains(steer)) return steer;
+    for (final ch in profile.channels) {
+      if (ch.enabled && !used.contains(ch.index)) return ch.index;
+    }
+    return steer ?? 1;
   }
 
   static HeroIcons _displayIcon(ItemKind k) => switch (k) {
@@ -448,8 +524,11 @@ class _ControlScreenState extends State<ControlScreen> {
   }
 
   static String _kindHint(ItemKind k) => switch (k) {
-        ItemKind.stickH || ItemKind.stickV => tr('−100…+100%, tự về khi thả (chỉnh được)', '−100…+100%, springs back when released (adjustable)'),
-        ItemKind.stick2D => tr('Hai Input X/Y', 'Two Inputs X/Y'),
+        ItemKind.stickH ||
+        ItemKind.stickV =>
+          tr('−100…+100%, tự về khi thả (chỉnh được)', '−100…+100%, springs back when released (adjustable)'),
+        ItemKind.stick2D => tr('Như cần tay RC: dùng 1 trục (1 kênh) hoặc 2 trục (2 kênh)',
+            'Like a transmitter stick: 1 axis (1 channel) or 2 axes (2 channels)'),
         ItemKind.button => tr('Bật khi giữ, thả ra là tắt', 'On while held, off when released'),
         ItemKind.toggle => tr('Mỗi lần bấm đổi trạng thái', 'Each press toggles the state'),
         ItemKind.switch3 => tr('Trái / giữa / phải', 'Left / center / right'),
@@ -457,7 +536,13 @@ class _ControlScreenState extends State<ControlScreen> {
         ItemKind.gauge => tr('Hiện số: pin, tốc độ, kênh, Input…', 'Shows a number: battery, speed, channel, Input…'),
         ItemKind.led => tr('Sáng theo trạng thái hoặc khi vượt ngưỡng', 'Lights up on a state or past a threshold'),
         ItemKind.bar => tr('Thanh ngang/dọc theo một giá trị', 'Horizontal/vertical bar for one value'),
-        ItemKind.vector => tr('Chấm X/Y từ hai giá trị, vd Lái / Ga', 'X/Y dot from two values, e.g. steering / throttle'),
+        ItemKind.vector =>
+          tr('Chấm X/Y từ hai giá trị, vd Lái / Ga', 'X/Y dot from two values, e.g. steering / throttle'),
+        ItemKind.channels => tr('Thanh giá trị của các kênh bạn chọn, gọn trong một ô',
+            'Value bars for the channels you pick, in one compact box'),
+        ItemKind.trimBar => tr('Trim một kênh bạn chọn, thêm được nhiều thanh',
+            'Trims one channel of your choice; add as many as you like'),
+        ItemKind.trim => tr('Ô trim kênh Lái (kiểu cũ)', 'Steering trim box (classic)'),
         _ => '',
       };
 
@@ -474,7 +559,7 @@ class _ControlScreenState extends State<ControlScreen> {
       max(vp.right, sg.right) + Gap.s,
       max(vp.bottom, sg.bottom) + Gap.s,
     );
-    final selected = editing ? draft!.items.where((i) => i.id == selectedId).firstOrNull : null;
+    final selected = editing ? draft!.items.where((i) => i.id == _panelId).firstOrNull : null;
     return PopScope(
       canPop: !editing,
       onPopInvokedWithResult: (didPop, _) {
@@ -485,7 +570,7 @@ class _ControlScreenState extends State<ControlScreen> {
         body: ListenableBuilder(
           listenable: c,
           builder: (context, _) {
-            return Row(
+            final row = Row(
               children: [
                 Expanded(
                   child: Padding(
@@ -495,27 +580,38 @@ class _ControlScreenState extends State<ControlScreen> {
                         SizedBox(height: 48, child: editing ? _editBar() : (widget.editOnly ? null : _driveBar())),
                         const SizedBox(height: Gap.xs),
                         Expanded(
-                          child: LayoutCanvas(
-                            layout: layout,
-                            editing: editing,
-                            selectedId: selectedId,
-                            itemBuilder: _buildItem,
-                            onSelect: (id) => setState(() => selectedId = id),
-                            onRectChanged: (id, r) => _mutate((l) {
-                              final it = l.items.firstWhere((i) => i.id == id);
-                              it
-                                ..x = r.x
-                                ..y = r.y
-                                ..w = r.w
-                                ..h = r.h;
-                            }),
-                            onDelete: _delete,
-                            trashKey: _trashKey,
-                            onDragState: (dragging, over) => setState(() {
-                              _dragging = dragging;
-                              _overTrash = over;
-                            }),
-                          ),
+                          child: Stack(clipBehavior: Clip.none, children: [
+                            Positioned.fill(
+                              child: LayoutCanvas(
+                                layout: layout,
+                                editing: editing,
+                                selectedId: selectedId,
+                                itemBuilder: _buildItem,
+                                onSelect: (id) => setState(() {
+                                  selectedId = id;
+                                  if (_panelId != id) _panelId = null; // chọn phần tử khác: bảng cũ đóng
+                                }),
+                                onOpen: (id) => setState(() => selectedId = _panelId = id),
+                                onRectChanged: (id, r) => _mutate((l) {
+                                  final it = l.items.firstWhere((i) => i.id == id);
+                                  it
+                                    ..x = r.x
+                                    ..y = r.y
+                                    ..w = r.w
+                                    ..h = r.h;
+                                }),
+                                onDelete: _delete,
+                                trashKey: _trashKey,
+                                onDragState: (dragging, over) => setState(() {
+                                  _dragging = dragging;
+                                  _overTrash = over;
+                                }),
+                              ),
+                            ),
+                            // Nhấn giữ kéo phần tử: thùng rác hiện ở giữa đáy lưới, thả vào là xoá ngay
+                            if (editing && _dragging)
+                              Positioned(left: 0, right: 0, bottom: Gap.m, child: Center(child: _trashBin())),
+                          ]),
                         ),
                       ],
                     ),
@@ -532,13 +628,33 @@ class _ControlScreenState extends State<ControlScreen> {
                       beforeChange: () => history.push(draft!),
                       changed: () => setState(() {}),
                       onDelete: () => _delete(selected.id),
-                      onClose: () => setState(() => selectedId = null),
+                      onClose: () => setState(() => _panelId = null),
                       onMessage: _snack,
-                      onOpenMix: () => _snack(tr('Lưu bố cục, rồi mở Cấu hình ▸ Mix để sửa luật của Input này', 'Save the layout, then open Car settings ▸ Mix to edit the rules of this Input')),
+                      onOpenMix: () => _snack(tr('Lưu bố cục, rồi mở Cấu hình ▸ Mix để sửa luật của Input này',
+                          'Save the layout, then open Car settings ▸ Mix to edit the rules of this Input')),
                     ),
                   ),
               ],
             );
+            if (!_trimOpen || editing) return row;
+            // Bảng trim nổi ở góc phải dưới thanh trên, không chặn cần gạt bên dưới
+            final top = insets.top + 48 + Gap.s;
+            return Stack(children: [
+              row,
+              Positioned(
+                top: top,
+                right: insets.right,
+                width: min(320, mq.size.width * 0.5),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: max(120, mq.size.height - top - insets.bottom)),
+                  child: _TrimPanel(
+                    profile: profile,
+                    onTrim: _trimCh,
+                    onClose: () => setState(() => _trimOpen = false),
+                  ),
+                ),
+              ),
+            ]);
           },
         ),
       ),
@@ -547,68 +663,57 @@ class _ControlScreenState extends State<ControlScreen> {
 
   Widget _driveBar() {
     final t = context.tokens;
-    final tel = c.telemetry;
-    final disconnected = c.state == LinkState.disconnected;
-    final alarm = disconnected || c.state == LinkState.lost || (tel?.failsafe ?? false);
+    final tel = _connectedHere ? c.telemetry : null;
+    final here = _connectedHere;
+    final String? alarm = !here
+        ? tr('Chưa kết nối xe', 'Car not connected')
+        : c.state == LinkState.lost
+            ? tr('Mất tín hiệu', 'Signal lost')
+            : (tel?.netSetup ?? false)
+                ? tr('Xe ở chế độ cấu hình mạng', 'Car in network setup mode')
+                : (tel?.failsafe ?? false)
+                    ? tr('Failsafe', 'Failsafe')
+                    : c.weakLink
+                        ? tr('Tín hiệu yếu', 'Weak signal')
+                        : null;
     final l = profile.activeLayout;
     final width = MediaQuery.sizeOf(context).width;
     return Row(
       children: [
         IconButton(icon: const AppIcon(AppIcons.back), onPressed: () => Navigator.pop(context)),
-        // Không dùng Flexible cho tên: phần chỗ Flexible được chia mà tên ngắn không dùng hết sẽ bị bỏ trống
-        // ở cuối hàng, đẩy nút Sửa / ⚙ khỏi góc phải. Ô cảnh báo (Expanded) bên dưới chiếm hết phần còn lại.
         ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: width * 0.22),
+          constraints: BoxConstraints(maxWidth: width * 0.18),
           child: Text(profile.name,
               maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.title.copyWith(color: t.text)),
         ),
         const SizedBox(width: Gap.s),
         _ArmButton(controller: c, onMessage: _snack),
-        const SizedBox(width: Gap.s),
+        // Tai thỏ: giá trị người dùng chọn + cảnh báo kết nối; bấm để chọn giá trị (khi chưa ARM)
         Expanded(
-          child: alarm
-              ? Container(
-                  padding: const EdgeInsets.symmetric(horizontal: Gap.m, vertical: Gap.xs),
-                  decoration: BoxDecoration(
-                    color: t.bad.withValues(alpha: 0.18),
-                    border: Border.all(color: t.bad),
-                    borderRadius: BorderRadius.circular(Radii.pill),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    AppIcon(AppIcons.warning, color: t.bad, mini: true),
-                    const SizedBox(width: Gap.s),
-                    Flexible(
-                      child: Text(
-                        disconnected
-                            ? tr('Chưa kết nối xe', 'Car not connected')
-                            : (tel?.netSetup ?? false)
-                                ? tr('Xe đang ở chế độ cấu hình mạng: không lái được', 'The car is in network setup mode: driving is disabled')
-                                : tr('Failsafe: xe đang ở chế độ an toàn', 'Failsafe: the car is in safe mode'),
-                        overflow: TextOverflow.ellipsis,
-                        style: AppText.label.copyWith(color: t.bad, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ]),
-                )
-              : const SizedBox.shrink(),
+          child: Center(
+            child: StatusNotch(
+              controller: c,
+              profile: profile,
+              alarm: alarm,
+              onTap: c.arm.armed ? null : _editStatusItems,
+            ),
+          ),
         ),
         const SizedBox(width: Gap.s),
-        // Sửa bố cục: nút riêng ở góc phải, cạnh menu ⚙
-        Tooltip(
-          message: l.locked
-              ? tr('Bố cục đang khoá: mở khoá trong menu ⚙', 'Layout is locked: unlock it in the ⚙ menu')
-              : tr('Sửa bố cục', 'Edit layout'),
-          child: width < 600
-              ? IconButton(
-                  onPressed: l.locked ? null : () => _startEdit(),
-                  icon: AppIcon(l.locked ? AppIcons.locked : AppIcons.edit),
-                )
-              : TextButton.icon(
-                  onPressed: l.locked ? null : () => _startEdit(),
-                  icon: AppIcon(l.locked ? AppIcons.locked : AppIcons.edit, mini: true),
-                  label: Text(tr('Sửa', 'Edit')),
-                ),
-        ),
+        LinkButton(controller: c, connKey: profile.connKey, onConnect: _connect, compact: width < 760),
+        const SizedBox(width: Gap.s),
+        // Sửa bố cục: chỉ hiện khi đã mở khoá (mở khoá trong menu ⚙)
+        if (!l.locked)
+          Tooltip(
+            message: tr('Sửa bố cục', 'Edit layout'),
+            child: width < 600
+                ? IconButton(onPressed: () => _startEdit(), icon: const AppIcon(AppIcons.edit))
+                : TextButton.icon(
+                    onPressed: () => _startEdit(),
+                    icon: const AppIcon(AppIcons.edit, mini: true),
+                    label: Text(tr('Sửa', 'Edit')),
+                  ),
+          ),
         PopupMenuButton<String>(
           tooltip: tr('Tuỳ chọn', 'Options'),
           icon: const AppIcon(AppIcons.config),
@@ -644,6 +749,39 @@ class _ControlScreenState extends State<ControlScreen> {
     );
   }
 
+  /// Thùng rác nổi khi đang kéo phần tử; phóng to và tô đỏ khi phần tử ở trên
+  Widget _trashBin() {
+    final t = context.tokens;
+    return IgnorePointer(
+      child: AnimatedScale(
+        scale: _overTrash ? 1.25 : 1,
+        duration: const Duration(milliseconds: 120),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          AnimatedContainer(
+            key: _trashKey,
+            duration: const Duration(milliseconds: 120),
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _overTrash ? t.bad : t.surface.withValues(alpha: 0.92),
+              border: Border.all(color: t.bad, width: 2),
+              boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4))],
+            ),
+            child: Center(
+              child: AppIcon(AppIcons.delete, size: 30, color: _overTrash ? Colors.white : t.bad, solid: _overTrash),
+            ),
+          ),
+          const SizedBox(height: Gap.xs),
+          Text(
+            _overTrash ? tr('Thả để xoá', 'Release to delete') : tr('Xoá', 'Delete'),
+            style: AppText.label.copyWith(color: t.bad, fontWeight: FontWeight.w700),
+          ),
+        ]),
+      ),
+    );
+  }
+
   Widget _editBar() {
     final t = context.tokens;
     return Row(
@@ -666,30 +804,22 @@ class _ControlScreenState extends State<ControlScreen> {
         const SizedBox(width: Gap.s),
         Expanded(
           child: Center(
-            child: AnimatedContainer(
-              key: _trashKey,
-              duration: const Duration(milliseconds: 120),
+            child: Container(
               padding: const EdgeInsets.symmetric(horizontal: Gap.l, vertical: Gap.xs),
               decoration: BoxDecoration(
-                color: _overTrash ? t.bad.withValues(alpha: 0.25) : Colors.transparent,
                 border: Border.all(color: _dragging ? t.bad : t.line),
                 borderRadius: BorderRadius.circular(Radii.pill),
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                AppIcon(AppIcons.delete, color: _dragging ? t.bad : t.textMuted, mini: true),
-                const SizedBox(width: Gap.xs),
-                // Màn hẹp / chữ tiếng Anh dài: cắt bớt thay vì tràn thanh công cụ
-                Flexible(
-                  child: Text(
-                    _dragging
-                        ? tr('Thả vào đây để xoá', 'Drop here to delete')
-                        : tr('Sửa bố cục · kéo để di chuyển', 'Edit layout · drag to move'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppText.label.copyWith(color: _dragging ? t.bad : t.textMuted),
-                  ),
-                ),
-              ]),
+              // Màn hẹp / chữ tiếng Anh dài: cắt bớt thay vì tràn thanh công cụ
+              child: Text(
+                _dragging
+                    ? tr('Kéo vào thùng rác để xoá', 'Drag onto the bin to delete')
+                    : tr('Sửa bố cục · kéo để di chuyển · nhấn đúp để cấu hình',
+                        'Edit layout · drag to move · double-tap to configure'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.label.copyWith(color: _dragging ? t.bad : t.textMuted),
+              ),
             ),
           ),
         ),
@@ -715,7 +845,11 @@ class _ControlScreenState extends State<ControlScreen> {
     final custom = it.style.labelText;
     if (custom != null && custom.trim().isNotEmpty) return custom;
     if (it.kind.isDisplay) return DataSource.labelOf(it, profile);
-    return profile.input(it.inputId)?.name ?? it.kind.label;
+    if (it.kind == ItemKind.trimBar) {
+      final ch = it.trimCh;
+      return ch == null ? it.kind.label : profile.chLabel(ch);
+    }
+    return profile.input(it.inputId ?? it.inputIdY)?.name ?? it.kind.label;
   }
 
   /// Giá trị hiện trên phần tử: % của Input, hoặc µs của kênh nếu Input được gắn nhanh tới một kênh
@@ -778,10 +912,15 @@ class _ControlScreenState extends State<ControlScreen> {
     final label = _label(it);
     final lbl = label.isEmpty ? null : label;
     final id = it.inputId;
-    if (it.kind.isControl && (id == null || profile.input(id) == null)) {
+    // Cần 2 trục: chỉ cần trục đang dùng có Input
+    final unbound = it.kind == ItemKind.stick2D
+        ? ![if (it.axes.hasX) it.inputId, if (it.axes.hasY) it.inputIdY].any((i) => profile.input(i) != null)
+        : it.kind.isControl && (id == null || profile.input(id) == null);
+    if (unbound) {
       return ItemFrame(
         label: it.kind.label,
-        child: Center(child: Text(tr('Chưa gắn Input', 'No Input bound'), style: AppText.label.copyWith(color: t.textMuted))),
+        child: Center(
+            child: Text(tr('Chưa gắn Input', 'No Input bound'), style: AppText.label.copyWith(color: t.textMuted))),
       );
     }
     switch (it.kind) {
@@ -800,22 +939,26 @@ class _ControlScreenState extends State<ControlScreen> {
           ),
         );
       case ItemKind.stick2D:
-        final iy = it.inputIdY;
-        final xs = _valueText(it, id!);
+        final ix = it.axes.hasX && profile.input(it.inputId) != null ? it.inputId : null;
+        final iy = it.axes.hasY && profile.input(it.inputIdY) != null ? it.inputIdY : null;
+        final xs = ix == null ? null : _valueText(it, ix);
         final ys = iy == null ? null : _valueText(it, iy);
+        final both = ix != null && iy != null;
         return ItemFrame(
           label: lbl,
-          trailing: xs == null ? null : 'X $xs${ys == null ? '' : ' · Y $ys'}',
+          trailing: xs == null && ys == null ? null : (both ? '↔ $xs · ↕ $ys' : (xs ?? ys)),
           child: Stick2D(
-            x: c.position(id),
+            x: ix == null ? 0 : c.position(ix),
             y: iy == null ? 0 : c.position(iy),
             returnX: it.returnCfg,
             returnY: it.returnCfgY,
             deadzonePct: it.style.deadzonePct,
             haptic: it.style.haptic,
             knobSize: it.style.knobSize,
+            axes: it.axes,
+            gimbal: it.style.gimbal,
             onChanged: (x, y) {
-              c.setPosition(id, x, notify: false);
+              if (ix != null) c.setPosition(ix, x, notify: false);
               if (iy != null) c.setPosition(iy, y, notify: false);
               c.refresh();
             },
@@ -880,40 +1023,61 @@ class _ControlScreenState extends State<ControlScreen> {
         );
       case ItemKind.trim:
         return _trimBox(lbl);
+      case ItemKind.trimBar:
+        final ch = it.trimCh;
+        final s = ch == null || ch > profile.channels.length ? null : profile.ch(ch);
+        final small = it.style.valueDisplay == ValueDisplay.hidden;
+        return ItemFrame(
+          label: lbl,
+          trailing: s == null || small ? null : '${s.trimUs > 0 ? '+' : ''}${s.trimUs} µs',
+          padding: const EdgeInsets.all(Gap.xs),
+          child: TrimBar(
+            value: s?.trimUs ?? 0,
+            onStep: s == null ? null : (dv) => _trimCh(ch!, dv),
+            onTapTrack: () => setState(() => _trimOpen = !_trimOpen),
+          ),
+        );
+      case ItemKind.channels:
+        return ItemFrame(
+          label: lbl,
+          padding: const EdgeInsets.fromLTRB(Gap.s, Gap.xs, Gap.s, Gap.xs),
+          child: ChannelMonitor(rows: _channelRows(it)),
+        );
       case ItemKind.statusBadge:
         return Center(child: FittedBox(child: StatusBadge(state: c.state)));
     }
   }
 
-  /// Giá trị hiện tại của một nguồn (null = chưa có dữ liệu). Trạng thái đúng/sai trả về 1/0.
-  double? _read(String? key) {
-    final tel = c.telemetry;
-    switch (key) {
-      case DataSource.battery:
-        return tel?.batteryV;
-      case DataSource.current:
-        return tel?.currentA;
-      case DataSource.speed:
-        return tel?.speedKmh;
-      case DataSource.rssi:
-        return tel == null || tel.rssi == 0 ? null : tel.rssi.toDouble();
-      case DataSource.ping: // chưa đo ping ngầm khi lái
-        return null;
-      case DataSource.arm:
-        return c.arm.armed ? 1 : 0;
-      case DataSource.link:
-        return c.state == LinkState.connected ? 1 : 0;
-      case DataSource.failsafe:
-        return tel == null ? null : (tel.failsafe ? 1 : 0);
-    }
-    final n = DataSource.chOf(key);
-    if (n != null) {
-      final out = c.channelPct;
-      return out == null || n < 1 || n > out.length ? null : out[n - 1];
-    }
-    final id = DataSource.inputOf(key);
-    if (id != null && profile.input(id) != null) return c.pipeline?.inputs.valueOf(id) ?? c.position(id);
-    return null;
+  double? _read(String? key) => readSource(c, profile, key);
+
+  /// Dòng của bảng kênh: kênh đã chọn (mặc định mọi kênh đang bật), % sau mixer và số µs / %
+  List<ChannelRow> _channelRows(ControlItem it) {
+    final out = c.channelPct;
+    final n = profile.channels.length;
+    final list = (it.chList ??
+            [
+              for (final ch in profile.channels)
+                if (ch.enabled) ch.index
+            ])
+        .where((i) => i >= 1 && i <= n);
+    return [
+      for (final i in list)
+        () {
+          final ch = profile.ch(i);
+          final pct = out == null || i > out.length ? 0.0 : out[i - 1];
+          final name = ch.hasDefaultName ? 'CH$i' : '$i ${ch.name}';
+          return ChannelRow(
+            name: name,
+            pct: pct,
+            on: ch.enabled,
+            value: switch (it.style.valueDisplay) {
+              ValueDisplay.hidden => null,
+              ValueDisplay.us => '${OutputPipeline.toUs(ch, pct)}',
+              ValueDisplay.pct => '${pct.round()}%',
+            },
+          );
+        }(),
+    ];
   }
 
   /// Chữ hiện giá trị của nguồn; kênh ra hiện µs nếu phần tử chọn µs
@@ -957,11 +1121,15 @@ class _ControlScreenState extends State<ControlScreen> {
       DataSource.battery => AppIcon(tel == null ? AppIcons.batteryEmpty : AppIcons.batteryHalf),
       DataSource.current => const AppIcon(AppIcons.current),
       DataSource.speed => const CustomIconView(CustomIcon.speedometer),
-      DataSource.ping || DataSource.rssi => AppIcon(tel == null || tel.rssi == 0 ? AppIcons.signalOff : AppIcons.signal),
+      DataSource.ping ||
+      DataSource.lq ||
+      DataSource.rssi =>
+        AppIcon(_read(key) == null ? AppIcons.signalOff : AppIcons.signal),
       _ => null,
     };
-    // Ping chưa đo khi lái: tạm hiện RSSI ở dòng phụ
-    final sub = key == DataSource.ping && tel != null && tel.rssi != 0 ? 'RSSI ${tel.rssi} dBm' : null;
+    // Ô Ping: dòng phụ hiện LQ như màn hình tay RC
+    final lq = _read(DataSource.lq);
+    final sub = key == DataSource.ping && lq != null ? 'LQ ${lq.round()}%' : null;
     return GaugeTile(label: label ?? '', value: _fmt(it, key, _read(key)), sub: sub, icon: icon);
   }
 
@@ -989,7 +1157,7 @@ class _ControlScreenState extends State<ControlScreen> {
                         left: 0,
                         right: 0,
                         top: v >= 0 ? half - half * v : half,
-                        height: (half * v.abs()).clamp(1.0, half),
+                        height: (half * v.abs()).clamp(min(1.0, half), max(half, 0.0)),
                         child: ColoredBox(color: on ? t.accentFill : t.disabled),
                       ),
                     ]);
@@ -1016,12 +1184,23 @@ class _ControlScreenState extends State<ControlScreen> {
             onStep: canLeft ? (_) => _trim(-5) : null,
             child: OutlinedButton(onPressed: canLeft ? () => _trim(-5) : null, child: const Text('◀')),
           ),
+          // Bấm giữa: bảng trim từng kênh đang bật
           Expanded(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: s == null
-                  ? Text(tr('Chưa chọn kênh Lái', 'No steering channel'), style: AppText.label.copyWith(color: t.textMuted))
-                  : Text('Trim ${s.trimUs} µs', style: AppText.metric.copyWith(color: t.text)),
+            child: Tooltip(
+              message: tr('Bấm để trim từng kênh', 'Tap to trim each channel'),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(Radii.card),
+                onTap: () => setState(() => _trimOpen = !_trimOpen),
+                child: Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: s == null
+                        ? Text(tr('Chưa chọn kênh Lái', 'No steering channel'),
+                            style: AppText.label.copyWith(color: t.textMuted))
+                        : Text('Trim ${s.trimUs} µs', style: AppText.metric.copyWith(color: t.text)),
+                  ),
+                ),
+              ),
             ),
           ),
           HoldRepeat(
@@ -1030,6 +1209,103 @@ class _ControlScreenState extends State<ControlScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Bảng trim từng kênh đang bật (mở bằng cách bấm giữa ô Trim): ◀ ▶ đổi 5 µs, giữ để đổi liên tục,
+/// bấm số µs để về 0. Nổi trên màn Lái, không chặn cần gạt (chỉ mở khi người dùng chủ động bấm).
+class _TrimPanel extends StatelessWidget {
+  const _TrimPanel({required this.profile, required this.onTrim, required this.onClose});
+
+  final CarProfile profile;
+  final void Function(int ch, int delta, {bool set}) onTrim;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final chs = profile.channels.where((c) => c.enabled).toList();
+    return Material(
+      color: t.surface,
+      elevation: 6,
+      borderRadius: BorderRadius.circular(Radii.card),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: t.line),
+          borderRadius: BorderRadius.circular(Radii.card),
+        ),
+        padding: const EdgeInsets.fromLTRB(Gap.m, Gap.xs, Gap.xs, Gap.s),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Expanded(
+                child: Text(tr('Trim từng kênh', 'Trim per channel'), style: AppText.title.copyWith(color: t.text))),
+            IconButton(
+              tooltip: tr('Đóng', 'Close'),
+              visualDensity: VisualDensity.compact,
+              onPressed: onClose,
+              icon: const AppIcon(AppIcons.close, mini: true),
+            ),
+          ]),
+          if (chs.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(Gap.s),
+              child: Text(tr('Chưa có kênh nào được bật', 'No channel is enabled'),
+                  style: AppText.label.copyWith(color: t.textMuted)),
+            )
+          else
+            Flexible(
+              child: ListView(shrinkWrap: true, children: [
+                for (final c in chs) _row(t, c),
+              ]),
+            ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _row(AppTokens t, ChannelConfig c) {
+    final canLeft = c.trimUs > -200, canRight = c.trimUs < 200;
+    return Padding(
+      key: ValueKey('trim-ch${c.index}'),
+      padding: const EdgeInsets.only(right: Gap.s),
+      child: Row(children: [
+        Expanded(
+          child: Text(profile.chLabel(c.index),
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.label.copyWith(color: t.text)),
+        ),
+        HoldRepeat(
+          onStep: canLeft ? (_) => onTrim(c.index, -5) : null,
+          child: OutlinedButton(
+            onPressed: canLeft ? () => onTrim(c.index, -5) : null,
+            style: OutlinedButton.styleFrom(minimumSize: const Size(40, 36), padding: EdgeInsets.zero),
+            child: const Text('◀'),
+          ),
+        ),
+        SizedBox(
+          width: 76,
+          child: Tooltip(
+            message: tr('Bấm để về 0', 'Tap to reset to 0'),
+            child: InkWell(
+              onTap: c.trimUs == 0 ? null : () => onTrim(c.index, 0, set: true),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: Gap.xs),
+                child: Text('${c.trimUs > 0 ? '+' : ''}${c.trimUs} µs',
+                    textAlign: TextAlign.center,
+                    style: AppText.metric.copyWith(color: c.trimUs == 0 ? t.textMuted : t.text, fontSize: 14)),
+              ),
+            ),
+          ),
+        ),
+        HoldRepeat(
+          onStep: canRight ? (_) => onTrim(c.index, 5) : null,
+          child: OutlinedButton(
+            onPressed: canRight ? () => onTrim(c.index, 5) : null,
+            style: OutlinedButton.styleFrom(minimumSize: const Size(40, 36), padding: EdgeInsets.zero),
+            child: const Text('▶'),
+          ),
+        ),
+      ]),
     );
   }
 }
@@ -1069,7 +1345,8 @@ class _RulesDialogState extends State<_RulesDialog> {
     if (!r.enabled) return (t.disabled, tr('Luật đang tắt', 'Rule is off'));
     if (r.condition.isTrue) return (t.accent, tr('Luôn áp dụng', 'Always applied'));
     if (mixer?.isPending(r.id) == true) return (t.warn, tr('Chờ về giữa', 'Waiting for center'));
-    if (mixer?.isActive(r.id) == true) return (t.accent, tr('Điều kiện đúng · đang tác động', 'Condition met · active'));
+    if (mixer?.isActive(r.id) == true)
+      return (t.accent, tr('Điều kiện đúng · đang tác động', 'Condition met · active'));
     return (t.disabled, tr('Điều kiện chưa đúng', 'Condition not met'));
   }
 
@@ -1148,48 +1425,18 @@ class _ArmButtonState extends State<_ArmButton> with SingleTickerProviderStateMi
     if (_hold.isAnimating) _hold.reset();
   }
 
-  /// Không dùng ARM: ô trạng thái, bấm vào (khi chưa lái được) thì báo lý do
-  Widget _status(BuildContext context) {
-    final t = context.tokens;
-    final armed = arm.armed;
-    final text = armed ? tr('Đang lái', 'Live') : (arm.canArm(_check) ?? arm.state.label);
-    final color = armed ? t.onAccentFill : t.textMuted;
-    return GestureDetector(
-      onTap: armed ? null : () => widget.onMessage(text),
-      child: Container(
-        height: 36,
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.3),
-        padding: const EdgeInsets.symmetric(horizontal: Gap.m),
-        decoration: BoxDecoration(
-          color: armed ? t.accentFill : t.surface2,
-          border: Border.all(color: armed ? t.accentFill : t.line),
-          borderRadius: BorderRadius.circular(Radii.pill),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          CustomIconView(CustomIcon.steering, size: 16, color: color),
-          const SizedBox(width: Gap.xs),
-          Flexible(
-            child: Text(text,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppText.label.copyWith(color: color, fontWeight: FontWeight.w700)),
-          ),
-        ]),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     return ListenableBuilder(
       listenable: arm,
       builder: (context, _) {
-        if (!arm.enabled) return _status(context);
+        // Không dùng ARM: không hiện ô trạng thái lái
+        if (!arm.enabled) return const SizedBox.shrink();
         final armed = arm.armed;
         final ready = arm.state == ArmState.ready;
         final color = armed ? t.onAccentFill : (ready ? t.text : t.disabled);
-        return GestureDetector(
+        final button = GestureDetector(
           onTapDown: (_) => _down(),
           onTapUp: (_) => _up(),
           onTapCancel: _up,
@@ -1220,6 +1467,7 @@ class _ArmButtonState extends State<_ArmButton> with SingleTickerProviderStateMi
             ),
           ),
         );
+        return Padding(padding: const EdgeInsets.only(right: Gap.s), child: button);
       },
     );
   }

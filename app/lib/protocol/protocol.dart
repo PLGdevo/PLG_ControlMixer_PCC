@@ -103,12 +103,17 @@ Uint8List encodeControlUs(int seq, List<int> us) {
 /// FS_WRITE: `timeout_ms:u16` · `fs[n]:u16` — đúng [CarProfile.failsafeBytes]
 Uint8List encodeFsWrite(Uint8List failsafeBytes) => encodeFrame(PacketType.fsWrite, failsafeBytes);
 
-/// INFO: `proto:u8` · `channels:u8` (số kênh PWM xe có)
+/// INFO: `proto:u8` · `channels:u8` (số kênh PWM xe có) · `id[6]` (mã xe = MAC gốc, như HERE).
+/// Firmware trước 2026-09-29 chỉ gửi 2 byte đầu → `id` null, không kiểm tra được đúng xe.
 class CarInfo {
   final int proto, channels;
-  const CarInfo(this.proto, this.channels);
+  final String? id;
+  const CarInfo(this.proto, this.channels, [this.id]);
 
-  static CarInfo? parse(Uint8List p) => p.length < 2 || p[1] == 0 ? null : CarInfo(p[0], p[1]);
+  static CarInfo? parse(Uint8List p) => p.length < 2 || p[1] == 0
+      ? null
+      : CarInfo(p[0], p[1],
+          p.length < 8 ? null : p.sublist(2, 8).map((x) => x.toRadixString(16).padLeft(2, '0')).join(':').toUpperCase());
 }
 
 /// FS_ACK: `status:u8` · `hash:u32` (FNV-1a trên payload FS_WRITE xe nhận) · `channels:u8`

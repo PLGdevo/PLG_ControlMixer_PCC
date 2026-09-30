@@ -91,9 +91,10 @@ struct PongPayload {           // 10 byte
   uint32_t uptimeMs;           // millis() của xe
 };
 
-struct InfoPayload {           // 2 byte
+struct InfoPayload {           // 8 byte (app cũ chỉ đọc 2 byte đầu)
   uint8_t proto;               // PROTO_N_CH
   uint8_t numCh;               // số kênh PWM xe có
+  uint8_t id[6];               // mã xe = MAC gốc (giống HERE), để app biết đang nói chuyện đúng xe
 };
 
 struct FsAckPayload {          // 6 byte
@@ -127,7 +128,7 @@ static_assert(sizeof(ChannelConfig)    == 13, "ChannelConfig size");
 static_assert(sizeof(PingPayload)      == 6,  "PingPayload size");
 static_assert(sizeof(PongPayload)      == 10, "PongPayload size");
 static_assert(sizeof(CarConfig)        == 34, "CarConfig size");
-static_assert(sizeof(InfoPayload)      == 2,  "InfoPayload size");
+static_assert(sizeof(InfoPayload)      == 8,  "InfoPayload size");
 static_assert(sizeof(FsAckPayload)     == 6,  "FsAckPayload size");
 
 inline uint8_t crc8(const uint8_t* data, size_t len) {

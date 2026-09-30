@@ -68,7 +68,10 @@ class OutputPipeline {
 
   /// Giá trị % của kênh `ch` khi mọi cần gạt trên bố cục ở vị trí nghỉ (R2, H5).
   /// Nút / công tắc giữ trạng thái hiện tại, riêng nút nhấn giữ coi như đã thả.
-  double restPct(int ch, ControlLayout layout) {
+  double restPct(int ch, ControlLayout layout) => restMixed(layout)[ch - 1];
+
+  /// 10 kênh % khi mọi cần gạt ở vị trí nghỉ (xem [restPct])
+  Float64List restMixed(ControlLayout layout) {
     for (final d in _restInputs.defs) {
       if (d.isAxis) {
         _restInputs.setPosition(d.id, ReturnMotion.restPct(layout, d.id, isThrottle: profile.isThrottleInput(d.id)));
@@ -78,7 +81,14 @@ class OutputPipeline {
       }
     }
     _restMixer.reset();
-    return _restMixer.run()[ch - 1];
+    return _restMixer.run();
+  }
+
+  /// Thử trên xe từ màn Cấu hình (chưa ARM): kênh ở vị trí nghỉ, riêng kênh trong `test` (số kênh → %)
+  /// lấy giá trị đang thử. Trim / Center / đảo chiều vừa sửa hiện ngay trên xe.
+  List<double> testPct(Map<int, double> test) {
+    final rest = restMixed(profile.activeLayout);
+    return [for (var i = 0; i < rest.length; i++) test[i + 1] ?? rest[i]];
   }
 
   /// Kênh Ga đang ở vị trí nghỉ (sai số ±5%); hồ sơ không có kênh Ga thì luôn đúng. Tính lại mixer

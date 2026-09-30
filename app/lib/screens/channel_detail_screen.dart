@@ -2,6 +2,7 @@
 // Min/Center/Max, trim, offset, reverse, failsafe và liệt kê các luật đang ghi vào kênh. Sửa trên hồ sơ nháp.
 import 'package:flutter/material.dart';
 
+import '../controller/car_controller.dart';
 import '../l10n/lang.dart';
 import '../models/car_profile.dart';
 import '../models/channel_config.dart';
@@ -10,15 +11,29 @@ import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/number_field.dart';
+import '../widgets/status_strip.dart';
 
 class ChannelDetailScreen extends StatefulWidget {
-  const ChannelDetailScreen({super.key, required this.profile, required this.index, required this.onOpenMix});
+  const ChannelDetailScreen({
+    super.key,
+    required this.profile,
+    required this.index,
+    required this.onOpenMix,
+    this.controller,
+    this.onChanged,
+  });
 
   final CarProfile profile;
   final int index; // 1..10
 
   /// Về tab Mix để thêm / sửa luật của kênh này
   final VoidCallback onOpenMix;
+
+  /// Xe đang nối (cấu hình trực tiếp): thanh Xem trước kéo thử kênh trên xe khi bật "Thử trên xe"
+  final CarController? controller;
+
+  /// Báo màn Cấu hình mỗi lần sửa để đưa ngay xuống vòng gửi
+  final VoidCallback? onChanged;
 
   @override
   State<ChannelDetailScreen> createState() => _ChannelDetailScreenState();
@@ -34,8 +49,21 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
 
   @override
   void dispose() {
+    widget.controller?.setTest(widget.index, null);
     _nameCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    widget.onChanged?.call();
+  }
+
+  /// Kéo thanh Xem trước: đang thử trên xe thì kênh trên xe đi theo; thả tay về vị trí nghỉ
+  void _drag(double? v) {
+    super.setState(() => _preview = v ?? 0);
+    widget.controller?.setTest(widget.index, v);
   }
 
   /// µs xe sẽ xuất ra tại vị trí `pct`, tính cả đảo chiều, trim và offset
@@ -46,7 +74,16 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
     final t = context.tokens;
     final err = ch.validate();
     return Scaffold(
-      appBar: AppBar(title: Text('${ch.label} · ${ch.displayName}')),
+      appBar: AppBar(
+        title: Text('${ch.label} · ${ch.displayName}'),
+        actions: [
+          if (widget.controller case final c? when c.live)
+            Padding(
+              padding: const EdgeInsets.only(right: Gap.m),
+              child: ListenableBuilder(listenable: c, builder: (_, __) => LiveTestToggle(controller: c)),
+            ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(Gap.l),
         children: [
@@ -121,13 +158,19 @@ class _ChannelDetailScreenState extends State<ChannelDetailScreen> {
           const Divider(),
           Text(tr('Xem trước', 'Preview'), style: AppText.title.copyWith(color: t.text)),
           const SizedBox(height: Gap.xs),
-          Text(tr('Kéo thử để thấy giá trị xe sẽ xuất ra.', 'Drag to see the value the car will output.'), style: AppText.label.copyWith(color: t.textMuted)),
+          Text(
+              widget.controller?.testing ?? false
+                  ? tr('Đang thử trên xe: kéo là kênh trên xe chạy theo, thả tay kênh về vị trí nghỉ.',
+                      'Testing on the car: the channel follows while you drag and returns to rest when released.')
+                  : tr('Kéo thử để thấy giá trị xe sẽ xuất ra. Bật "Thử trên xe" để kênh trên xe chạy theo.',
+                      'Drag to see the value the car will output. Turn on "Test on car" to move the real channel.'),
+              style: AppText.label.copyWith(color: t.textMuted)),
           Slider(
             value: _preview,
             min: -100,
             max: 100,
-            onChanged: err.isEmpty ? (v) => setState(() => _preview = v) : null,
-            onChangeEnd: (_) => setState(() => _preview = 0),
+            onChanged: err.isEmpty ? _drag : null,
+            onChangeEnd: (_) => _drag(null),
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
