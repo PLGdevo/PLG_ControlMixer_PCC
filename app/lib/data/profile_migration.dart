@@ -93,7 +93,7 @@ abstract final class ProfileMigration {
   }
 
   /// Sprint 3 (v1: kênh gán 1:1 vào phần tử, MixRule 4 loại) → Sprint 4 (v2: Input → Condition → Mixer).
-  /// Bảng J4 trong `dac_ta_sprint_4_mixer.md`. Trả về JSON v2 và danh sách cảnh báo cho báo cáo chuyển đổi.
+  /// Bảng J4 trong `dac_ta_tong_hop.md`. Trả về JSON v2 và danh sách cảnh báo cho báo cáo chuyển đổi.
   static ({Map<String, dynamic> json, List<String> warnings}) v1ToV2(Map<String, dynamic> v1) {
     final j = jsonDecode(jsonEncode(v1)) as Map<String, dynamic>;
     final warnings = <String>[];
